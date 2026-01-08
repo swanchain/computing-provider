@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"github.com/swanchain/go-computing-provider/internal/contract"
+	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"log"
 	"os"
 	"path/filepath"

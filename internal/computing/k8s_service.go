@@ -17,8 +17,8 @@ import (
 
 	calicov3 "github.com/projectcalico/api/pkg/apis/projectcalico/v3"
 	calicoclientset "github.com/projectcalico/api/pkg/client/clientset_generated/clientset"
-	"github.com/swanchain/go-computing-provider/constants"
-	"github.com/swanchain/go-computing-provider/internal/models"
+	"github.com/swanchain/computing-provider-v2/constants"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"

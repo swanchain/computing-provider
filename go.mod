@@ -1,4 +1,4 @@
-module github.com/swanchain/go-computing-provider
+module github.com/swanchain/computing-provider-v2
 
 go 1.22.3
 

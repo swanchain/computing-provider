@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/computing"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/urfave/cli/v2"
 	"os"
 )

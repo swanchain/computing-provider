@@ -3,7 +3,7 @@ package db
 import (
 	_ "embed"
 	"fmt"
-	"github.com/swanchain/go-computing-provider/internal/models"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"

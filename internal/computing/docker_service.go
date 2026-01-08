@@ -23,10 +23,10 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/swanchain/go-computing-provider/build"
-	"github.com/swanchain/go-computing-provider/constants"
+	"github.com/swanchain/computing-provider-v2/build"
+	"github.com/swanchain/computing-provider-v2/constants"
 
-	"github.com/swanchain/go-computing-provider/conf"
+	"github.com/swanchain/computing-provider-v2/conf"
 
 	"github.com/containerd/containerd"
 	"github.com/docker/docker/api/types"

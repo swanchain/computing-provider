@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/swanchain/go-computing-provider/conf"
+	"github.com/swanchain/computing-provider-v2/conf"
 	"net/http"
 	"os"
 	"os/signal"

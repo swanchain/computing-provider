@@ -3,9 +3,9 @@ package main
 import (
 	_ "embed"
 	"fmt"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/models"
-	"github.com/swanchain/go-computing-provider/internal/yaml"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/models"
+	"github.com/swanchain/computing-provider-v2/internal/yaml"
 	"github.com/urfave/cli/v2"
 	yaml2 "gopkg.in/yaml.v2"
 	"os"

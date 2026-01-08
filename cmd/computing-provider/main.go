@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 	"github.com/mitchellh/go-homedir"
-	"github.com/swanchain/go-computing-provider/build"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/db"
+	"github.com/swanchain/computing-provider-v2/build"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/db"
 	"github.com/urfave/cli/v2"
 	"os"
 	"strings"

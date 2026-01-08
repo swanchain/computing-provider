@@ -13,11 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 	cors "github.com/itsjamie/gin-cors"
 	"github.com/olekukonko/tablewriter"
-	"github.com/swanchain/go-computing-provider/build"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/computing"
-	"github.com/swanchain/go-computing-provider/internal/models"
-	"github.com/swanchain/go-computing-provider/util"
+	"github.com/swanchain/computing-provider-v2/build"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/models"
+	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/urfave/cli/v2"
 )
 

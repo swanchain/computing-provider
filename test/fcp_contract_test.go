@@ -2,9 +2,9 @@ package test
 
 import (
 	"fmt"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/contract"
-	"github.com/swanchain/go-computing-provider/internal/contract/fcp"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/contract"
+	"github.com/swanchain/computing-provider-v2/internal/contract/fcp"
 	"testing"
 )
 

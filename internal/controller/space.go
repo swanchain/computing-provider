@@ -2,7 +2,7 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/swanchain/go-computing-provider/internal/service"
+	"github.com/swanchain/computing-provider-v2/internal/service"
 )
 
 type SpaceHandler struct {

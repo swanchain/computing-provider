@@ -3,9 +3,9 @@ package computing
 import (
 	"context"
 	"fmt"
-	"github.com/swanchain/go-computing-provider/build"
-	"github.com/swanchain/go-computing-provider/internal/contract"
-	"github.com/swanchain/go-computing-provider/util"
+	"github.com/swanchain/computing-provider-v2/build"
+	"github.com/swanchain/computing-provider-v2/internal/contract"
+	"github.com/swanchain/computing-provider-v2/util"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,10 +15,10 @@ import (
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/robfig/cron/v3"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/constants"
-	"github.com/swanchain/go-computing-provider/internal/contract/fcp"
-	"github.com/swanchain/go-computing-provider/internal/models"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/constants"
+	"github.com/swanchain/computing-provider-v2/internal/contract/fcp"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

@@ -3,9 +3,9 @@ package ecp
 import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/computing"
-	"github.com/swanchain/go-computing-provider/internal/db"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/db"
 	"log"
 	"testing"
 )

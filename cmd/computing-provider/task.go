@@ -3,15 +3,15 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/swanchain/go-computing-provider/constants"
+	"github.com/swanchain/computing-provider-v2/constants"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/olekukonko/tablewriter"
-	"github.com/swanchain/go-computing-provider/conf"
-	"github.com/swanchain/go-computing-provider/internal/computing"
-	"github.com/swanchain/go-computing-provider/internal/models"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/urfave/cli/v2"
 )
 

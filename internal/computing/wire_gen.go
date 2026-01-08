@@ -7,7 +7,7 @@
 package computing
 
 import (
-	"github.com/swanchain/go-computing-provider/internal/db"
+	"github.com/swanchain/computing-provider-v2/internal/db"
 )
 
 import (

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/swanchain/go-computing-provider/internal/models"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 	corev1 "k8s.io/api/core/v1"
 	"os"
 	"path/filepath"
