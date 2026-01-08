@@ -2,6 +2,8 @@
 
 Edge Computing Provider (ECP) specializes in processing data at the source of data generation, using minimal latency setups ideal for real-time applications. Currently supports ZK-SNARK proof generation for the Filecoin network.
 
+**Important:** ECP does **NOT** require Kubernetes. It runs as a standalone daemon using Docker containers.
+
 ## Overview
 
 ECP handles specific, localized tasks directly on devices at the network's edge, such as IoT devices. It's designed for low-latency, real-time processing requirements.
@@ -9,7 +11,22 @@ ECP handles specific, localized tasks directly on devices at the network's edge,
 ### Current Supported Tasks
 
 - **Filecoin C2 ZK-SNARK Proofs**: Generation of zero-knowledge proofs for Filecoin network
+- **Mining Tasks**: Cryptocurrency mining workloads
+- **Inference Tasks**: AI model inference
 - **Future Support**: Aleo, Scroll, StarkNet, and other ZK proof types
+
+### Task Types
+
+| Type | ID | Description |
+|------|-----|-------------|
+| Fil-C2 | 1 | Filecoin C2 ZK-SNARK proofs |
+| Mining | 2 | Mining workloads |
+| AI | 3 | AI training (FCP only) |
+| Inference | 4 | AI inference |
+| NodePort | 5 | NodePort services |
+| Exit | 100 | Exit provider status |
+
+For ECP, set task-types to `1,2,4`.
 
 ## Prerequisites
 
@@ -17,15 +34,25 @@ ECP handles specific, localized tasks directly on devices at the network's edge,
 
 - **CPU**: 4+ cores, 2.0 GHz+
 - **RAM**: 8GB+ (16GB recommended)
-- **Storage**: 100GB+ available space
+- **Storage**: 200GB+ available space (for v28 parameters)
 - **GPU**: NVIDIA GPU with 8GB+ VRAM (for ZK proof generation)
-- **Network**: Stable internet connection
+- **Network**: Stable internet connection with public IP
+
+### Network Requirements
+
+- **Port 9085** must be mapped to public network:
+  ```
+  <Intranet_IP>:9085 <--> <Public_IP>:<PORT>
+  ```
+- This allows the Swan network to assign ZK proof tasks to your provider
 
 ### Software Requirements
 
 - **Operating System**: Linux (Ubuntu 20.04+ recommended)
-- **Go**: Version 1.21+
-- **NVIDIA Drivers**: Latest stable version
+- **Go**: Version 1.22+
+- **Docker**: Latest stable version (required for ECP)
+- **NVIDIA Drivers**: Latest stable version (470.xx+)
+- **NVIDIA Container Toolkit**: Required for GPU access in Docker containers
 - **CUDA**: Version 11.0+ (for GPU acceleration)
 
 ## Installation
@@ -33,77 +60,144 @@ ECP handles specific, localized tasks directly on devices at the network's edge,
 ### 1. Install Dependencies
 
 ```bash
-# Install Go
-wget -c https://golang.org/dl/go1.21.7.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
+# Install Go 1.22+
+wget -c https://golang.org/dl/go1.22.0.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
 echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
+
+# Install Docker
+curl -fsSL https://get.docker.com | bash
+sudo usermod -aG docker $USER
+# Log out and back in for group changes to take effect
 
 # Install NVIDIA drivers and CUDA
 # Follow NVIDIA's official installation guide for your GPU
 ```
 
-### 2. Build Computing Provider
+### 2. Install NVIDIA Container Toolkit
+
+**Required** for ECP to access GPU in Docker containers:
+
+```bash
+# Add NVIDIA GPG key
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+# Add repository
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# Install
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify installation:
+```bash
+nvidia-ctk --version
+docker info | grep -i nvidia
+```
+
+### 3. Run Setup Script
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/setup.sh | bash
+```
+
+### 4. Download v28 Parameters (for ZK-FIL tasks)
+
+```bash
+# At least 200GB storage needed
+export PARENT_PATH="<V28_PARAMS_PATH>"
+
+# 512MiB parameters
+curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+
+# 32GiB parameters
+curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-32.sh | bash
+```
+
+### 5. Build Computing Provider
 
 ```bash
 # Clone repository
-git clone https://github.com/lagrangedao/go-computing-provider.git
+git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider
+git checkout releases
 
-# Build binary
-make build
+# Build for mainnet
+make clean && make mainnet
+make install
+
+# Or build for testnet
+# make clean && make testnet
+# make install
 ```
 
-### 3. Initialize ECP
+### 6. Initialize ECP
 
 ```bash
-# Initialize repository
-computing-provider init
-
-# Set provider type to ECP
-computing-provider account set-type --type ecp
+# Initialize repository with public IP and port
+computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
 ```
+
+**Note:** By default, the CP repo is `~/.swan/computing`. Override with `export CP_PATH="<YOUR_CP_PATH>"`
 
 ## Configuration
 
-### Basic ECP Configuration
+### config.toml
+
+Edit `$CP_PATH/config.toml`:
 
 ```toml
-# config.toml
-[provider]
-type = "ecp"
-name = "my-ecp-provider"
-description = "My Edge Computing Provider"
+[API]
+Port = 9085                                    # ECP service port (default: 9085)
+MultiAddress = "/ip4/<PUBLIC_IP>/tcp/<PORT>"   # Public multiAddress for libp2p
+Domain = ""                                    # Domain name for inference tasks
+NodeName = ""                                  # Your provider node name
+Pricing = "true"                               # Accept smart pricing orders
+AutoDeleteImage = false                        # Auto-delete unused images
+PortRange = ["40000-40050","40060"]            # Port range for multi-port inference tasks
 
-[ecp]
-task_types = ["fil-c2"]
-gpu_requirements = { memory = "8Gi", compute_capability = "7.0" }
+[UBI]
+UbiEnginePk = "0x594A4c5cF8e98E1aA5e9266F913dC74a24Eae0e9"   # UBI Engine public key
+EnableSequencer = true                         # Submit proofs to Sequencer (reduces gas costs)
+AutoChainProof = false                         # Fallback to chain when sequencer unavailable
+SequencerUrl = "https://sequencer.swanchain.io"
+EdgeUrl = "https://edge-api.swanchain.io/v1"
+VerifySign = true
 
-[ecp.ubi]
-enabled = true
-param_path = "/path/to/ubi/params"
+[RPC]
+SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"     # Swan chain RPC
 ```
 
-### UBI Configuration
+### price.toml (Optional)
 
-For Filecoin C2 ZK-SNARK proofs, you need to download UBI parameters:
+Generate and customize pricing:
 
 ```bash
-# Download UBI parameters
-cd ubi
-./setup.sh
+# Generate default pricing config
+computing-provider --repo <YOUR_CP_PATH> price generate
 
-# Or manually download parameters
-./fetch-param-32.sh
-./fetch-param-512.sh
+# View current pricing
+computing-provider --repo <YOUR_CP_PATH> price view
+
+# Edit pricing
+vi $CP_PATH/price.toml
 ```
 
-### GPU Configuration
-
+Example `price.toml`:
 ```toml
-[ecp.gpu]
-enabled = true
-nvidia_runtime = "nvidia"
-memory_limit = "8Gi"
-compute_capability = "7.0"
+[API]
+Pricing = "true"
+
+TARGET_CPU = "0.2"            # SWAN/thread-hour
+TARGET_MEMORY = "0.1"         # SWAN/GB-hour
+TARGET_HD_EPHEMERAL = "0.005" # SWAN/GB-hour
+TARGET_GPU_DEFAULT = "1.6"    # SWAN/GPU-hour
 ```
 
 ## Setup Process
@@ -111,59 +205,99 @@ compute_capability = "7.0"
 ### 1. Wallet Setup
 
 ```bash
-# Initialize wallet
-computing-provider wallet init
+# Generate a new wallet
+computing-provider wallet new
 
-# Set addresses
-computing-provider account set-owner --address <OWNER_ADDRESS>
-computing-provider account set-worker --address <WORKER_ADDRESS>
-computing-provider account set-beneficiary --address <BENEFICIARY_ADDRESS>
+# Or import existing wallet
+computing-provider wallet import <private_key_file>
+
+# List wallets
+computing-provider wallet list
 ```
 
-### 2. Network Configuration
+Deposit `SwanETH` to your wallet address. See [Swan Chain guide](https://docs.swanchain.io/swan-mainnet/getting-started-guide).
+
+### 2. Create CP Account
 
 ```bash
-# Set network (mainnet/testnet)
-computing-provider network set --chain-id 1  # Mainnet
-# or
-computing-provider network set --chain-id 11155111  # Sepolia testnet
+computing-provider account create \
+    --ownerAddress <YOUR_OWNER_ADDRESS> \
+    --workerAddress <YOUR_WORKER_ADDRESS> \
+    --beneficiaryAddress <YOUR_BENEFICIARY_ADDRESS> \
+    --task-types 1,2,4
 ```
 
-### 3. Task Type Configuration
+**Note:** For ECP, set `--task-types` to `1,2,4` (Fil-C2, Mining, Inference).
+
+### 3. Add Collateral
 
 ```bash
-# Enable Filecoin C2 tasks
-computing-provider account changeTaskTypes --ownerAddress <OWNER_ADDRESS> 1
+# Add SWAN collateral for ECP
+computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS> <AMOUNT>
 ```
 
-### 4. Collateral Setup
+To withdraw collateral:
+```bash
+computing-provider collateral withdraw --ecp --owner <YOUR_WALLET_ADDRESS> --account <YOUR_CP_ACCOUNT> <AMOUNT>
+```
+
+### 4. Deposit to Sequencer Account
+
+The Sequencer batches proof submissions to reduce gas costs:
 
 ```bash
-# Check collateral requirements
-computing-provider collateral info --ecp
+computing-provider sequencer add --from <YOUR_WALLET_ADDRESS> <AMOUNT>
+```
 
-# Add collateral
-computing-provider collateral add --ecp --owner <OWNER_ADDRESS> --amount <AMOUNT>
+To withdraw from Sequencer:
+```bash
+computing-provider sequencer withdraw --owner <YOUR_OWNER_WALLET_ADDRESS> <AMOUNT>
 ```
 
 ## Running ECP
 
-### Start ECP Service
+### Required Environment Variables
 
 ```bash
-# Start the ECP service
-export CP_PATH=~/.swan/computing
-nohup computing-provider run >> cp.log 2>&1 &
+# Path to v28 parameters
+export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
+
+# GPU model and CUDA cores (update for your GPU)
+export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 ```
+
+Common GPU configurations:
+| GPU Model | CUDA Cores | Configuration |
+|-----------|------------|---------------|
+| RTX 4090 | 16384 | `"GeForce RTX 4090:16384"` |
+| RTX 3090 | 10496 | `"GeForce RTX 3090:10496"` |
+| RTX 3080 | 8704 | `"GeForce RTX 3080:8704"` |
+
+See [bellperson](https://github.com/filecoin-project/bellperson) for more GPU options.
+
+### Start ECP Daemon
+
+```bash
+# Start ECP service (foreground)
+computing-provider ubi daemon
+
+# Or run in background
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
+```
+
+**Important:** Use `computing-provider ubi daemon` for ECP, NOT `computing-provider run` (which is for FCP).
 
 ### Monitor ECP
 
 ```bash
-# Check ECP status
-computing-provider state
-
 # List ECP tasks
 computing-provider task list --ecp
+
+# List UBI (ZK proof) tasks
+computing-provider ubi list
+
+# Show failed tasks
+computing-provider ubi list --show-failed
 
 # Monitor logs
 tail -f cp.log
@@ -174,154 +308,134 @@ tail -f cp.log
 ### List Tasks
 
 ```bash
-# List all ECP tasks
+# List ECP tasks (inference/mining)
 computing-provider task list --ecp
 
-# List with details
-computing-provider task list --ecp --verbose
+# List UBI tasks (ZK proofs)
+computing-provider ubi list
 
-# Show recent tasks
-computing-provider task list --ecp --tail 10
+# Show failed UBI tasks
+computing-provider ubi list --show-failed
 ```
 
-### Task Details
-
-```bash
-# Get task details
-computing-provider task get <job_uuid> --ecp
+Example UBI task output:
+```
+TASK ID  TASK CONTRACT                                 TASK TYPE  ZK TYPE  STATUS    SEQUENCER  CREATE TIME
+1114203  0x89580E512915cB33bB5Ac419196835fC19affaEe   GPU        fil-c2   verified  YES        2024-11-12 01:52:47
 ```
 
 ### Task Status
 
-ECP tasks have the following statuses:
-
-- **Submitted**: Task submitted to network
-- **Processing**: Task being processed
-- **Completed**: Task completed successfully
-- **Failed**: Task failed
-- **Verified**: Task verified on-chain
-
-## Performance Optimization
-
-### GPU Optimization
-
-```bash
-# Check GPU status
-nvidia-smi
-
-# Monitor GPU usage
-watch -n 1 nvidia-smi
-
-# Check CUDA availability
-nvcc --version
-```
-
-### Resource Monitoring
-
-```bash
-# Monitor system resources
-htop
-
-# Monitor disk usage
-df -h
-
-# Monitor network
-iftop
-```
+- **verified**: Proof verified on-chain
+- **submitted**: Submitted to sequencer
+- **failed**: Task failed (use `--show-failed` to see)
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **GPU Not Detected**
+1. **Docker Permission Denied**
+   ```
+   Error: permission denied while trying to connect to the Docker daemon socket
+   ```
    ```bash
-   # Check NVIDIA drivers
+   # Add user to docker group
+   sudo usermod -aG docker $USER
+   # Log out and back in for group changes to take effect
+
+   # Or use sg to run with docker group (temporary fix)
+   sg docker -c "computing-provider ubi daemon"
+   ```
+
+2. **NVIDIA Container Toolkit Not Installed**
+   ```
+   Error: could not select device driver "nvidia" with capabilities: [[gpu]]
+   ```
+   The resource-exporter container requires GPU access. Install NVIDIA Container Toolkit:
+   ```bash
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+   sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+   ```
+
+3. **GPU Not Detected**
+   ```bash
+   # Check NVIDIA driver
    nvidia-smi
-   
-   # Check CUDA installation
+
+   # Check CUDA
    nvcc --version
+
+   # Check Docker can access GPU
+   docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
    ```
 
-2. **UBI Parameters Missing**
+4. **v28 Parameters Missing**
    ```bash
-   # Download parameters
-   cd ubi
-   ./setup.sh
+   export PARENT_PATH="<path>"
+   curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
    ```
 
-3. **Task Failures**
+5. **CP Account Not Created**
+   ```
+   Error: CP Account is empty. Please create an account first
+   ```
+   Solution: Create CP account with:
    ```bash
-   # Check task logs
-   computing-provider task get <job_uuid> --ecp
-   
-   # Check system logs
+   computing-provider account create \
+       --ownerAddress <OWNER> --workerAddress <WORKER> \
+       --beneficiaryAddress <BENEFICIARY> --task-types 1,2,4
+   ```
+
+6. **resource-exporter Container Conflict**
+   ```
+   Error: The container name "/resource-exporter" is already in use
+   ```
+   Remove the old container:
+   ```bash
+   docker rm -f resource-exporter
+   ```
+   The ECP daemon will recreate it automatically on the next cycle (every 3 minutes).
+
+7. **Verify ECP is Running Correctly**
+   ```bash
+   # Check resource-exporter container
+   docker ps | grep resource-exporter
+
+   # Check ECP service port
+   curl http://localhost:9085/health
+
+   # Check logs
    tail -f cp.log
    ```
 
-4. **Network Issues**
-   ```bash
-   # Check network connectivity
-   computing-provider network status
-   
-   # Check RPC endpoint
-   curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' <RPC_URL>
+## Sequencer
+
+### Why Use Sequencer?
+
+The Sequencer is a Layer 3 solution that batches proof submissions from all ECPs and submits them in a single transaction every 24 hours. This significantly reduces gas costs.
+
+### Enable Sequencer
+
+1. Edit `$CP_PATH/config.toml`:
+   ```toml
+   [UBI]
+   EnableSequencer = true
+   AutoChainProof = false
    ```
 
-### Debug Commands
+2. Deposit funds:
+   ```bash
+   computing-provider sequencer add --from <YOUR_WALLET_ADDRESS> <AMOUNT>
+   ```
 
-```bash
-# Check ECP configuration
-computing-provider info
-
-# Check wallet status
-computing-provider wallet status
-
-# Check collateral status
-computing-provider collateral info --ecp
-```
-
-## Monitoring and Metrics
-
-### System Metrics
-
-```bash
-# CPU usage
-top
-
-# Memory usage
-free -h
-
-# GPU usage
-nvidia-smi -l 1
-```
-
-### Provider Metrics
-
-```bash
-# Task completion rate
-computing-provider task list --ecp --show-completed
-
-# Earnings
-computing-provider collateral info --ecp
-```
-
-## Security Considerations
-
-### Wallet Security
-
-- Keep private keys secure
-- Use separate addresses for different purposes
-- Regularly backup keystore files
-
-### System Security
-
-- Keep system updated
-- Use firewall rules
-- Monitor system logs
+3. Restart ECP daemon
 
 ## Exit Procedure
-
-To exit as an ECP provider:
 
 ### Step 1: Set Exit Status
 
@@ -333,25 +447,19 @@ computing-provider account changeTaskTypes --ownerAddress <OWNER_ADDRESS> 100
 
 ```bash
 # Withdraw from Collateral account
-computing-provider collateral withdraw --ecp --owner <OWNER_ADDRESS> --account <CP_ACCOUNT> <amount>
-
-# Withdraw from Escrow account (requires 7-day waiting period)
-computing-provider collateral withdraw-request --ecp --owner <OWNER_ADDRESS> <AMOUNT>
-
-# After 7 days, confirm withdrawal
-computing-provider collateral withdraw-confirm --ecp --owner <OWNER_ADDRESS>
+computing-provider collateral withdraw --ecp --owner <OWNER_ADDRESS> --account <CP_ACCOUNT> <AMOUNT>
 ```
 
 ## Support
 
 - [Discord Community](https://discord.gg/Jd2BFSVCKw)
-- [GitHub Issues](https://github.com/lagrangedao/go-computing-provider/issues)
+- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues)
 - [Swan Chain Documentation](https://docs.swanchain.io)
+- [Sequencer Documentation](https://docs.swanchain.io/bulders/market-provider/web3-zk-computing-market/sequencer)
 
 ## Related Documentation
 
 - [Installation Guide](../installation.md)
 - [Configuration](../configuration.md)
 - [CLI Reference](../cli/README.md)
-- [Task Management](../cli/task.md)
-- [Wallet Management](../cli/wallet.md) 
+- [Troubleshooting](../troubleshooting.md) 

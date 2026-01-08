@@ -47,10 +47,6 @@ Note: Most tests require a running Kubernetes cluster and proper configuration.
 # Initialize repo (default: ~/.swan/computing, override with CP_PATH env)
 computing-provider init --multi-address=/ip4/<IP>/tcp/<PORT> --node-name=<NAME>
 
-# Start the provider
-export CP_PATH=<path>
-computing-provider run
-
 # Wallet management
 computing-provider wallet new
 computing-provider wallet list
@@ -62,7 +58,75 @@ computing-provider collateral add --fcp --from <addr> <amount>
 
 # Task management
 computing-provider task list --fcp
+computing-provider task list --ecp
 computing-provider ubi list
+```
+
+## Running ECP (Edge Computing Provider)
+
+ECP handles ZK-Snark proof generation (FIL-C2, Aleo, etc.) and does NOT require Kubernetes.
+
+**Prerequisites:**
+- Docker with NVIDIA Container Toolkit installed
+- Download v28 parameters (at least 200GB storage needed)
+- Map port 9085 to public network: `<Intranet_IP>:9085 <--> <Public_IP>:<PORT>`
+
+**Install NVIDIA Container Toolkit (required for GPU access in Docker):**
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+**Required environment variables:**
+```bash
+export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
+export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"  # e.g., "GeForce RTX 4090:16384"
+```
+
+**Start ECP daemon:**
+```bash
+nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
+```
+
+**ECP account setup (task-types 1,2,4):**
+```bash
+computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 1,2,4
+computing-provider collateral add --ecp --from <addr> <amount>
+computing-provider sequencer add --from <addr> <amount>
+```
+
+**Sequencer config** (`$CP_PATH/config.toml`):
+```toml
+[UBI]
+EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
+AutoChainProof = false    # Fallback to chain when sequencer unavailable
+```
+
+**Common ECP issues:**
+- `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider ubi daemon"`
+- `could not select device driver "nvidia"`: Install NVIDIA Container Toolkit (see above)
+- `container name "/resource-exporter" is already in use`: Run `docker rm -f resource-exporter`
+- `CP Account is empty`: Create account with `computing-provider account create ...`
+
+## Running FCP (Fog Computing Provider)
+
+FCP runs AI model training/deployment and requires a Kubernetes cluster.
+
+**Start FCP:**
+```bash
+export CP_PATH=<path>
+computing-provider run
+```
+
+**FCP account setup (task-types 3):**
+```bash
+computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 3
+computing-provider collateral add --fcp --from <addr> <amount>
 ```
 
 ## Architecture
