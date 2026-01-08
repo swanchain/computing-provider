@@ -46,8 +46,14 @@ func main() {
 			priceCmd,
 			networkCmd,
 			ubiZeroCmd,
+			researchCmd,
 		},
 		Before: func(c *cli.Context) error {
+			// Skip repo initialization for research command (hardware detection only)
+			if c.Args().Present() && strings.EqualFold(c.Args().First(), researchCmd.Name) {
+				return nil
+			}
+
 			cpRepoPath, err := homedir.Expand(c.String(FlagRepo.Name))
 			if err != nil {
 				return fmt.Errorf("missing CP_PATH env, please set export CP_PATH=<YOUR CP_PATH>")
