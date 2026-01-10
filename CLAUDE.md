@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Go Computing Provider is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
+Computing Provider is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
 
 Two provider types are supported:
-- **ECP (Edge Computing Provider)**: Handles ZK-Snark proof generation tasks (Filecoin, Aleo, etc.)
-- **FCP (Fog Computing Provider)**: Runs AI model training/deployment tasks via Kubernetes
+- **ECP (Edge Computing Provider)**: Handles ZK-Snark proof generation tasks (Filecoin, Aleo, etc.). Runs via Docker containers using `computing-provider ubi daemon`. Does NOT require Kubernetes.
+- **FCP (Fog Computing Provider)**: Runs AI model training/deployment tasks via Kubernetes using `computing-provider run`.
 
 ## Build Commands
 
@@ -24,7 +24,7 @@ make install
 # The binary is installed to /usr/local/bin/computing-provider
 ```
 
-Go version 1.22+ is required.
+Go version 1.22+ is required (see go.mod).
 
 ## Running Tests
 
@@ -133,16 +133,18 @@ computing-provider collateral add --fcp --from <addr> <amount>
 
 ### Directory Structure
 
-- `cmd/computing-provider/`: CLI entry point and command definitions
+- `cmd/computing-provider/`: CLI entry point and command definitions (main.go defines all subcommands)
 - `internal/computing/`: Core services (K8s, Docker, UBI tasks, space deployment)
-- `internal/contract/`: Swan Chain smart contract bindings
+- `internal/contract/`: Swan Chain smart contract bindings (auto-generated + stub wrappers)
   - `account/`: CP account registration contract
   - `ecp/`: Edge computing contracts (collateral, sequencer, tasks)
   - `fcp/`: Fog computing contracts (collateral, job manager)
   - `token/`: SWAN token contract
 - `internal/models/`: Data models (jobs, resources, UBI tasks)
+- `internal/db/`: SQLite database via GORM
+- `internal/yaml/`: YAML parsing for deployment manifests
 - `conf/`: Configuration loading and validation
-- `build/`: Version info and embedded network parameters
+- `build/`: Version info and embedded network parameters (`parameters.json`)
 - `wallet/`: Keystore management and transaction signing
 
 ### Core Services in `internal/computing/`
@@ -153,29 +155,47 @@ computing-provider collateral add --fcp --from <addr> <amount>
 - `docker_service.go`: Docker image building and registry operations
 - `cron_task.go`: Background scheduled tasks (health checks, cleanup, status updates)
 - `sequence_service.go`: Sequencer service for ZK proof submission
+- `ecp_image_service.go`: ECP container image deployment for inference tasks
+- `provider.go`: Main provider service orchestration
 
 ### Configuration
 
 Config file: `$CP_PATH/config.toml` (see `config.toml.sample`)
 
 Key sections:
-- `[API]`: Server port, multi-address, domain, pricing settings
-- `[UBI]`: ZK engine settings, sequencer configuration
+- `[API]`: Server port, multi-address, domain, pricing settings, port ranges for ECP
+- `[UBI]`: ZK engine settings, sequencer configuration (`EnableSequencer`, `AutoChainProof`)
 - `[HUB]`: Orchestrator settings for FCP tasks
 - `[RPC]`: Swan Chain RPC endpoint
+- `[Registry]`: Docker registry for multi-node K8s clusters
+
+Pricing config: `$CP_PATH/price.toml` (resource pricing per hour)
 
 ### Network Parameters
 
-Network-specific contract addresses and parameters are embedded in `build/parameters.json` and selected at build time via the `NetWorkTag` ldflags variable (mainnet/testnet).
+Network-specific contract addresses and parameters are embedded in `build/parameters.json` and selected at build time via the `NetWorkTag` ldflags variable (mainnet/testnet). The build system uses `-ldflags` to set `build.NetWorkTag`.
 
 ### Wire Dependency Injection
 
-The project uses Google Wire for dependency injection. See `internal/computing/wire.go` and the generated `wire_gen.go`.
+The project uses Google Wire for dependency injection. See `internal/computing/wire.go` and the generated `wire_gen.go`. When modifying services, regenerate with `wire ./internal/computing/`.
 
 ## Important Patterns
 
-- The `CP_PATH` environment variable controls the repo directory location
-- Contract stubs in `internal/contract/*/` wrap auto-generated contract bindings
-- K8s operations use client-go; the service auto-detects in-cluster or kubeconfig
-- Job deployments create Kubernetes Deployments + Services + Ingress resources
-- UBI tasks run as Kubernetes Jobs with GPU resources when available
+- The `CP_PATH` environment variable controls the repo directory location (default: `~/.swan/computing`)
+- Contract stubs in `internal/contract/*/` wrap auto-generated Ethereum contract bindings
+- K8s operations use client-go; the service auto-detects in-cluster or kubeconfig mode
+- FCP job deployments create Kubernetes Deployments + Services + Ingress resources
+- ECP tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
+- Task types: 1=FIL-C2, 2=Mining, 3=AI, 4=Inference, 5=NodePort, 100=Exit
+
+## Contract Interaction
+
+Smart contracts are accessed via stubs in `internal/contract/`. Each contract has:
+- `*_contract.go`: Auto-generated Go bindings from Solidity ABI
+- `*_stub.go`: Wrapper providing higher-level operations
+
+Key contracts:
+- Account contract: CP registration and management
+- Collateral contracts: ECP and FCP collateral deposits/withdrawals
+- Sequencer contract: Batch proof submission to reduce gas costs
+- Task contracts: Task registration and proof verification
