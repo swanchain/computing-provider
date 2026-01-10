@@ -43,6 +43,15 @@ type ComputeNode struct {
 	Registry Registry
 	RPC      RPC
 	CONTRACT CONTRACT `toml:"CONTRACT,omitempty"`
+	ECP2     ECP2     `toml:"ECP2,omitempty"`
+}
+
+// ECP2 is the ECP2 marketplace configuration
+type ECP2 struct {
+	Enable       bool     `toml:"Enable"`
+	ServiceURL   string   `toml:"ServiceURL"`   // HTTP API URL (e.g., http://localhost:8080)
+	WebSocketURL string   `toml:"WebSocketURL"` // WebSocket URL (e.g., ws://localhost:8081)
+	Models       []string `toml:"Models"`       // Models this provider serves
 }
 
 type API struct {
@@ -449,6 +458,12 @@ func generateDefaultConfig() ComputeNode {
 			Sequencer:              "",
 			EdgeTaskPayment:        "",
 			EdgeTaskPaymentCreated: 0,
+		},
+		ECP2: ECP2{
+			Enable:       false,
+			ServiceURL:   "http://localhost:8080",
+			WebSocketURL: "ws://localhost:8081",
+			Models:       []string{},
 		},
 	}
 }

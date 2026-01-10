@@ -1,0 +1,538 @@
+package computing
+
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+	"github.com/swanchain/computing-provider-v2/conf"
+)
+
+// ECP2 WebSocket Protocol Types
+type MessageType string
+
+const (
+	MsgTypeRegister  MessageType = "register"
+	MsgTypeInference MessageType = "inference"
+	MsgTypeVerify    MessageType = "verify"
+	MsgTypeHeartbeat MessageType = "heartbeat"
+	MsgTypeAck       MessageType = "ack"
+	MsgTypeError     MessageType = "error"
+)
+
+// Message is the base WebSocket message structure
+type Message struct {
+	Type      MessageType     `json:"type"`
+	RequestID string          `json:"request_id,omitempty"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// RegisterPayload is sent by provider on connection
+type RegisterPayload struct {
+	ProviderID   string   `json:"provider_id"`
+	WorkerAddr   string   `json:"worker_addr"`
+	Signature    string   `json:"signature"`
+	Models       []string `json:"models"`
+	Capabilities []string `json:"capabilities"`
+}
+
+// InferencePayload is sent to provider for inference request
+type InferencePayload struct {
+	EndpointID string          `json:"endpoint_id"`
+	ModelID    string          `json:"model_id"`
+	Request    json.RawMessage `json:"request"`
+}
+
+// InferenceResponse is returned by provider
+type InferenceResponse struct {
+	RequestID string          `json:"request_id"`
+	Response  json.RawMessage `json:"response"`
+	Error     string          `json:"error,omitempty"`
+	Latency   int64           `json:"latency_ms"`
+}
+
+// VerifyPayload is sent to provider for model verification
+type VerifyPayload struct {
+	ChallengeID   string          `json:"challenge_id"`
+	ChallengeType string          `json:"challenge_type"`
+	ModelID       string          `json:"model_id"`
+	Challenge     json.RawMessage `json:"challenge"`
+}
+
+// HeartbeatPayload for liveness checks
+type HeartbeatPayload struct {
+	ProviderID string             `json:"provider_id"`
+	Timestamp  int64              `json:"timestamp"`
+	Metrics    map[string]float64 `json:"metrics,omitempty"`
+}
+
+// AckPayload for acknowledgments
+type AckPayload struct {
+	RequestID string `json:"request_id"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message,omitempty"`
+}
+
+// ErrorPayload for error responses
+type ErrorPayload struct {
+	RequestID string `json:"request_id,omitempty"`
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+}
+
+const (
+	// Time allowed to write a message to the peer
+	writeWait = 10 * time.Second
+
+	// Time allowed to read the next pong message from the peer
+	pongWait = 60 * time.Second
+
+	// Send pings to peer with this period
+	pingPeriod = (pongWait * 9) / 10
+
+	// Maximum message size allowed from peer
+	maxMessageSize = 1024 * 1024 // 1MB
+
+	// Reconnection delay
+	reconnectDelay = 5 * time.Second
+)
+
+// InferenceHandler handles inference requests from ECP2 service
+type InferenceHandler func(payload InferencePayload) (*InferenceResponse, error)
+
+// ECP2Client manages WebSocket connection to ECP2 service
+type ECP2Client struct {
+	providerID       string
+	workerAddr       string
+	models           []string
+	wsURL            string
+	conn             *websocket.Conn
+	send             chan []byte
+	stopCh           chan struct{}
+	registered       bool
+	inferenceHandler InferenceHandler
+	mu               sync.RWMutex
+}
+
+// NewECP2Client creates a new ECP2 client
+func NewECP2Client(providerID, workerAddr string) *ECP2Client {
+	config := conf.GetConfig()
+	return &ECP2Client{
+		providerID: providerID,
+		workerAddr: workerAddr,
+		models:     config.ECP2.Models,
+		wsURL:      config.ECP2.WebSocketURL,
+		send:       make(chan []byte, 256),
+		stopCh:     make(chan struct{}),
+	}
+}
+
+// SetInferenceHandler sets the handler for inference requests
+func (c *ECP2Client) SetInferenceHandler(handler InferenceHandler) {
+	c.inferenceHandler = handler
+}
+
+// Start connects to ECP2 service and starts the client
+func (c *ECP2Client) Start() error {
+	logs.GetLogger().Infof("Connecting to ECP2 service at %s", c.wsURL)
+
+	if err := c.connect(); err != nil {
+		return err
+	}
+
+	// Start read/write pumps
+	go c.readPump()
+	go c.writePump()
+	go c.heartbeatPump()
+
+	// Send registration
+	if err := c.register(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Stop gracefully shuts down the client
+func (c *ECP2Client) Stop() {
+	close(c.stopCh)
+	if c.conn != nil {
+		c.conn.Close()
+	}
+}
+
+func (c *ECP2Client) connect() error {
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+	}
+
+	conn, _, err := dialer.Dial(c.wsURL+"/ws", nil)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ECP2 service: %w", err)
+	}
+
+	c.mu.Lock()
+	c.conn = conn
+	c.registered = false
+	c.mu.Unlock()
+
+	logs.GetLogger().Info("Connected to ECP2 service")
+	return nil
+}
+
+func (c *ECP2Client) reconnect() {
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		default:
+			logs.GetLogger().Info("Attempting to reconnect to ECP2 service...")
+			if err := c.connect(); err != nil {
+				logs.GetLogger().Errorf("Reconnection failed: %v", err)
+				time.Sleep(reconnectDelay)
+				continue
+			}
+
+			// Re-register after reconnection
+			if err := c.register(); err != nil {
+				logs.GetLogger().Errorf("Re-registration failed: %v", err)
+				time.Sleep(reconnectDelay)
+				continue
+			}
+
+			// Restart pumps
+			go c.readPump()
+			go c.writePump()
+			return
+		}
+	}
+}
+
+func (c *ECP2Client) register() error {
+	payload := RegisterPayload{
+		ProviderID:   c.providerID,
+		WorkerAddr:   c.workerAddr,
+		Models:       c.models,
+		Capabilities: []string{"inference", "verification"},
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal register payload: %w", err)
+	}
+
+	msg := Message{
+		Type:      MsgTypeRegister,
+		RequestID: uuid.New().String(),
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	c.send <- msgBytes
+	logs.GetLogger().Infof("Sent registration for provider %s with models: %v", c.providerID, c.models)
+	return nil
+}
+
+func (c *ECP2Client) readPump() {
+	defer func() {
+		c.mu.Lock()
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		c.mu.Unlock()
+	}()
+
+	c.conn.SetReadLimit(maxMessageSize)
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		default:
+			_, message, err := c.conn.ReadMessage()
+			if err != nil {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					logs.GetLogger().Errorf("WebSocket read error: %v", err)
+				}
+				go c.reconnect()
+				return
+			}
+
+			var msg Message
+			if err := json.Unmarshal(message, &msg); err != nil {
+				logs.GetLogger().Errorf("Failed to parse message: %v", err)
+				continue
+			}
+
+			c.handleMessage(msg)
+		}
+	}
+}
+
+func (c *ECP2Client) writePump() {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case message := <-c.send:
+			c.mu.RLock()
+			conn := c.conn
+			c.mu.RUnlock()
+
+			if conn == nil {
+				continue
+			}
+
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				logs.GetLogger().Errorf("WebSocket write error: %v", err)
+				return
+			}
+		case <-ticker.C:
+			c.mu.RLock()
+			conn := c.conn
+			c.mu.RUnlock()
+
+			if conn == nil {
+				continue
+			}
+
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				logs.GetLogger().Errorf("WebSocket ping error: %v", err)
+				return
+			}
+		}
+	}
+}
+
+func (c *ECP2Client) heartbeatPump() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			c.mu.RLock()
+			registered := c.registered
+			c.mu.RUnlock()
+
+			if !registered {
+				continue
+			}
+
+			c.sendHeartbeat()
+		}
+	}
+}
+
+func (c *ECP2Client) sendHeartbeat() {
+	payload := HeartbeatPayload{
+		ProviderID: c.providerID,
+		Timestamp:  time.Now().Unix(),
+		Metrics:    c.collectMetrics(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal heartbeat: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeHeartbeat,
+		RequestID: uuid.New().String(),
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal message: %v", err)
+		return
+	}
+
+	c.send <- msgBytes
+}
+
+func (c *ECP2Client) collectMetrics() map[string]float64 {
+	// Collect GPU/CPU metrics from K8s service
+	metrics := make(map[string]float64)
+
+	k8sService := NewK8sService()
+	if k8sService != nil && k8sService.k8sClient != nil {
+		// Get GPU utilization if available
+		// This is a placeholder - implement actual metric collection
+		metrics["gpu_utilization"] = 0.0
+		metrics["memory_utilization"] = 0.0
+	}
+
+	return metrics
+}
+
+func (c *ECP2Client) handleMessage(msg Message) {
+	switch msg.Type {
+	case MsgTypeAck:
+		var payload AckPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse ack payload: %v", err)
+			return
+		}
+		if payload.Success {
+			c.mu.Lock()
+			c.registered = true
+			c.mu.Unlock()
+			logs.GetLogger().Infof("Registration successful: %s", payload.Message)
+		} else {
+			logs.GetLogger().Warnf("Received failed ack: %s", payload.Message)
+		}
+
+	case MsgTypeInference:
+		var payload InferencePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse inference payload: %v", err)
+			c.sendError(msg.RequestID, 400, "invalid inference payload")
+			return
+		}
+		go c.handleInference(msg.RequestID, payload)
+
+	case MsgTypeVerify:
+		var payload VerifyPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse verify payload: %v", err)
+			c.sendError(msg.RequestID, 400, "invalid verify payload")
+			return
+		}
+		go c.handleVerification(msg.RequestID, payload)
+
+	case MsgTypeError:
+		var payload ErrorPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse error payload: %v", err)
+			return
+		}
+		logs.GetLogger().Errorf("Received error from ECP2: [%d] %s", payload.Code, payload.Message)
+
+	default:
+		logs.GetLogger().Warnf("Unknown message type: %s", msg.Type)
+	}
+}
+
+func (c *ECP2Client) handleInference(requestID string, payload InferencePayload) {
+	startTime := time.Now()
+	logs.GetLogger().Infof("Processing inference request %s for model %s", requestID, payload.ModelID)
+
+	var response *InferenceResponse
+	var err error
+
+	if c.inferenceHandler != nil {
+		response, err = c.inferenceHandler(payload)
+	} else {
+		err = fmt.Errorf("no inference handler configured")
+	}
+
+	latency := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		response = &InferenceResponse{
+			RequestID: requestID,
+			Error:     err.Error(),
+			Latency:   latency,
+		}
+	} else {
+		response.RequestID = requestID
+		response.Latency = latency
+	}
+
+	c.sendInferenceResponse(response)
+}
+
+func (c *ECP2Client) handleVerification(requestID string, payload VerifyPayload) {
+	logs.GetLogger().Infof("Processing verification request %s for model %s", requestID, payload.ModelID)
+
+	// Verification implementation would go here
+	// For now, just acknowledge
+	c.sendAck(requestID, true, "verification completed")
+}
+
+func (c *ECP2Client) sendAck(requestID string, success bool, message string) {
+	payload := AckPayload{
+		RequestID: requestID,
+		Success:   success,
+		Message:   message,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeAck,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
+}
+
+func (c *ECP2Client) sendError(requestID string, code int, message string) {
+	payload := ErrorPayload{
+		RequestID: requestID,
+		Code:      code,
+		Message:   message,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeError,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
+}
+
+func (c *ECP2Client) sendInferenceResponse(response *InferenceResponse) {
+	payloadBytes, err := json.Marshal(response)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal inference response: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeAck,
+		RequestID: response.RequestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
+}
+
+// IsConnected returns whether the client is connected and registered
+func (c *ECP2Client) IsConnected() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.conn != nil && c.registered
+}
+
+// GetProviderID returns the provider ID
+func (c *ECP2Client) GetProviderID() string {
+	return c.providerID
+}

@@ -14,4 +14,9 @@ func ProjectInit(cpRepoPath string) {
 
 	computing.NewCronTask(nodeID).RunTask()
 
+	// Start ECP2 marketplace integration if enabled
+	ecp2Service := computing.NewECP2Service(nodeID, cpRepoPath)
+	if err := ecp2Service.Start(); err != nil {
+		logs.GetLogger().Errorf("Failed to start ECP2 service: %v", err)
+	}
 }
