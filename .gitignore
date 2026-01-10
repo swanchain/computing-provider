@@ -24,3 +24,4 @@ computing-provider
 .swan_node
 .env
 config.toml
+logs/
