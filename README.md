@@ -1,62 +1,285 @@
-# Computing Provider
+# Computing Provider v2
+
 [![Discord](https://img.shields.io/discord/770382203782692945?label=Discord&logo=Discord)](https://discord.gg/Jd2BFSVCKw)
 [![Twitter Follow](https://img.shields.io/twitter/follow/swan_chain)](https://twitter.com/swan_chain)
 [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg)](https://github.com/RichardLitt/standard-readme)
 
-A computing provider is an individual or organization that participates in the decentralized computing network by offering computational resources such as processing power (CPU and GPU), memory, storage, and bandwidth.
+Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to provide computational resources (CPU, GPU, memory, storage) to the network and earn rewards.
 
-As a resource provider, you can run a **ECP**(Edge Computing Provider) and **FCP**(Fog Computing Provider) to contribute yourcomputing resource.
+**ECP2 (Edge Computing Provider 2)** is the default and recommended mode for Computing Provider v2, allowing you to deploy and run AI inference containers with GPU support.
 
+## Provider Modes
 
- - **ECP (Edge Computing Provider)** specializes in processing data at the source of data generation, using minimal latency setups ideal for real-time applications. This provider handles specific, localized tasks directly on devices at the network's edge, such as IoT devices. At the current stage, ECP supports the generation of **ZK-Snark proof of Filecoin network**, and more ZK proof types will be gradually supported, such as Aleo, Scroll, starkNet, etc. **ECP does NOT require Kubernetes** - it runs using Docker containers with the command `computing-provider ubi daemon`. [Install Guideline](ubi/README.md)
+| Mode | Description | Requirements | Command |
+|------|-------------|--------------|---------|
+| **ECP2** (Default) | Deploy AI inference containers | Docker + NVIDIA Container Toolkit | `computing-provider ubi daemon` |
+| ECP (ZK-Proof) | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider ubi daemon` |
+| FCP | AI model training via Kubernetes | Kubernetes cluster | `computing-provider run` |
 
+# Table of Contents
 
- - **FCP (Fog Computing Provider)** Offers a layered network that extends cloud capabilities to the edge of the network, providing services such as AI model training and deployment. This provider utilizes infrastructure like Kubernetes (K8S) to support scalable, distributed computing tasks.  **FCP** will execute tasks assigned by Market Provider, like [Orchestrator](https://orchestrator.swanchain.io) on the [Swan chain](https://swanchain.io).
+- [Quick Start: ECP2 Mode](#quick-start-ecp2-mode)
+  - [Prerequisites](#prerequisites)
+  - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
+  - [Build Computing Provider](#build-computing-provider)
+  - [Initialize and Configure](#initialize-and-configure)
+  - [Setup Wallet and Account](#setup-wallet-and-account)
+  - [Start ECP2 Provider](#start-ecp2-provider)
+- [Configuration Reference](#configuration-reference)
+- [Additional Modes](#additional-modes)
+  - [ECP Mode (ZK-Proof)](#ecp-mode-zk-proof)
+  - [FCP Mode (Kubernetes)](#fcp-mode-kubernetes)
+- [CLI Reference](#cli-reference)
+- [Getting Help](#getting-help)
 
+---
 
-# Table of Content
+# Quick Start: ECP2 Mode
 
--  As a ECP
-	- [Run Edge Computing Provider](ubi/README.md)
+ECP2 (Edge Computing Provider 2) allows you to run AI inference containers on your GPU hardware and earn rewards from the Swan Chain network.
 
-- As a FCP
- 	- [Prerequisites](#Prerequisites)
- 	- [Install the Kubernetes](#Install-the-Kubernetes)
- 		- [Install Container Runtime Environment](#install-Container-Runtime-Environment)
- 		- [Optional - Setup a docker registry server](#Optional-setup-a-Docker-Registry-Server)
-		- [Create a Kubernetes Cluster](#Create-a-Kubernetes-Cluster)
- 		- [Install the Network Plugin](#Install-the-Network-Plugin)
-		- [Install the NVIDIA Plugin](#Install-the-NVIDIA-Plugin)
-		- [Install the Ingress-nginx Controller](#Install-the-Ingress-nginx-Controller)
- 	- [Install and config the Nginx](#Install-and-config-the-nginx)
- 	- [Install the Hardware resource-exporter](#Install-the-Hardware-resource-exporter)
- 	- [Build and config the Computing Provider](#Build-and-config-the-Computing-Provider)
- 	- [Install AI Inference Dependency(Optional)](#optional-Install-AI-Inference-Dependency)
-    - [Install Node-Port Dependency (Optional)](#optional-install-node-port-dependency)
-    - [Config and Receive UBI Tasks(Optional)](#optional-Config-and-Receive-UBI-Tasks)
-    - [Start the Computing Provider](#Start-the-Computing-Provider)
-    - [CLI of Computing Provider](#CLI-of-Computing-Provider)
- 
 ## Prerequisites
-Before you install the Computing Provider, you need to know there are some resources required:
- - Possess a public IP
- - Have a domain name (*.example.com)
- - Have an SSL certificate
- - `Go` version must 1.21+, you can refer here:
+
+- Linux server with NVIDIA GPU
+- Docker installed ([install guide](https://docs.docker.com/engine/install/))
+- Public IP address
+- Go 1.21+ for building from source
 
 ```bash
+# Install Go if needed
 wget -c https://golang.org/dl/go1.21.7.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
-
 echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
 ```
 
-## Install the Kubernetes
+## Install NVIDIA Container Toolkit
+
+Required for GPU access in Docker containers:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify installation:
+```bash
+docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
+```
+
+## Build Computing Provider
+
+```bash
+git clone https://github.com/swanchain/go-computing-provider.git
+cd go-computing-provider
+git checkout releases
+
+# Build for mainnet
+make clean && make mainnet
+make install
+
+# Or for testnet
+# make clean && make testnet
+# make install
+```
+
+## Initialize and Configure
+
+1. **Initialize the repository:**
+```bash
+computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
+```
+
+> **Note:** Default repo location is `~/.swan/computing`. Override with `export CP_PATH="<YOUR_CP_PATH>"`
+
+2. **Configure for ECP2** in `$CP_PATH/config.toml`:
+
+```toml
+[API]
+Port = 8085                                    # Web server port
+MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Your public address
+Domain = "*.example.com"                       # Domain for single-port services (optional)
+NodeName = "my-inference-node"                 # Your node name
+PortRange = ["40000-40050", "40060"]           # Ports for multi-port containers
+
+[RPC]
+SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
+```
+
+**Port Configuration:**
+- Single-port containers: Use `traefik` with domain resolution (port 9000)
+- Multi-port containers: Use `PortRange` with direct IP + port mapping
+
+## Setup Wallet and Account
+
+1. **Create or import wallet:**
+```bash
+# Create new wallet
+computing-provider wallet new
+
+# Or import existing wallet
+computing-provider wallet import <YOUR_PRIVATE_KEY_FILE>
+```
+
+2. **Deposit SwanETH** to your wallet address. See the [getting started guide](https://docs.swanchain.io/swan-mainnet/getting-started-guide).
+
+3. **Create CP account with ECP2 task type:**
+```bash
+computing-provider account create \
+    --ownerAddress <YOUR_OWNER_ADDRESS> \
+    --workerAddress <YOUR_WORKER_ADDRESS> \
+    --beneficiaryAddress <YOUR_BENEFICIARY_ADDRESS> \
+    --task-types 4
+```
+
+> **Task Type 4** = ECP2 (Inference)
+
+4. **Add collateral:**
+```bash
+computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS> <AMOUNT>
+```
+
+## Start ECP2 Provider
+
+```bash
+export CP_PATH=<YOUR_CP_PATH>
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
+```
+
+**Check running tasks:**
+```bash
+computing-provider task list --ecp
+```
+
+**Example output:**
+```
+TASK UUID                               TASK NAME       IMAGE NAME                              CONTAINER STATUS   REWARD    CREATE TIME
+75f9df4e-b6a5-40b0-b7ac-02fb1840dafa    inference-01    mymodel/inference:latest                running            1.2500    2024-11-24 10:23:32
+```
+
+---
+
+# Configuration Reference
+
+## Resource Pricing
+
+Configure pricing in `$CP_PATH/price.toml`:
+
+```bash
+# Generate default pricing config
+computing-provider price generate
+
+# View current prices
+computing-provider price view
+```
+
+Example `price.toml`:
+```toml
+TARGET_CPU="0.2"            # SWAN/thread-hour
+TARGET_MEMORY="0.1"         # SWAN/GB-hour
+TARGET_HD_EPHEMERAL="0.005" # SWAN/GB-hour
+TARGET_GPU_DEFAULT="1.6"    # SWAN/GPU-hour
+TARGET_GPU_3080="2.0"       # SWAN/3080 GPU-hour
+```
+
+## Full config.toml Reference
+
+```toml
+[API]
+Port = 8085                                    # Web server port
+MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Public multiaddress
+Domain = ""                                    # Domain for traefik routing
+NodeName = ""                                  # Display name
+Pricing = "true"                               # Accept smart pricing orders
+AutoDeleteImage = false                        # Auto-delete unused images
+PortRange = ["40000-40050"]                    # Ports for multi-port containers
+
+[RPC]
+SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
+
+[Registry]
+ServerAddress = ""                             # Docker registry (multi-node only)
+UserName = ""
+Password = ""
+```
+
+---
+
+# Additional Modes
+
+## ECP Mode (ZK-Proof)
+
+ECP (Edge Computing Provider) generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). Requires additional v28 parameters (~200GB).
+
+See [ECP/UBI Documentation](ubi/README.md) for full setup.
+
+**Quick overview:**
+```bash
+# Download v28 parameters
+export PARENT_PATH="<V28_PARAMS_PATH>"
+curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+
+# Set environment
+export FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
+export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
+
+# Create account with ZK task types
+computing-provider account create \
+    --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> \
+    --task-types 1,2,4
+
+# Enable sequencer (reduces gas costs)
+# In config.toml:
+# [UBI]
+# EnableSequencer = true
+# AutoChainProof = false
+
+# Deposit to sequencer
+computing-provider sequencer add --from <addr> <amount>
+
+# Start daemon
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
+```
+
+## FCP Mode (Kubernetes)
+
+For AI model training and deployment via Kubernetes clusters.
+
+**Prerequisites:**
+- Kubernetes v1.24+ cluster
+- NVIDIA Device Plugin for K8s
+- Ingress-nginx controller
+- SSL certificate and domain
+
+**Quick start:**
+```bash
+# Create account with AI task type
+computing-provider account create \
+    --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> \
+    --task-types 3
+
+# Add FCP collateral
+computing-provider collateral add --fcp --from <addr> <amount>
+
+# Start FCP
+nohup computing-provider run >> cp.log 2>&1 &
+```
+
+For detailed Kubernetes setup, see [FCP Setup Guide](#install-the-kubernetes) below.
+
+<details>
+<summary><b>Full FCP/Kubernetes Setup Instructions</b></summary>
+
+### Install the Kubernetes
 The Kubernetes version should be `v1.24.0+`
 
 ###  Install Container Runtime Environment
 If you plan to run a Kubernetes cluster, you need to install a container runtime into each node in the cluster so that Pods can run there, refer to [here](https://kubernetes.io/docs/setup/production-environment/container-runtimes/). And you just need to choose one option to install the `Container Runtime Environment`
 
-#### Option 1: Install the `Docker` and `cri-dockerd` （**Recommended**）
+#### Option 1: Install the `Docker` and `cri-dockerd` (**Recommended**)
 To install the `Docker Container Runtime` and the `cri-dockerd`, follow the steps below:
 * Install the `Docker`:
     - Please refer to the official documentation from [here](https://docs.docker.com/engine/install/).
@@ -72,7 +295,7 @@ To install the `Docker Container Runtime` and the `cri-dockerd`, follow the step
 ### Optional-Setup a docker registry server
 **If you are using the docker and you have only one node, the step can be skipped**.
 
-If you have deployed a Kubernetes cluster with multiple nodes, it is recommended to set up a **private Docker Registry** to allow other nodes to quickly pull images within the intranet. 
+If you have deployed a Kubernetes cluster with multiple nodes, it is recommended to set up a **private Docker Registry** to allow other nodes to quickly pull images within the intranet.
 
 * Create a directory `/docker_repo` on your docker server. It will be mounted on the registry container as persistent storage for our docker registry.
 ```bash
@@ -89,8 +312,6 @@ sudo docker run --detach \
   --publish 5000:5000 \
   registry:2
 ```
-![1](https://github.com/lagrangedao/go-computing-provider/assets/102578774/0c4cd53d-fb5f-43d9-b804-be83faf33986)
-
 
 * Add the registry server to the node
 
@@ -119,7 +340,7 @@ sudo docker run --detach \
 
 [plugins."io.containerd.grpc.v1.cri".registry.configs]
   [plugins."io.containerd.grpc.v1.cri".registry.configs."<Your_registry_server_IP>:5000".tls]
-      insecure_skip_verify = true                                                               
+      insecure_skip_verify = true
 ```
 
 Then restart `containerd` service
@@ -133,17 +354,13 @@ Finally, you can check the installation by the command:
 ```bash
 docker system info
 ```
-![2](https://github.com/lagrangedao/go-computing-provider/assets/102578774/4cfc1981-3fca-415c-948f-86c496915cff)
-
-
-
 
 ### Create a Kubernetes Cluster
 To create a Kubernetes cluster, you can use a container management tool like `kubeadm`. The below steps can be followed:
 
 * [Install the kubeadm toolbox](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/).
 
-* [Create a Kubernetes cluster with kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/) 
+* [Create a Kubernetes cluster with kubeadm](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/create-cluster-kubeadm/)
 
 
 ### Install the Network Plugin
@@ -169,11 +386,8 @@ watch kubectl get pods -n calico-system
 kubectl taint nodes --all node-role.kubernetes.io/control-plane-
 kubectl taint nodes --all node-role.kubernetes.io/master-
 ```
-If you have installed it correctly, you can see the result shown in the figure by the command `kubectl get po -A`
 
-![3](https://github.com/lagrangedao/go-computing-provider/assets/102578774/91ef353f-72af-41b2-82e8-061b92bfb999)
-
-**Note:** 
+**Note:**
  - If you are a single-host Kubernetes cluster, remember to remove the taint mark, otherwise, the task can not be scheduled to it.
 ```bash
 kubectl taint node ${nodeName}  node-role.kubernetes.io/control-plane:NoSchedule-
@@ -187,11 +401,6 @@ If your computing provider wants to provide a GPU resource, the NVIDIA Plugin sh
 
 * [Install NVIDIA Device Plugin for Kubernetes](https://github.com/NVIDIA/k8s-device-plugin#quick-start).
 
-If you have installed it correctly, you can see the result shown in the figure by the command 
-`kubectl get po -n kube-system`
-
-![4](https://github.com/lagrangedao/go-computing-provider/assets/102578774/8209c589-d561-43ad-adea-5ecb52618909)
-
 ### Install the Ingress-nginx Controller
 The `ingress-nginx` is an ingress controller for Kubernetes using `NGINX` as a reverse proxy and load balancer. You can run the following command to install it:
 ```bash
@@ -202,17 +411,6 @@ kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/cont
 ```bash
 use-forwarded-headers: "true"
 ```
-
-
-If you have installed it correctly, you can see the result shown in the figure by the command: 
-
- - Run `kubectl get po -n ingress-nginx`
-
-![5](https://github.com/lagrangedao/go-computing-provider/assets/102578774/f3c0585a-df19-4971-91fe-d03365f4edee)
-
- - Run `kubectl get svc -n ingress-nginx`
-
-![6](https://github.com/lagrangedao/go-computing-provider/assets/102578774/e3b3dadc-77c1-4dc0-843c-5b946e252b65)
 
 ### Install and config the Nginx
  -  Install `Nginx` service to the Server
@@ -259,7 +457,7 @@ server {
 }
 ```
 
- - **Note:** 
+ - **Note:**
 
 	 - `server_name`: a generic domain name
 
@@ -272,8 +470,6 @@ server {
 	sudo nginx -s reload
 	```
  - Map your "catch-all (wildcard) subdomain(*.example.com)" to a public IP address
-
-
 
 ### Install the Hardware resource-exporter
  The `resource-exporter` plugin is developed to collect the node resource constantly, computing provider will report the resource to the Lagrange Auction Engine to match the space requirement. To get the computing task, every node in the cluster must install the plugin. You just need to run the following command:
@@ -313,361 +509,67 @@ spec:
             type: File
 EOF
 ```
-If you have installed it correctly, you can see the result shown in the figure by the command:
-`kubectl get po -n kube-system`
 
-![7](https://github.com/lagrangedao/go-computing-provider/assets/102578774/38b0e15f-5ff9-4edc-a313-d0f6f4a0bda8)
+</details>
 
-## Build and config the Computing Provider
-
- - Build the Computing Provider 
-
-	Firstly, clone the code to your local:
-```bash
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider
-git checkout releases
-```
-
-Then build the Computing provider on the **Swan Mainnet** by following the below steps:
-
-```bash
-make clean && make mainnet
-make install
-```
-
-> If you want to test the CP in the **testnet**, please build a testnet version:
-> ```bash
-> make clean && make testnet
-> make install
-> ```
-
-## Initialize CP repo and Update Configuration 
-1. Initialize repo
-    ```
-    computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
-    ```
-    **Note:**
-    - By default, the CP's repo is `~/.swan/computing`, you can configure it by `export CP_PATH="<YOUR_CP_PATH>"`
-    - The CP service port (`8085` by default) must be mapped to the public IP address and port
-2. Update `config.toml`
-
-    Edit the necessary configuration files according to your deployment requirements. 
-
-    ```toml
-       [API]
-       Port = 8085                                    # The port number that the web server listens on
-       MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # The multiAddress for libp2p
-       Domain = ""                                    # The domain name
-       NodeName = ""                                  # The computing-provider node name
-       WalletWhiteList = ""                           # CP only accepts user addresses from this whitelist for space deployment
-       WalletBlackList = ""                           # CP reject user addresses from this blacklist for space deployment
-       Pricing = "true"                               # default True, indicating acceptance of smart pricing orders, which may include orders priced lower than self-determined pricing.
-       AutoDeleteImage = false                        # Default false, automatically delete unused images
-       ClearLogDuration = 24                          # The interval for automatically clearing the log, the unit is hours
-       PortRange= ["40000-40050","40070"]             # Externally exposed port number for deploying ECP image tasks
-   	   GpuUtilizationRejectThreshold = 1.0            # When the GPU utilization reaches this value, no further tasks will be performed. For example, 0.5 means 50% utilization, while 1.0 means the GPU is fully utilized.
-      
-       [UBI]
-       UbiEnginePk = "0x594A4c5cF8e98E1aA5e9266F913dC74a24Eae0e9"              # UBI Engine's public key, CP only accept the task from this UBI engine
-       EnableSequencer = true                                                  # Submit the proof to Sequencer service(default: true)
-       AutoChainProof = true                                                   # When Sequencer doesn't have enough funds or the service is unavailable, automatically submit proof to the Swan chain 
-       SequencerUrl = "https://sequencer.swanchain.io"                         # Sequencer service's API address
-       EdgeUrl = "https://edge-api.swanchain.io/v1"                            # Edge service's API address
-       VerifySign = true                                                       # Verify that the task signature is from Engine
-                                       
-       [LOG]
-       CrtFile = "/YOUR_DOMAIN_NAME_CRT_PATH/server.crt"                       # Your domain name SSL .crt file path
-       KeyFile = "/YOUR_DOMAIN_NAME_KEY_PATH/server.key"                       # Your domain name SSL .key file path
-	
-       [HUB]
-       BalanceThreshold= 10                                                    # The cp’s collateral balance threshold
-       OrchestratorPk = "0xd875bD44158208fD0FDD46729Aab6709f62C7821"           # Orchestrator's public key, CP only accept the task from this Orchestrator
-       VerifySign = true                                                       # Verify that the task signature is from Orchestrator
-	
-       [MCS]
-       ApiKey = ""                                   # Acquired from "https://www.multichain.storage" -> setting -> Create API Key
-       BucketName = ""                               # Acquired from "https://www.multichain.storage" -> bucket -> Add Bucket
-       Network = "polygon.mainnet"                   # polygon.mainnet for mainnet, polygon.mumbai for testnet
-	
-       [Registry]
-       ServerAddress = ""                            # The docker container image registry address, if only a single node, you can ignore
-       UserName = ""                                 # The login username, if only a single node, you can ignore
-       Password = ""                                 # The login password, if only a single node, you can ignore
-	
-       [RPC]
-       SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"     # Swan chain RPC
-    ```
-
-**Note:**  
-* Example `[api].WalletWhiteList` hosted on GitHub can be found [here](https://raw.githubusercontent.com/swanchain/market-providers/main/clients/whitelist.txt).
-* Example `[api].WalletBlackList` hosted on GitHub can be found [here](https://raw.githubusercontent.com/swanchain/market-providers/main/clients/blacklist.txt).
-
-## Initialize a Wallet and Deposit `SwanETH`
-1.  Generate a new wallet address or import the previous wallet:
-
-	```bash
-	computing-provider wallet new
-	```
-	
-	Example output:
-	```
-	0x7791f48931DB81668854921fA70bFf0eB85B8211
-	```
-	
-	**or** import your wallet:
-	```bash
-	# Import wallet using the private key
-	computing-provider wallet import <YOUR_PRIVATE_KEY_FILE>
-	```
-	**Note:** `<YOUR_PRIVATE_KEY_FILE>` is a file that contains the private key
-
-2.  Deposit `SwanETH` to the wallet address:
-	```bash
-	computing-provider wallet send --from <YOUR_WALLET_ADDRESS> 0x7791f48931DB81668854921fA70bFf0eB85B8211 0.01
-	```
-	**Note:** If you don't have `SwanETH` and `SWAN`, please follow [the guideline](https://docs.swanchain.io/swan-mainnet/getting-started-guide) to [bridge ETH to Swan Mainnet](https://bridge.swanchain.io).
-
-## Initialization CP Account
-Deploy a CP account contract:
-```bash
-computing-provider account create --ownerAddress <YOUR_OWNER_WALLET_ADDRESS> \
-	--workerAddress <YOUR_WORKER_WALLET_ADDRESS> \
-	--beneficiaryAddress <YOUR_BENEFICIARY_WALLET_ADDRESS>  \
-	--task-types 3
-```
-**Note:** `--task-types`: Supports 5 task types (`1`: Fil-C2, `2`: Mining, `3`: AI, `4`: Inference, `5`: NodePort), separated by commas. For FCP, it needs to be set to 3.
-
-**Output:**
-```
-Contract deployed! Address: 0x3091c9647Ea5248079273B52C3707c958a3f2658
-Transaction hash: 0xb8fd9cc9bfac2b2890230b4f14999b9d449e050339b252273379ab11fac15926
-```
-
-## Collateral `SWAN` for FCP
-```bash
- computing-provider collateral add --fcp --from <YOUR_WALLET_ADDRESS>  <amount>
-```
-**Note:** Please deposit enough collaterals for the tasks
-
-
-## Withdraw `SWAN` from FCP
-```bash
- computing-provider collateral withdraw --fcp --owner <YOUR_WALLET_ADDRESS> --account <YOUR_CP_ACCOUNT> <amount>
-```
-**Note:** If you want to withdraw the funds from FCP, you can run the above command
-
-
-## Start the Computing Provider
-You can run `computing-provider` using the following command
-```bash
-export CP_PATH=<YOUR_CP_PATH>
-nohup computing-provider run >> cp.log 2>&1 & 
-```
 ---
-## [**OPTIONAL**] Install AI Inference Dependency
-It is necessary for the Computing Provider to deploy the AI inference endpoint. But if you do not want to support the feature, you can skip it.
+
+# CLI Reference
+
+## Task Management
 ```bash
-export CP_PATH=<YOUR_CP_PATH>
-./install.sh
-```
+# List ECP2/ECP tasks
+computing-provider task list --ecp
 
-## [**OPTIONAL**] Install Node-Port Dependency
-- Install Resource Isolation service on the k8s cluster
-	In order to view the actual available resources of the container, you need to install a resource isolation service on the cluster.
-	- For Ubuntu 20.04:
-    	```
-    	kubectl apply -f https://raw.githubusercontent.com/swanchain/go-computing-provider/refs/heads/releases/resource-isolation-20.04.yaml
-		```
-    - For Ubuntu 22.04 and higher.
-      - Edit `/etc/default/grub` and modify it to the following content:
-      ```bash
-	     GRUB_CMDLINE_LINUX_DEFAULT="quiet splash systemd.unified_cgroup_hierarchy=0"
-	  ```
-      - Update grub configuration
-      ```
-      update-grub
-      ```
-      - Reboot the system
-      ```bash
-	     reboot now
-      ```
-      - Install resource-isolation service on k8s
-      ```
-        kubectl apply -f https://raw.githubusercontent.com/swanchain/go-computing-provider/refs/heads/releases/resource-isolation.yaml
-      ```
-- Install network policies
-	- Generate Network Policy (location at $CP_PATH/network-policy.yaml )
-	```bash 
-	computing-provider network generate
-	```
-	- Deploy Network Policy
-	```bash
-	kubectl apply -f $CP_PATH/network-policy.yaml
-	```
- 	- Confirm that all of the network policy are running with the following command.
-	```
-	# kubectl get gnp
-	NAME                    CREATED AT
-	global-01kls78xh7dk4n   2024-09-25T04:00:59Z
-	global-ao9kq72mjc0sl3   2024-09-25T04:00:59Z
-	global-e59cad59af9c65   2024-09-25T04:00:59Z
-	global-pd6sdo8cjd61yd   2024-09-25T04:00:59Z
-	global-pod1namespace1   2024-09-25T04:01:00Z
-	global-s92ms87dl3j6do   2024-09-25T04:01:00Z
-	
-	# kubectl get globalnetworksets
-	NAME                    CREATED AT
-	netset-2300e518e9ad45   2024-09-25T04:00:59Z
-	```
-  **Note:** The nodes for deploying CP need to open ports in the range of `30000-32767`
-- Change the `tasktypes`
-```bash
-computing-provider account changeTaskTypes --ownerAddress <YOUR_OWNER_WALLET_ADDRESS> 3,5
-```
-> **Note:** `--task-types` Supports 5 task types:
->  - `1`: FIL-C2
->  - `2`: Mining
->  - `3`: AI
->  - `4`: Inference
->  - `5`: NodePort
-
-## [**OPTIONAL**] Config and Receive ZK Tasks
-This section mainly introduces how to enable the function of receiving ZK tasks on FCP, which is equivalent to running an ECP. This function is optional. Once enabled, FCP can earn double benefits simultaneously, but it will also consume certain resources.
-
-### **Step 1: Prerequisites:** Perform Filecoin Commit2 (fil-c2) ZK tasks.
-1. Download parameters (specify the path with PARENT_PATH variable):
-	```bash
-	# At least 200G storage is needed
-	export PARENT_PATH="<V28_PARAMS_PATH>"
-	
-	# 512MiB parameters
-	curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
-	
-	# 32GiB parameters
-	curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-32.sh | bash
-	```
-2. Configure environment variables in `fil-c2.env` under CP repo (`$CP_PATH`):
-
-    ```bash
-    FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
-    RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 3080:8704" 
-    ```
-
-* Adjust the value of `RUST_GPU_TOOLS_CUSTOM_GPU` based on the GPU used by the CP's Kubernetes cluster for fil-c2 tasks.
-* For more device choices, please refer to this page:[https://github.com/filecoin-project/bellperson](https://github.com/filecoin-project/bellperson)
-
-### Step 2: Collateral `SWAN` for ZK tasks
-
-```bash
-computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS>  <amount>
-```
-
-> If you want to withdraw the collateral `SWAN`: 
-> ```bash
-> computing-provider collateral withdraw --ecp --owner <YOUR_WALLET_ADDRESS> --account <YOUR_CP_ACCOUNT> <amount>
-> ```
-
-### Step 3: Change the `tasktypes`
-
-```bash
-computing-provider account changeTaskTypes --ownerAddress <YOUR_OWNER_WALLET_ADDRESS> 1,2,3,4
-```
-> **Note:** `--task-types` Supports 5 task types:
->  - `1`: FIL-C2
->  - `2`: Mining
->  - `3`: AI
->  - `4`: Inference
->  - `5`: NodePort
-
-> If you need to run FCP and ECP at the same time, you need to set it to `1,2,3,4`
-
-### Step 4: Deposit `SwanETH` for Sequencer Account
-```bash
-computing-provider sequencer add --from <YOUR_WALLET_ADDRESS>  <amount>
-```
-> If you want to Withdraw SwanETH from Sequencer Account
-> ```bash
-> computing-provider sequencer withdraw --owner <YOUR_OWNER_WALLET_ADDRESS>  <amount>
-> ```
-
-### **Step 5: Account Management**
-
-Use `computing-provider account` subcommands to update CP details:
-
-```
-computing-provider account -h
-NAME:
-   computing-provider account - Manage account info of CP
-
-USAGE:
-   computing-provider account command [command options] [arguments...]
-
-COMMANDS:
-   create                    Create a cp account to chain
-   changeMultiAddress        Update MultiAddress of CP (/ip4/<public_ip>/tcp/<port>)
-   changeOwnerAddress        Update OwnerAddress of CP
-   changeWorkerAddress       Update workerAddress of CP
-   changeBeneficiaryAddress  Update beneficiaryAddress of CP
-   changeTaskTypes           Update taskTypes of CP (1:Fil-C2, 2:Mining, 3: AI, 4:Inference, 5:NodePort, 100:Exit), separated by commas
-   help, h                   Show a list of commands or help for one command
-
-OPTIONS:
-   --help, -h  show help
-```
-
-### Step 6: Check the Status of ZK task
-
-To check the ZK task list, use the following command:
-
-```
-computing-provider ubi list --show-failed
-```
-
-Example output:
-
-```
-TASK ID TASK CONTRACT                                   TASK TYPE       ZK TYPE STATUS          SEQUENCER       CREATE TIME         
-1114203 0x89580E512915cB33bB5Ac419196835fC19affaEe      GPU             fil-c2  verified        YES             2024-11-12 01:52:47
-1113642 0x89580E512915cB33bB5Ac419196835fC19affaEe      GPU             fil-c2  verified        YES             2024-11-12 02:22:30
-1132325 0x89580E512915cB33bB5Ac419196835fC19affaEe      GPU             fil-c2  verified        YES             2024-11-12 02:52:29
-1114228 0x89580E512915cB33bB5Ac419196835fC19affaEe      GPU             fil-c2  verified        YES             2024-11-12 03:22:10
-1113911 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 04:22:43
-1114105 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 04:52:46
-1113869 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 05:22:29
-1114219 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 05:52:44
-1113349 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 06:22:50
-1114204 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 06:52:40
-1113259 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 07:22:29
-1113568 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 07:52:37
-1132314 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 08:22:39
-1132312 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 08:52:39
-1113823 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 09:22:28
-1132500 0xF222604e4628d0c15bFAfD1AABf23F7FF5756056      GPU             fil-c2  verified        YES             2024-11-12 09:52:37
-```
-
-## Restart the Computing Provider
-You can run `computing-provider` using the following command
-```bash
-export CP_PATH=<YOUR_CP_PATH>
-nohup computing-provider run >> cp.log 2>&1 & 
-```
-
-## CLI of Computing Provider
-* Check the current list of tasks running on CP, display detailed information for tasks using `-v`
-```
+# List FCP tasks
 computing-provider task list --fcp
-```
-* Retrieve detailed information for a specific task using `job_uuid`
-```
-computing-provider task get --fcp [job_uuid]
-```
-* Delete task by `job_uuid`
-```
-computing-provider task delete --fcp [job_uuid]
+
+# Get task details
+computing-provider task get --ecp <task_uuid>
+computing-provider task get --fcp <job_uuid>
+
+# Delete task
+computing-provider task delete --ecp <task_uuid>
+computing-provider task delete --fcp <job_uuid>
 ```
 
-## Getting Help
+## Wallet Commands
+```bash
+computing-provider wallet new              # Create new wallet
+computing-provider wallet list             # List wallets
+computing-provider wallet import <file>    # Import from private key file
+computing-provider wallet send --from <addr> <to_addr> <amount>
+```
+
+## Account Commands
+```bash
+computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types <types>
+computing-provider account changeTaskTypes --ownerAddress <addr> <new_types>
+computing-provider account changeMultiAddress --ownerAddress <addr> /ip4/<ip>/tcp/<port>
+```
+
+## Collateral Commands
+```bash
+# Add collateral
+computing-provider collateral add --ecp --from <addr> <amount>
+computing-provider collateral add --fcp --from <addr> <amount>
+
+# Withdraw collateral
+computing-provider collateral withdraw --ecp --owner <addr> --account <cp_account> <amount>
+computing-provider collateral withdraw --fcp --owner <addr> --account <cp_account> <amount>
+```
+
+## ZK/Sequencer Commands
+```bash
+computing-provider ubi list                           # List ZK tasks
+computing-provider ubi list --show-failed             # Include failed tasks
+computing-provider sequencer add --from <addr> <amt>  # Deposit to sequencer
+computing-provider sequencer withdraw --owner <addr> <amt>
+```
+
+---
+
+# Getting Help
 
 For usage questions or issues reach out to the Swan team either in the [Discord channel](https://discord.gg/3uQUWzaS7U) or open a new issue here on GitHub.
 

@@ -9,11 +9,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Computing Provider is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
+Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
 
-Two provider types are supported:
-- **ECP (Edge Computing Provider)**: Handles ZK-Snark proof generation tasks (Filecoin, Aleo, etc.). Runs via Docker containers using `computing-provider ubi daemon`. Does NOT require Kubernetes.
-- **FCP (Fog Computing Provider)**: Runs AI model training/deployment tasks via Kubernetes using `computing-provider run`.
+**ECP2 (Edge Computing Provider 2) is the default and primary mode** for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support.
+
+### Provider Modes
+
+| Mode | Task Type | Description | Command |
+|------|-----------|-------------|---------|
+| **ECP2** (Default) | 4 | Deploy AI inference containers | `computing-provider ubi daemon` |
+| ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining proofs | `computing-provider ubi daemon` |
+| FCP | 3 | AI training via Kubernetes | `computing-provider run` |
 
 ## Build Commands
 
@@ -57,24 +63,23 @@ computing-provider wallet new
 computing-provider wallet list
 computing-provider wallet import <private_key_file>
 
-# Account/collateral management
-computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 3
-computing-provider collateral add --fcp --from <addr> <amount>
+# Account/collateral management (ECP2 mode - task-types 4)
+computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
+computing-provider collateral add --ecp --from <addr> <amount>
 
 # Task management
-computing-provider task list --fcp
-computing-provider task list --ecp
-computing-provider ubi list
+computing-provider task list --ecp    # ECP2/ECP tasks
+computing-provider task list --fcp    # FCP tasks
+computing-provider ubi list           # ZK proof tasks
 ```
 
-## Running ECP (Edge Computing Provider)
+## Running ECP2 Mode (Default)
 
-ECP handles ZK-Snark proof generation (FIL-C2, Aleo, etc.) and does NOT require Kubernetes.
+ECP2 (Edge Computing Provider 2) runs AI inference containers via Docker. Does NOT require Kubernetes.
 
 **Prerequisites:**
 - Docker with NVIDIA Container Toolkit installed
-- Download v28 parameters (at least 200GB storage needed)
-- Map port 9085 to public network: `<Intranet_IP>:9085 <--> <Public_IP>:<PORT>`
+- Map port to public network: `<Intranet_IP>:8085 <--> <Public_IP>:<PORT>`
 
 **Install NVIDIA Container Toolkit (required for GPU access in Docker):**
 ```bash
@@ -87,15 +92,41 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
+**ECP2 account setup (task-types 4):**
+```bash
+computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
+computing-provider collateral add --ecp --from <addr> <amount>
+```
+
+**Configure ECP2 in `$CP_PATH/config.toml`:**
+```toml
+[API]
+Domain = "*.example.com"               # Domain for single-port services
+PortRange = ["40000-40050", "40060"]   # Ports for multi-port containers
+```
+
+**Start ECP2 daemon:**
+```bash
+nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
+```
+
+**Common ECP2 issues:**
+- `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider ubi daemon"`
+- `could not select device driver "nvidia"`: Install NVIDIA Container Toolkit (see above)
+- `container name "/resource-exporter" is already in use`: Run `docker rm -f resource-exporter`
+- `CP Account is empty`: Create account with `computing-provider account create ...`
+
+## Running ECP Mode (ZK-Proof)
+
+ECP (Edge Computing Provider) handles ZK-Snark proof generation (FIL-C2, Aleo, etc.). Requires v28 parameters (~200GB).
+
+**Additional prerequisites:**
+- Download v28 parameters (at least 200GB storage needed)
+
 **Required environment variables:**
 ```bash
 export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
 export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"  # e.g., "GeForce RTX 4090:16384"
-```
-
-**Start ECP daemon:**
-```bash
-nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
 ```
 
 **ECP account setup (task-types 1,2,4):**
@@ -111,12 +142,6 @@ computing-provider sequencer add --from <addr> <amount>
 EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
 AutoChainProof = false    # Fallback to chain when sequencer unavailable
 ```
-
-**Common ECP issues:**
-- `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider ubi daemon"`
-- `could not select device driver "nvidia"`: Install NVIDIA Container Toolkit (see above)
-- `container name "/resource-exporter" is already in use`: Run `docker rm -f resource-exporter`
-- `CP Account is empty`: Create account with `computing-provider account create ...`
 
 ## Running FCP (Fog Computing Provider)
 
@@ -160,7 +185,7 @@ computing-provider collateral add --fcp --from <addr> <amount>
 - `docker_service.go`: Docker image building and registry operations
 - `cron_task.go`: Background scheduled tasks (health checks, cleanup, status updates)
 - `sequence_service.go`: Sequencer service for ZK proof submission
-- `ecp_image_service.go`: ECP container image deployment for inference tasks
+- `ecp_image_service.go`: ECP2 container image deployment for inference tasks
 - `provider.go`: Main provider service orchestration
 
 ### Configuration
@@ -168,7 +193,7 @@ computing-provider collateral add --fcp --from <addr> <amount>
 Config file: `$CP_PATH/config.toml` (see `config.toml.sample`)
 
 Key sections:
-- `[API]`: Server port, multi-address, domain, pricing settings, port ranges for ECP
+- `[API]`: Server port, multi-address, domain, pricing settings, port ranges for ECP2
 - `[UBI]`: ZK engine settings, sequencer configuration (`EnableSequencer`, `AutoChainProof`)
 - `[HUB]`: Orchestrator settings for FCP tasks
 - `[RPC]`: Swan Chain RPC endpoint
@@ -190,8 +215,8 @@ The project uses Google Wire for dependency injection. See `internal/computing/w
 - Contract stubs in `internal/contract/*/` wrap auto-generated Ethereum contract bindings
 - K8s operations use client-go; the service auto-detects in-cluster or kubeconfig mode
 - FCP job deployments create Kubernetes Deployments + Services + Ingress resources
-- ECP tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
-- Task types: 1=FIL-C2, 2=Mining, 3=AI, 4=Inference, 5=NodePort, 100=Exit
+- ECP2 and ECP tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
+- Task types: 1=FIL-C2, 2=Mining, 3=AI, 4=ECP2/Inference (default), 5=NodePort, 100=Exit
 
 ## Contract Interaction
 
