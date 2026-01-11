@@ -299,7 +299,7 @@ func (s *ECP2Service) RegisterModels(models []string) {
 }
 
 // handleStreamingInference processes streaming inference requests
-func (s *ECP2Service) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) error {
+func (s *ECP2Service) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
 	// First, check if we have a Docker model mapping
@@ -311,29 +311,37 @@ func (s *ECP2Service) handleStreamingInference(requestID string, payload Inferen
 	// Fall back to K8s discovery
 	deploymentName := s.findModelDeployment(payload.ModelID)
 	if deploymentName == "" {
-		return fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+		return &StreamResult{Error: fmt.Errorf("model %s not deployed on this provider", payload.ModelID)}
 	}
 
 	// Get service URL
 	serviceURL, err := s.getServiceURL(deploymentName)
 	if err != nil {
-		return fmt.Errorf("failed to get service URL: %w", err)
+		return &StreamResult{Error: fmt.Errorf("failed to get service URL: %w", err)}
 	}
 
 	return s.streamFromDockerModel(serviceURL, payload.Request, sendChunk)
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
-func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) error {
-	// Ensure stream is set to true in the request
+func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+	result := &StreamResult{}
+
+	// Ensure stream is set to true in the request and request usage
 	var reqMap map[string]interface{}
 	if err := json.Unmarshal(request, &reqMap); err != nil {
-		return fmt.Errorf("failed to parse request: %w", err)
+		result.Error = fmt.Errorf("failed to parse request: %w", err)
+		return result
 	}
 	reqMap["stream"] = true
+	// Request usage stats in streaming response (OpenAI-compatible)
+	reqMap["stream_options"] = map[string]interface{}{
+		"include_usage": true,
+	}
 	modifiedRequest, err := json.Marshal(reqMap)
 	if err != nil {
-		return fmt.Errorf("failed to marshal modified request: %w", err)
+		result.Error = fmt.Errorf("failed to marshal modified request: %w", err)
+		return result
 	}
 
 	// Create HTTP client with longer timeout for streaming
@@ -348,20 +356,23 @@ func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMes
 	url := endpoint + "/v1/chat/completions"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(modifiedRequest))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		result.Error = fmt.Errorf("failed to create request: %w", err)
+		return result
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		result.Error = fmt.Errorf("failed to send request: %w", err)
+		return result
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("model returned error: %s", string(body))
+		result.Error = fmt.Errorf("model returned error: %s", string(body))
+		return result
 	}
 
 	// Parse SSE stream and forward chunks
@@ -372,7 +383,8 @@ func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMes
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to read stream: %w", err)
+			result.Error = fmt.Errorf("failed to read stream: %w", err)
+			return result
 		}
 
 		line = strings.TrimSpace(line)
@@ -396,6 +408,18 @@ func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMes
 			break
 		}
 
+		// Try to extract usage information from the chunk (OpenAI returns usage in last content chunk)
+		var chunkData struct {
+			Usage *struct {
+				PromptTokens     int64 `json:"prompt_tokens"`
+				CompletionTokens int64 `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunkData); err == nil && chunkData.Usage != nil {
+			result.TokensInput = chunkData.Usage.PromptTokens
+			result.TokensOutput = chunkData.Usage.CompletionTokens
+		}
+
 		// Forward the chunk data
 		if err := sendChunk([]byte(data), false); err != nil {
 			logs.GetLogger().Warnf("Failed to send chunk: %v", err)
@@ -403,7 +427,7 @@ func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMes
 		}
 	}
 
-	return nil
+	return result
 }
 
 // getServiceURL gets the HTTP service URL for a K8s deployment

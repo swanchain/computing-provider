@@ -96,9 +96,11 @@ type StreamChunkPayload struct {
 
 // StreamEndPayload signals end of stream with usage stats
 type StreamEndPayload struct {
-	RequestID string `json:"request_id"`
-	Latency   int64  `json:"latency_ms"`
-	Error     string `json:"error,omitempty"`
+	RequestID    string `json:"request_id"`
+	Latency      int64  `json:"latency_ms"`
+	TokensInput  int64  `json:"tokens_input,omitempty"`
+	TokensOutput int64  `json:"tokens_output,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 const (
@@ -121,9 +123,16 @@ const (
 // InferenceHandler handles non-streaming inference requests from ECP2 service
 type InferenceHandler func(payload InferencePayload) (*InferenceResponse, error)
 
+// StreamResult contains the final result of a streaming inference including token usage
+type StreamResult struct {
+	TokensInput  int64
+	TokensOutput int64
+	Error        error
+}
+
 // StreamingInferenceHandler handles streaming inference requests
-// It receives a callback to send chunks back to Swan Inference
-type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) error
+// It receives a callback to send chunks back to Swan Inference and returns token usage
+type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
 
 // ECP2Client manages WebSocket connection to ECP2 service
 type ECP2Client struct {
@@ -511,12 +520,19 @@ func (c *ECP2Client) handleStreamingInference(requestID string, payload Inferenc
 	}
 
 	// Execute streaming inference
-	err := c.streamingInferenceHandler(requestID, payload, sendChunk)
+	result := c.streamingInferenceHandler(requestID, payload, sendChunk)
 
 	latency := time.Since(startTime).Milliseconds()
 
-	// Send stream end message
-	c.sendStreamEnd(requestID, latency, err)
+	// Send stream end message with token usage
+	var tokensIn, tokensOut int64
+	var err error
+	if result != nil {
+		tokensIn = result.TokensInput
+		tokensOut = result.TokensOutput
+		err = result.Error
+	}
+	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, err)
 }
 
 // sendStreamChunk sends a streaming chunk to Swan Inference
@@ -551,11 +567,13 @@ func (c *ECP2Client) sendStreamChunk(requestID string, chunk []byte, done bool) 
 	}
 }
 
-// sendStreamEnd sends the end of stream message
-func (c *ECP2Client) sendStreamEnd(requestID string, latencyMs int64, err error) {
+// sendStreamEnd sends the end of stream message with token usage
+func (c *ECP2Client) sendStreamEnd(requestID string, latencyMs int64, tokensIn, tokensOut int64, err error) {
 	payload := StreamEndPayload{
-		RequestID: requestID,
-		Latency:   latencyMs,
+		RequestID:    requestID,
+		Latency:      latencyMs,
+		TokensInput:  tokensIn,
+		TokensOutput: tokensOut,
 	}
 	if err != nil {
 		payload.Error = err.Error()
