@@ -105,7 +105,8 @@ sudo ufw enable
 sudo ufw allow 22/tcp    # SSH
 sudo ufw allow 80/tcp    # HTTP
 sudo ufw allow 443/tcp   # HTTPS
-sudo ufw allow 6443/tcp  # Kubernetes API (FCP)
+sudo ufw allow 8085/tcp  # Computing Provider API
+sudo ufw allow 9085/tcp  # ECP service port
 
 # Deny unnecessary ports
 sudo ufw deny 8080/tcp   # Default provider port (use reverse proxy)
@@ -129,44 +130,6 @@ sudo apt install nginx
 
 # Configure nginx to proxy to provider
 # This hides the provider behind a secure proxy
-```
-
-### Kubernetes Security (FCP)
-
-**RBAC Configuration**
-```bash
-# Create service account
-kubectl create serviceaccount computing-provider
-
-# Create role
-kubectl create role computing-provider \
-  --verb=get,list,watch,create,update,patch,delete \
-  --resource=pods,services,ingresses
-
-# Bind role to service account
-kubectl create rolebinding computing-provider \
-  --role=computing-provider \
-  --serviceaccount=default:computing-provider
-```
-
-**Network Policies**
-```bash
-# Apply network policies
-kubectl apply -f network-policy.yaml
-
-# Restrict pod-to-pod communication
-# Only allow necessary network access
-```
-
-**Secrets Management**
-```bash
-# Store sensitive data in Kubernetes secrets
-kubectl create secret generic provider-secrets \
-  --from-literal=api-key=<API_KEY> \
-  --from-literal=private-key=<PRIVATE_KEY>
-
-# Use secrets in deployments
-# Never store secrets in plain text
 ```
 
 ## Application Security
@@ -213,7 +176,7 @@ export CP_API_KEY="your-api-key"
 # Log financial transactions
 ```
 
-## Container Security (FCP)
+## Container Security
 
 ### Image Security
 
@@ -247,15 +210,16 @@ docker scan <image-name>
 ```
 
 **Resource Limits**
-```yaml
-# Kubernetes resource limits
-resources:
-  limits:
-    cpu: "4"
-    memory: "8Gi"
-  requests:
-    cpu: "2"
-    memory: "4Gi"
+```bash
+# Docker resource limits
+docker run --cpus="4" --memory="8g" <image>
+
+# Or in docker-compose.yml
+# deploy:
+#   resources:
+#     limits:
+#       cpus: '4'
+#       memory: 8G
 ```
 
 ## Monitoring and Auditing
@@ -290,8 +254,8 @@ computing-provider collateral info --ecp
 
 **Enable Audit Logs**
 ```bash
-# Enable Kubernetes audit logging
-# Log all API requests
+# Enable Docker audit logging
+# Log all container operations
 # Monitor for unauthorized access
 ```
 

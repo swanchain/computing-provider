@@ -36,7 +36,7 @@ This document describes how the Computing Provider integrates with the UBI (Univ
 The Computing Provider is the **Execution Layer** responsible for:
 
 1. **Task Reception** - Receives ZK tasks from ubi-engine
-2. **Task Execution** - Runs proof computation in Docker/K8s
+2. **Task Execution** - Runs proof computation in Docker containers
 3. **Proof Submission** - Submits proofs via Sequencer
 4. **Resource Reporting** - Reports available hardware to network
 
@@ -66,13 +66,13 @@ The Computing Provider is the **Execution Layer** responsible for:
 │     └─────────────────────────────────────────────────────┘     │
 │                              │                                   │
 │                              ▼                                   │
-│  2. TASK EXECUTION (Docker/K8s)                                 │
+│  2. TASK EXECUTION (Docker)                                     │
 │     ┌─────────────────────────────────────────────────────┐     │
-│     │ doFilC2TaskForK8s() / doFilC2TaskForDocker()        │     │
+│     │ doFilC2TaskForDocker()                              │     │
 │     │                                                      │     │
 │     │ Steps:                                               │     │
 │     │   a. Download input from InputParam URL             │     │
-│     │   b. Create container/pod with GPU resources        │     │
+│     │   b. Create Docker container with GPU resources     │     │
 │     │   c. Mount Filecoin v28 parameters                  │     │
 │     │   d. Execute: ubi-bench c2 <input.json>            │     │
 │     │   e. Collect proof output                           │     │
@@ -270,11 +270,10 @@ computing-provider sequencer withdraw --owner <WALLET> <AMOUNT>
 |------|-----|-------------|----------|
 | Fil-C2 | 1 | Filecoin C2 ZK proof | CPU/GPU |
 | Mining | 2 | Mining workloads | GPU |
-| AI | 3 | AI training (FCP only) | K8s |
-| Inference | 4 | AI inference | Docker |
-| NodePort | 5 | NodePort services | K8s |
+| Inference | 4 | AI inference (ECP2) | Docker |
 
-For ECP, set task-types to `1,2,4`.
+For ECP (ZK proofs), set task-types to `1,2,4`.
+For ECP2 (inference only), set task-types to `4`.
 
 ## Troubleshooting
 

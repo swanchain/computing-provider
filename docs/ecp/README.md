@@ -21,12 +21,11 @@ ECP handles specific, localized tasks directly on devices at the network's edge,
 |------|-----|-------------|
 | Fil-C2 | 1 | Filecoin C2 ZK-SNARK proofs |
 | Mining | 2 | Mining workloads |
-| AI | 3 | AI training (FCP only) |
-| Inference | 4 | AI inference |
-| NodePort | 5 | NodePort services |
+| Inference | 4 | AI inference (ECP2) |
 | Exit | 100 | Exit provider status |
 
-For ECP, set task-types to `1,2,4`.
+For ECP (ZK proofs), set task-types to `1,2,4`.
+For ECP2 (inference only), set task-types to `4`.
 
 ## Prerequisites
 
@@ -285,7 +284,7 @@ computing-provider ubi daemon
 nohup computing-provider ubi daemon >> cp.log 2>&1 &
 ```
 
-**Important:** Use `computing-provider ubi daemon` for ECP, NOT `computing-provider run` (which is for FCP).
+**Important:** Use `computing-provider ubi daemon` to start ECP/ECP2.
 
 ### Monitor ECP
 
