@@ -28,3 +28,25 @@ mainnet: computing-provider
 
 testnet: GOFLAGS+= -ldflags="$(ldflags) -X github.com/swanchain/go-computing-provider/build.NetWorkTag=testnet"
 testnet: computing-provider
+
+# Darwin ARM64 (Apple Silicon) builds
+darwin-arm64:
+	rm -rf computing-provider-darwin-arm64
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOCC) build -ldflags="$(ldflags) -X github.com/swanchain/go-computing-provider/build.NetWorkTag=mainnet" -o computing-provider-darwin-arm64 ./cmd/computing-provider
+.PHONY: darwin-arm64
+
+darwin-arm64-testnet:
+	rm -rf computing-provider-darwin-arm64
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOCC) build -ldflags="$(ldflags) -X github.com/swanchain/go-computing-provider/build.NetWorkTag=testnet" -o computing-provider-darwin-arm64 ./cmd/computing-provider
+.PHONY: darwin-arm64-testnet
+
+# Linux ARM64 builds
+linux-arm64:
+	rm -rf computing-provider-linux-arm64
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOCC) build -ldflags="$(ldflags) -X github.com/swanchain/go-computing-provider/build.NetWorkTag=mainnet" -o computing-provider-linux-arm64 ./cmd/computing-provider
+.PHONY: linux-arm64
+
+linux-arm64-testnet:
+	rm -rf computing-provider-linux-arm64
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOCC) build -ldflags="$(ldflags) -X github.com/swanchain/go-computing-provider/build.NetWorkTag=testnet" -o computing-provider-linux-arm64 ./cmd/computing-provider
+.PHONY: linux-arm64-testnet
