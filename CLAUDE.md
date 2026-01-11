@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Commit Policy
+
+- Do NOT include `Co-Authored-By` lines in commit messages
+- Keep commit messages concise and descriptive
+
 ## Project Overview
 
 Computing Provider is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
