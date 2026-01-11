@@ -59,7 +59,9 @@ var runCmd = &cli.Command{
 		cpManager(v1.Group("/computing"))
 
 		shutdownChan := make(chan struct{})
-		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), true)
+		// Only enable SSL if certificate files are configured
+		useSSL := conf.GetConfig().LOG.CrtFile != "" && conf.GetConfig().LOG.KeyFile != ""
+		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), useSSL)
 		if err != nil {
 			logs.GetLogger().Fatal("failed to start cp-api endpoint: %s", err)
 		}

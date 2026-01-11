@@ -38,12 +38,8 @@ func NewCronTask(nodeId string) *CronTask {
 
 func (task *CronTask) RunTask() {
 	checkJobStatus()
-	task.addLabelToNode()
 	task.checkCollateralBalance()
-	task.cleanAbnormalDeployment()
 	task.setFailedUbiTaskStatus()
-	task.watchNameSpaceForDeleted()
-	//task.reportClusterResource()
 	task.watchExpiredTask()
 	task.getUbiTaskReward()
 	task.checkJobReward()
@@ -52,9 +48,22 @@ func (task *CronTask) RunTask() {
 	task.UpdateContainerLog()
 	task.DeleteSpaceLog()
 
-	resourceExporterVersion, err := NewK8sService().GetResourceExporterVersion()
+	// Skip K8s-related tasks if K8s is not available
+	k8sService := NewK8sService()
+	if k8sService == nil || k8sService.k8sClient == nil {
+		logs.GetLogger().Debug("K8s not available, skipping K8s-related tasks")
+		return
+	}
+
+	task.addLabelToNode()
+	task.cleanAbnormalDeployment()
+	task.watchNameSpaceForDeleted()
+	//task.reportClusterResource()
+
+	resourceExporterVersion, err := k8sService.GetResourceExporterVersion()
 	if err != nil {
-		logs.GetLogger().Fatalf("failed to get resource-exporter version, error: %v", err)
+		logs.GetLogger().Warnf("failed to get resource-exporter version, error: %v", err)
+		return
 	}
 	if resourceExporterVersion != "" {
 		if errMsg := util.CheckVersion(build.ResourceExporterVersion, resourceExporterVersion); errMsg != nil {
