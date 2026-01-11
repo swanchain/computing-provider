@@ -9,6 +9,39 @@ SGLang is the recommended inference engine for ECP2 providers due to:
 - **Stable concurrency** handling (30-31 tok/s under load)
 - **RadixAttention** for 10% boost in multi-turn conversations
 - **OpenAI-compatible API** for seamless Swan Inference integration
+- **Streaming support** for real-time token generation via SSE
+
+## Streaming Support
+
+Swan Inference fully supports streaming chat completions. When a client sends `"stream": true`:
+
+1. Swan Inference forwards the request to the provider via WebSocket
+2. The provider calls SGLang with streaming enabled
+3. SGLang returns Server-Sent Events (SSE)
+4. Provider parses SSE and forwards chunks via WebSocket
+5. Swan Inference converts chunks to SSE for the client
+
+**No additional configuration required** - streaming works automatically with SGLang.
+
+### Streaming Flow Diagram
+
+```
+Client ←(SSE)→ Swan Inference ←(WebSocket)→ Provider ←(SSE)→ SGLang
+       stream: true                stream_chunk          stream: true
+```
+
+### Testing Streaming
+
+```bash
+# Test streaming with curl
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.1-8b",
+    "messages": [{"role": "user", "content": "Count to 10 slowly"}],
+    "stream": true
+  }'
+```
 
 ## Prerequisites
 

@@ -16,12 +16,14 @@ import (
 type MessageType string
 
 const (
-	MsgTypeRegister  MessageType = "register"
-	MsgTypeInference MessageType = "inference"
-	MsgTypeVerify    MessageType = "verify"
-	MsgTypeHeartbeat MessageType = "heartbeat"
-	MsgTypeAck       MessageType = "ack"
-	MsgTypeError     MessageType = "error"
+	MsgTypeRegister    MessageType = "register"
+	MsgTypeInference   MessageType = "inference"
+	MsgTypeVerify      MessageType = "verify"
+	MsgTypeHeartbeat   MessageType = "heartbeat"
+	MsgTypeAck         MessageType = "ack"
+	MsgTypeError       MessageType = "error"
+	MsgTypeStreamChunk MessageType = "stream_chunk" // Streaming chunk to Swan Inference
+	MsgTypeStreamEnd   MessageType = "stream_end"   // End of stream marker
 )
 
 // Message is the base WebSocket message structure
@@ -45,6 +47,7 @@ type InferencePayload struct {
 	EndpointID string          `json:"endpoint_id"`
 	ModelID    string          `json:"model_id"`
 	Request    json.RawMessage `json:"request"`
+	Stream     bool            `json:"stream"` // Whether to stream the response
 }
 
 // InferenceResponse is returned by provider
@@ -84,6 +87,20 @@ type ErrorPayload struct {
 	Message   string `json:"message"`
 }
 
+// StreamChunkPayload represents a streaming chunk sent to Swan Inference
+type StreamChunkPayload struct {
+	RequestID string          `json:"request_id"`
+	Chunk     json.RawMessage `json:"chunk"` // OpenAI-compatible SSE chunk data
+	Done      bool            `json:"done"`  // True when stream is complete
+}
+
+// StreamEndPayload signals end of stream with usage stats
+type StreamEndPayload struct {
+	RequestID string `json:"request_id"`
+	Latency   int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
 const (
 	// Time allowed to write a message to the peer
 	writeWait = 10 * time.Second
@@ -101,21 +118,26 @@ const (
 	reconnectDelay = 5 * time.Second
 )
 
-// InferenceHandler handles inference requests from ECP2 service
+// InferenceHandler handles non-streaming inference requests from ECP2 service
 type InferenceHandler func(payload InferencePayload) (*InferenceResponse, error)
+
+// StreamingInferenceHandler handles streaming inference requests
+// It receives a callback to send chunks back to Swan Inference
+type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) error
 
 // ECP2Client manages WebSocket connection to ECP2 service
 type ECP2Client struct {
-	providerID       string
-	workerAddr       string
-	models           []string
-	wsURL            string
-	conn             *websocket.Conn
-	send             chan []byte
-	stopCh           chan struct{}
-	registered       bool
-	inferenceHandler InferenceHandler
-	mu               sync.RWMutex
+	providerID                string
+	workerAddr                string
+	models                    []string
+	wsURL                     string
+	conn                      *websocket.Conn
+	send                      chan []byte
+	stopCh                    chan struct{}
+	registered                bool
+	inferenceHandler          InferenceHandler
+	streamingInferenceHandler StreamingInferenceHandler
+	mu                        sync.RWMutex
 }
 
 // NewECP2Client creates a new ECP2 client
@@ -131,9 +153,14 @@ func NewECP2Client(providerID, workerAddr string) *ECP2Client {
 	}
 }
 
-// SetInferenceHandler sets the handler for inference requests
+// SetInferenceHandler sets the handler for non-streaming inference requests
 func (c *ECP2Client) SetInferenceHandler(handler InferenceHandler) {
 	c.inferenceHandler = handler
+}
+
+// SetStreamingInferenceHandler sets the handler for streaming inference requests
+func (c *ECP2Client) SetStreamingInferenceHandler(handler StreamingInferenceHandler) {
+	c.streamingInferenceHandler = handler
 }
 
 // Start connects to ECP2 service and starts the client
@@ -437,8 +464,15 @@ func (c *ECP2Client) handleMessage(msg Message) {
 
 func (c *ECP2Client) handleInference(requestID string, payload InferencePayload) {
 	startTime := time.Now()
-	logs.GetLogger().Infof("Processing inference request %s for model %s", requestID, payload.ModelID)
+	logs.GetLogger().Infof("Processing inference request %s for model %s (stream=%v)", requestID, payload.ModelID, payload.Stream)
 
+	// Handle streaming inference
+	if payload.Stream {
+		c.handleStreamingInference(requestID, payload, startTime)
+		return
+	}
+
+	// Handle non-streaming inference
 	var response *InferenceResponse
 	var err error
 
@@ -462,6 +496,80 @@ func (c *ECP2Client) handleInference(requestID string, payload InferencePayload)
 	}
 
 	c.sendInferenceResponse(response)
+}
+
+func (c *ECP2Client) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
+	if c.streamingInferenceHandler == nil {
+		logs.GetLogger().Errorf("No streaming inference handler configured")
+		c.sendError(requestID, 501, "streaming not supported")
+		return
+	}
+
+	// Create a callback for sending chunks
+	sendChunk := func(chunk []byte, done bool) error {
+		return c.sendStreamChunk(requestID, chunk, done)
+	}
+
+	// Execute streaming inference
+	err := c.streamingInferenceHandler(requestID, payload, sendChunk)
+
+	latency := time.Since(startTime).Milliseconds()
+
+	// Send stream end message
+	c.sendStreamEnd(requestID, latency, err)
+}
+
+// sendStreamChunk sends a streaming chunk to Swan Inference
+func (c *ECP2Client) sendStreamChunk(requestID string, chunk []byte, done bool) error {
+	payload := StreamChunkPayload{
+		RequestID: requestID,
+		Chunk:     chunk,
+		Done:      done,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stream chunk: %w", err)
+	}
+
+	msg := Message{
+		Type:      MsgTypeStreamChunk,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	select {
+	case c.send <- msgBytes:
+		return nil
+	default:
+		return fmt.Errorf("send buffer full")
+	}
+}
+
+// sendStreamEnd sends the end of stream message
+func (c *ECP2Client) sendStreamEnd(requestID string, latencyMs int64, err error) {
+	payload := StreamEndPayload{
+		RequestID: requestID,
+		Latency:   latencyMs,
+	}
+	if err != nil {
+		payload.Error = err.Error()
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeStreamEnd,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
 }
 
 func (c *ECP2Client) handleVerification(requestID string, payload VerifyPayload) {

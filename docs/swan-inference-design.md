@@ -56,6 +56,8 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
 - `heartbeat` - Liveness checks with optional metrics
 - `ack` - Acknowledgment responses
 - `error` - Error responses
+- `stream_chunk` - Streaming chunk from provider (for streaming inference)
+- `stream_end` - End of stream marker with latency stats
 
 **Register Payload (Provider → Swan Inference):**
 ```json
@@ -79,7 +81,34 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
   "payload": {
     "endpoint_id": "uuid",
     "model_id": "model_id",
-    "request": { /* OpenAI-compatible request */ }
+    "request": { /* OpenAI-compatible request */ },
+    "stream": true  // Whether to stream the response
+  }
+}
+```
+
+**Stream Chunk Payload (Provider → Swan Inference):**
+```json
+{
+  "type": "stream_chunk",
+  "request_id": "uuid",
+  "payload": {
+    "request_id": "uuid",
+    "chunk": { /* OpenAI-compatible SSE chunk data */ },
+    "done": false  // True when stream is complete
+  }
+}
+```
+
+**Stream End Payload (Provider → Swan Inference):**
+```json
+{
+  "type": "stream_end",
+  "request_id": "uuid",
+  "payload": {
+    "request_id": "uuid",
+    "latency_ms": 1234,
+    "error": ""  // Empty if successful
   }
 }
 ```
