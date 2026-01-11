@@ -206,6 +206,13 @@ var daemonCmd = &cli.Command{
 		computing.SyncCpAccountInfo()
 		computing.CronTaskForEcp()
 
+		// Start ECP2 marketplace integration if enabled
+		nodeID := computing.GetNodeId(cpRepoPath)
+		ecp2Service := computing.NewECP2Service(nodeID, cpRepoPath)
+		if err := ecp2Service.Start(); err != nil {
+			logs.GetLogger().Errorf("Failed to start ECP2 service: %v", err)
+		}
+
 		gin.SetMode(gin.ReleaseMode)
 		r := gin.Default()
 		r.Use(cors.Middleware(cors.Config{
