@@ -8,7 +8,6 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"github.com/swanchain/computing-provider-v2/internal/contract/account"
 	"github.com/swanchain/computing-provider-v2/internal/contract/ecp"
-	"github.com/swanchain/computing-provider-v2/internal/contract/fcp"
 	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/swanchain/computing-provider-v2/wallet"
 	"github.com/urfave/cli/v2"
@@ -59,8 +58,6 @@ var collateralInfoCmd = &cli.Command{
 			netWork = fmt.Sprintf("Testnet(%d)", chainId.Int64())
 		}
 
-		var fcpCollateralBalance = "0.0000"
-		var fcpEscrowBalance = "0.0000"
 		var ecpCollateralBalance = "0.0000"
 		var ecpEscrowBalance = "0.0000"
 		var ownerBalance = "0.0000"
@@ -84,14 +81,6 @@ var collateralInfoCmd = &cli.Command{
 
 		ownerBalance, err = wallet.Balance(context.TODO(), client, ownerAddress)
 		workerBalance, err = wallet.Balance(context.TODO(), client, workerAddress)
-		fcpCollateralStub, err := fcp.NewCollateralWithUbiZeroStub(client)
-		if err == nil {
-			fcpCollateralInfo, err := fcpCollateralStub.CollateralInfo()
-			if err == nil {
-				fcpCollateralBalance = fcpCollateralInfo.AvailableBalance
-				fcpEscrowBalance = fcpCollateralInfo.LockedCollateral
-			}
-		}
 
 		ecpCollateral, err := ecp.NewCollateralWithUbiZeroStub(client, ecp.WithPublicKey(ownerAddress))
 		if err == nil {
@@ -123,9 +112,6 @@ var collateralInfoCmd = &cli.Command{
 		taskData = append(taskData, []string{"ECP Balance(SWANU):"})
 		taskData = append(taskData, []string{"   Collateral:", ecpCollateralBalance})
 		taskData = append(taskData, []string{"   Escrow:", ecpEscrowBalance})
-		taskData = append(taskData, []string{"FCP Balance(SWANU):"})
-		taskData = append(taskData, []string{"   Collateral:", fcpCollateralBalance})
-		taskData = append(taskData, []string{"   Escrow:", fcpEscrowBalance})
 
 		header := []string{"CP Account Info:"}
 		NewVisualTable(header, taskData, []RowColor{}).SetAutoWrapText(false).Generate(false)
@@ -147,16 +133,8 @@ var collateralInfoCmd = &cli.Command{
 
 var withdrawFromCollateralCmd = &cli.Command{
 	Name:  "withdraw",
-	Usage: "Withdraw funds from the collateral contract",
+	Usage: "Withdraw funds from the ECP collateral contract",
 	Flags: []cli.Flag{
-		&cli.BoolFlag{
-			Name:  "fcp",
-			Usage: "Specify the fcp collateral",
-		},
-		&cli.BoolFlag{
-			Name:  "ecp",
-			Usage: "Specify the ecp collateral",
-		},
 		&cli.StringFlag{
 			Name:  "owner",
 			Usage: "Specify the owner address",
@@ -177,22 +155,6 @@ var withdrawFromCollateralCmd = &cli.Command{
 		}
 
 		ctx := reqContext(cctx)
-		fcpWithdraw := cctx.Bool("fcp")
-		ecpWithDraw := cctx.Bool("ecp")
-
-		if !fcpWithdraw && !ecpWithDraw {
-			return fmt.Errorf("must specify one of fcp or ecp")
-		}
-		var withdrawType string
-		if fcpWithdraw {
-			withdrawType = "fcp"
-		}
-		if ecpWithDraw {
-			withdrawType = "ecp"
-		}
-		if withdrawType == "" {
-			return fmt.Errorf("not suport withdraw type")
-		}
 
 		ownerAddress := cctx.String("owner")
 		if strings.TrimSpace(ownerAddress) == "" {
@@ -209,7 +171,7 @@ var withdrawFromCollateralCmd = &cli.Command{
 		if err != nil {
 			return err
 		}
-		txHash, err := localWallet.CollateralWithdrawWithUbiZero(ctx, ownerAddress, amount, cpAccountAddress, withdrawType)
+		txHash, err := localWallet.CollateralWithdrawWithUbiZero(ctx, ownerAddress, amount, cpAccountAddress, "ecp")
 		if err != nil {
 			return err
 		}

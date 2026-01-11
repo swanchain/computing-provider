@@ -97,3 +97,18 @@ func (gm *GPUManager) CheckAvailableGPU() (string, bool) {
 	}
 	return "", false
 }
+
+// difference returns elements in a that are not in b
+func difference(a, b []string) []string {
+	bSet := make(map[string]struct{}, len(b))
+	for _, item := range b {
+		bSet[item] = struct{}{}
+	}
+	var result []string
+	for _, item := range a {
+		if _, found := bSet[item]; !found {
+			result = append(result, item)
+		}
+	}
+	return result
+}

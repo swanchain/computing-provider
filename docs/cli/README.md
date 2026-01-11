@@ -20,7 +20,6 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 
 ### Core Commands
 - [`init`](init.md) - Initialize a new computing provider repository
-- [`run`](run.md) - Start the computing provider service
 - [`info`](info.md) - Display provider information
 - [`state`](state.md) - Show provider state
 
@@ -59,14 +58,14 @@ The CLI respects the following environment variables:
 # Initialize a new repository
 computing-provider init
 
-# Start the provider
-computing-provider run
+# Start the provider (ECP mode)
+computing-provider ubi daemon
 
 # Check provider status
 computing-provider state
 
 # List tasks
-computing-provider task list --fcp
+computing-provider task list
 ```
 
 ### With Custom Repository Path
@@ -101,9 +100,7 @@ computing-provider task list --help
 - `config` - Configuration management
 
 ### Runtime Commands
-- `run` - Start provider service
-- `stop` - Stop provider service
-- `restart` - Restart provider service
+- `ubi daemon` - Start provider service (ECP mode)
 
 ### Information Commands
 - `info` - Provider information
@@ -122,17 +119,12 @@ The CLI supports different output formats:
 
 ### Table Format (Default)
 ```bash
-computing-provider task list --fcp
+computing-provider task list
 ```
 
-### JSON Format
+### With Tail Option
 ```bash
-computing-provider task list --fcp --format json
-```
-
-### Verbose Output
-```bash
-computing-provider task list --fcp --verbose
+computing-provider task list --tail 10
 ```
 
 ## Error Handling

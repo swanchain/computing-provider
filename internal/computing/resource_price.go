@@ -1,18 +1,18 @@
 package computing
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/swanchain/computing-provider-v2/internal/models"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
+	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 )
 
 const resourceConfigFile = "price.toml"
@@ -46,24 +46,16 @@ func GeneratePriceConfig() error {
 	file.WriteString(resourcePrice)
 
 	var statisticalSources []*models.NodeResource
-	k8sService := NewK8sService()
-	if k8sService != nil && k8sService.k8sClient != nil {
-		statisticalSources, err = k8sService.StatisticalSources(context.TODO())
-		if err != nil {
-			return fmt.Errorf("failed to get gpu resource from k8s, error: %v", err)
-		}
-	} else {
-		dockerService := NewDockerService()
-		containerLogStr, err := dockerService.ContainerLogs("resource-exporter")
-		if err != nil {
-			return fmt.Errorf("failed to get gpu resource from docker, error: %v", err)
-		}
-		var nodeResource models.NodeResource
-		if err = json.Unmarshal([]byte(containerLogStr), &nodeResource); err != nil {
-			return err
-		}
-		statisticalSources = append(statisticalSources, &nodeResource)
+	dockerService := NewDockerService()
+	containerLogStr, err := dockerService.ContainerLogs("resource-exporter")
+	if err != nil {
+		return fmt.Errorf("failed to get gpu resource from docker, error: %v", err)
 	}
+	var nodeResource models.NodeResource
+	if err = json.Unmarshal([]byte(containerLogStr), &nodeResource); err != nil {
+		return err
+	}
+	statisticalSources = append(statisticalSources, &nodeResource)
 
 	var gpuMap = make(map[string]string)
 	for _, source := range statisticalSources {

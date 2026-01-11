@@ -19,7 +19,6 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 |------|-----------|-------------|---------|
 | **ECP2** (Default) | 4 | Deploy AI inference containers | `computing-provider ubi daemon` |
 | ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining proofs | `computing-provider ubi daemon` |
-| FCP | 3 | AI training via Kubernetes | `computing-provider run` |
 
 ## Build Commands
 
@@ -43,14 +42,9 @@ Go version 1.22+ is required (see go.mod).
 # Run all tests
 go test ./...
 
-# Run specific test file
-go test ./test/k8s_service_test.go
-
 # Run specific test
-go test -run TestNewK8sService ./test/
+go test -run TestSequencer ./test/
 ```
-
-Note: Most tests require a running Kubernetes cluster and proper configuration.
 
 ## Key CLI Commands
 
@@ -68,8 +62,7 @@ computing-provider account create --ownerAddress <addr> --workerAddress <addr> -
 computing-provider collateral add --ecp --from <addr> <amount>
 
 # Task management
-computing-provider task list --ecp    # ECP2/ECP tasks
-computing-provider task list --fcp    # FCP tasks
+computing-provider task list          # List ECP tasks
 computing-provider ubi list           # ZK proof tasks
 ```
 
@@ -143,49 +136,30 @@ EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
 AutoChainProof = false    # Fallback to chain when sequencer unavailable
 ```
 
-## Running FCP (Fog Computing Provider)
-
-FCP runs AI model training/deployment and requires a Kubernetes cluster.
-
-**Start FCP:**
-```bash
-export CP_PATH=<path>
-computing-provider run
-```
-
-**FCP account setup (task-types 3):**
-```bash
-computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 3
-computing-provider collateral add --fcp --from <addr> <amount>
-```
-
 ## Architecture
 
 ### Directory Structure
 
 - `cmd/computing-provider/`: CLI entry point and command definitions (main.go defines all subcommands)
-- `internal/computing/`: Core services (K8s, Docker, UBI tasks, space deployment)
+- `internal/computing/`: Core services (Docker, UBI tasks, ECP2 deployment)
 - `internal/contract/`: Swan Chain smart contract bindings (auto-generated + stub wrappers)
   - `account/`: CP account registration contract
   - `ecp/`: Edge computing contracts (collateral, sequencer, tasks)
-  - `fcp/`: Fog computing contracts (collateral, job manager)
   - `token/`: SWAN token contract
 - `internal/models/`: Data models (jobs, resources, UBI tasks)
 - `internal/db/`: SQLite database via GORM
-- `internal/yaml/`: YAML parsing for deployment manifests
 - `conf/`: Configuration loading and validation
 - `build/`: Version info and embedded network parameters (`parameters.json`)
 - `wallet/`: Keystore management and transaction signing
 
 ### Core Services in `internal/computing/`
 
-- `k8s_service.go`: Kubernetes cluster operations (deployments, pods, services, ingress)
-- `space_service.go`: Space/job deployment and lifecycle management
 - `ubi_service.go`: UBI (Universal Basic Income) ZK proof task handling
-- `docker_service.go`: Docker image building and registry operations
+- `docker_service.go`: Docker container management and operations
 - `cron_task.go`: Background scheduled tasks (health checks, cleanup, status updates)
 - `sequence_service.go`: Sequencer service for ZK proof submission
 - `ecp_image_service.go`: ECP2 container image deployment for inference tasks
+- `ecp2_service.go`: ECP2 service for Swan Inference marketplace
 - `provider.go`: Main provider service orchestration
 
 ### Configuration
@@ -195,9 +169,8 @@ Config file: `$CP_PATH/config.toml` (see `config.toml.sample`)
 Key sections:
 - `[API]`: Server port, multi-address, domain, pricing settings, port ranges for ECP2
 - `[UBI]`: ZK engine settings, sequencer configuration (`EnableSequencer`, `AutoChainProof`)
-- `[HUB]`: Orchestrator settings for FCP tasks
 - `[RPC]`: Swan Chain RPC endpoint
-- `[Registry]`: Docker registry for multi-node K8s clusters
+- `[Registry]`: Docker registry for container image storage
 
 Pricing config: `$CP_PATH/price.toml` (resource pricing per hour)
 
@@ -213,10 +186,8 @@ The project uses Google Wire for dependency injection. See `internal/computing/w
 
 - The `CP_PATH` environment variable controls the repo directory location (default: `~/.swan/computing`)
 - Contract stubs in `internal/contract/*/` wrap auto-generated Ethereum contract bindings
-- K8s operations use client-go; the service auto-detects in-cluster or kubeconfig mode
-- FCP job deployments create Kubernetes Deployments + Services + Ingress resources
 - ECP2 and ECP tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
-- Task types: 1=FIL-C2, 2=Mining, 3=AI, 4=ECP2/Inference (default), 5=NodePort, 100=Exit
+- Task types: 1=FIL-C2, 2=Mining, 4=ECP2/Inference (default), 5=NodePort, 100=Exit
 
 ## Contract Interaction
 
@@ -226,6 +197,6 @@ Smart contracts are accessed via stubs in `internal/contract/`. Each contract ha
 
 Key contracts:
 - Account contract: CP registration and management
-- Collateral contracts: ECP and FCP collateral deposits/withdrawals
+- Collateral contracts: ECP collateral deposits/withdrawals
 - Sequencer contract: Batch proof submission to reduce gas costs
 - Task contracts: Task registration and proof verification

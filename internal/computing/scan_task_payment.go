@@ -167,10 +167,6 @@ func loadLastProcessedBlock(taskTypeOnChain int) int64 {
 		if scan.BlockNumber == 0 {
 			return int64(conf.GetConfig().CONTRACT.EdgeTaskPaymentCreated)
 		}
-	} else if taskTypeOnChain == models.ScannerFcpTaskManagerId {
-		if scan.BlockNumber == 0 {
-			return int64(conf.GetConfig().CONTRACT.JobManagerCreated)
-		}
 	}
 	return scan.BlockNumber
 }

@@ -1,15 +1,8 @@
 package computing
 
 import (
-	"context"
-	"fmt"
-	"github.com/swanchain/computing-provider-v2/build"
-	"github.com/swanchain/computing-provider-v2/internal/contract"
-	"github.com/swanchain/computing-provider-v2/util"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +10,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/constants"
-	"github.com/swanchain/computing-provider-v2/internal/contract/fcp"
 	"github.com/swanchain/computing-provider-v2/internal/models"
-	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var NetworkPolicyFlag bool
@@ -37,202 +27,11 @@ func NewCronTask(nodeId string) *CronTask {
 }
 
 func (task *CronTask) RunTask() {
-	checkJobStatus()
-	task.checkCollateralBalance()
 	task.setFailedUbiTaskStatus()
-	task.watchExpiredTask()
 	task.getUbiTaskReward()
-	task.checkJobReward()
 	task.cleanImageResource()
 	task.CheckCpBalance()
-	task.UpdateContainerLog()
 	task.DeleteSpaceLog()
-
-	// Skip K8s-related tasks if K8s is not available
-	k8sService := NewK8sService()
-	if k8sService == nil || k8sService.k8sClient == nil {
-		logs.GetLogger().Debug("K8s not available, skipping K8s-related tasks")
-		return
-	}
-
-	task.addLabelToNode()
-	task.cleanAbnormalDeployment()
-	task.watchNameSpaceForDeleted()
-	//task.reportClusterResource()
-
-	resourceExporterVersion, err := k8sService.GetResourceExporterVersion()
-	if err != nil {
-		logs.GetLogger().Warnf("failed to get resource-exporter version, error: %v", err)
-		return
-	}
-	if resourceExporterVersion != "" {
-		if errMsg := util.CheckVersion(build.ResourceExporterVersion, resourceExporterVersion); errMsg != nil {
-			logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
-		}
-	}
-}
-
-func CheckClusterNetworkPolicy() {
-	var err error
-	NetworkPolicyFlag = false
-	netset, err := NewK8sService().GetGlobalNetworkSet(models.NetworkNetset)
-	if err != nil {
-		logs.GetLogger().Error(err)
-		return
-	}
-	if netset.GetName() == "" {
-		return
-	}
-
-	if netset != nil {
-		subNetGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalSubnet)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if subNetGnp.Name == "" {
-			return
-		}
-
-		outAccessGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalOutAccess)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if outAccessGnp.Name == "" {
-			return
-		}
-
-		inAccessGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalInAccess)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if inAccessGnp.Name == "" {
-			return
-		}
-
-		namespaceGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalNamespace)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if namespaceGnp.Name == "" {
-			return
-		}
-
-		dnsGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalDns)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if dnsGnp.Name == "" {
-			return
-		}
-
-		podInNsGnp, err := NewK8sService().GetGlobalNetworkPolicy(models.NetworkGlobalPodInNamespace)
-		if err != nil {
-			logs.GetLogger().Error(err)
-			return
-		}
-		if podInNsGnp.Name == "" {
-			return
-		}
-	}
-
-	NetworkPolicyFlag = true
-}
-
-func checkJobStatus() {
-	go func() {
-		for {
-			select {
-			case job := <-deployingChan:
-				TaskMap.Store(job.Uuid, &job)
-			case <-time.After(3 * time.Second):
-				TaskMap.Range(func(key, value any) bool {
-					jobUuid := key.(string)
-					job := value.(*models.Job)
-					if reportJobStatus(jobUuid, job.Status) && job.Status == models.DEPLOY_TO_K8S {
-						TaskMap.Delete(jobUuid)
-					}
-					return true
-				})
-			}
-		}
-	}()
-}
-
-func (task *CronTask) addLabelToNode() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0 */10 * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("failed to add label for cluster node, error: %+v", err)
-			}
-		}()
-		addNodeLabel()
-	})
-	c.Start()
-}
-
-func (task *CronTask) reportClusterResource() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0/10 * * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("Failed report cp resource's summary, error: %+v", err)
-			}
-		}()
-
-		k8sService := NewK8sService()
-		if k8sService == nil || k8sService.k8sClient == nil {
-			logs.GetLogger().Errorf("failed to create k8s client, please check that the k8s service is running normally")
-			return
-		}
-		statisticalSources, err := k8sService.StatisticalSources(context.TODO())
-		if err != nil {
-			logs.GetLogger().Errorf("failed to collect k8s statistical sources, error: %+v", err)
-			return
-		}
-		checkClusterProviderStatus(statisticalSources)
-	})
-	c.Start()
-}
-
-func (task *CronTask) watchNameSpaceForDeleted() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0 0/50 * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("watchNameSpaceForDeleted catch panic error: %+v", err)
-			}
-		}()
-		service := NewK8sService()
-		if service == nil || service.k8sClient == nil {
-			logs.GetLogger().Errorf("failed to create k8s client, please check that the k8s service is running normally")
-			return
-		}
-		namespaces, err := service.ListNamespace(context.TODO())
-		if err != nil {
-			logs.GetLogger().Errorf("Failed get all namespace, error: %+v", err)
-			return
-		}
-
-		for _, namespace := range namespaces {
-			getPods, err := service.GetPods(namespace, "")
-			if err != nil {
-				logs.GetLogger().Errorf("Failed get pods form namespace,namepace: %s, error: %+v", namespace, err)
-				continue
-			}
-			if !getPods && (strings.HasPrefix(namespace, constants.K8S_NAMESPACE_NAME_PREFIX) || strings.HasPrefix(namespace, "ubi-task")) {
-				if err = service.DeleteNameSpace(context.TODO(), namespace); err != nil {
-					logs.GetLogger().Errorf("Failed delete namespace, namepace: %s, error: %+v", namespace, err)
-				}
-			}
-		}
-	})
-	c.Start()
 }
 
 func (task *CronTask) cleanImageResource() {
@@ -244,202 +43,10 @@ func (task *CronTask) cleanImageResource() {
 					logs.GetLogger().Errorf("cleanImageResource catch panic error: %+v", err)
 				}
 			}()
-			NewDockerService().CleanResourceForK8s()
+			NewDockerService().CleanResourceForDocker(false)
 		})
 		c.Start()
 	}
-}
-
-func (task *CronTask) watchExpiredTask() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0 0/10 * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("watchExpiredTask catch panic error: %+v", err)
-			}
-		}()
-
-		jobList, err := NewJobService().GetJobListByNoRejectStatus()
-		if err != nil {
-			logs.GetLogger().Errorf("failed to get job data, error: %+v", err)
-			return
-		}
-
-		k8sService := NewK8sService()
-		if k8sService == nil || k8sService.k8sClient == nil {
-			logs.GetLogger().Errorf("failed to create k8s client, please check that the k8s service is running normally")
-			return
-		}
-
-		deployments, err := k8sService.k8sClient.AppsV1().Deployments(metav1.NamespaceAll).List(context.TODO(), metav1.ListOptions{})
-		if err != nil {
-			fmt.Println("Error listing deployments:", err)
-			return
-		}
-
-		var deployOnK8s = make(map[string]string)
-		for _, deploy := range deployments.Items {
-			if strings.HasPrefix(deploy.Namespace, constants.K8S_NAMESPACE_NAME_PREFIX) {
-				deployOnK8s[deploy.Name] = deploy.Namespace
-			}
-		}
-
-		var deleteSpaceIdAndJobUuid = make(map[string]string)
-		for _, jobCopy := range jobList {
-			job := jobCopy
-			jobUuidDeployName := constants.K8S_DEPLOY_NAME_PREFIX + strings.ToLower(job.JobUuid)
-			if _, ok := deployOnK8s[jobUuidDeployName]; ok {
-				var nameSpace = job.NameSpace
-				if job.Status == models.JOB_TERMINATED_STATUS || job.Status == models.JOB_COMPLETED_STATUS {
-					if strings.TrimSpace(nameSpace) == "" {
-						nameSpace = constants.K8S_NAMESPACE_NAME_PREFIX + strings.ToLower(job.WalletAddress)
-					}
-					if err = DeleteJob(nameSpace, job.JobUuid, "cron-task abnormal state"); err != nil {
-						logs.GetLogger().Errorf("failed to use jobUuid: %s delete job, error: %v", job.JobUuid, err)
-					}
-					continue
-				}
-			}
-
-			if job.DeleteAt == models.DELETED_FLAG {
-				continue
-			}
-
-			currentTime := time.Now()
-			createdTime := time.Unix(job.CreateTime, 0)
-			createDuration := currentTime.Sub(createdTime)
-
-			if job.NameSpace != "" && job.K8sDeployName != "" {
-				foundDeployment, err := k8sService.k8sClient.AppsV1().Deployments(job.NameSpace).Get(context.TODO(), job.K8sDeployName, metav1.GetOptions{})
-				if err != nil {
-					if createDuration.Hours() <= 2 && job.Status != models.JOB_RUNNING_STATUS {
-						continue
-					}
-					if errors.IsNotFound(err) {
-						// delete job
-						logs.GetLogger().Warnf("not found deployment on the cluster, job_uuid: %s, deployment: %s", job.JobUuid, job.K8sDeployName)
-						deleteSpaceIdAndJobUuid[job.JobUuid] = job.SpaceUuid + "_" + job.JobUuid
-						continue
-					}
-					logs.GetLogger().Errorf("failed to get deployment: %s, error: %v", job.K8sDeployName, err)
-					continue
-				}
-
-				if foundDeployment.Status.AvailableReplicas == 0 && createDuration.Hours() > 2 { // need to delete
-					DeleteJob(job.NameSpace, job.JobUuid, "cron-task correction status")
-					deleteSpaceIdAndJobUuid[job.JobUuid] = job.SpaceUuid + "_" + job.JobUuid
-					continue
-				} else {
-					if job.Status != models.JOB_RUNNING_STATUS {
-						job.PodStatus = models.POD_RUNNING_STATUS
-						job.Status = models.JOB_RUNNING_STATUS
-						NewJobService().UpdateJobEntityByJobUuid(job)
-					}
-				}
-			}
-
-			checkFcpJobInfoInChain(job)
-
-			if job.Status == models.JOB_TERMINATED_STATUS || job.Status == models.JOB_COMPLETED_STATUS || time.Now().Unix() > job.ExpireTime {
-				expireTime := time.Unix(job.ExpireTime, 0).Format("2006-01-02 15:04:05")
-				logs.GetLogger().Infof("job_uuid: %s, current status is %s, expire time: %s, starting to delete it.", job.JobUuid, models.GetJobStatus(job.Status), expireTime)
-				if err = DeleteJob(job.NameSpace, job.JobUuid, "cron-task abnormal state"); err != nil {
-					logs.GetLogger().Errorf("failed to use jobUuid: %s delete job, error: %v", job.JobUuid, err)
-					continue
-				}
-
-				deleteSpaceIdAndJobUuid[job.JobUuid] = job.SpaceUuid + "_" + job.JobUuid
-			}
-		}
-
-		for _, spaceUuidAndJobUuid := range deleteSpaceIdAndJobUuid {
-			split := strings.Split(spaceUuidAndJobUuid, "_")
-			if len(split) == 2 {
-				NewJobService().DeleteJobEntityBySpaceUuId(split[0], split[1], models.JOB_COMPLETED_STATUS)
-			}
-		}
-	})
-	c.Start()
-}
-
-func (task *CronTask) checkCollateralBalance() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0 0/10 * * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("task job: [checkCollateralBalance], error: %+v", err)
-			}
-		}()
-
-		result, err := checkFcpCollateralBalance()
-		if err != nil {
-			logs.GetLogger().Errorf("check collateral balance failed, error: %+v", err)
-			return
-		}
-
-		floatResult, err := strconv.ParseFloat(result, 64)
-		if err != nil {
-			logs.GetLogger().Errorf("parse collateral balance failed, error: %+v", err)
-			return
-		}
-
-		if floatResult <= conf.GetConfig().HUB.BalanceThreshold {
-			logs.GetLogger().Warnf("No sufficient collateral Balance, the current collateral balance is: %0.3f. Please run: computing-provider collateral [fromWalletAddress] [amount]", floatResult)
-		}
-	})
-	c.Start()
-}
-
-func (task *CronTask) cleanAbnormalDeployment() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("* 0/30 * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("task job: [cleanAbnormalDeployment], error: %+v", err)
-			}
-		}()
-
-		k8sService := NewK8sService()
-		if k8sService == nil || k8sService.k8sClient == nil {
-			logs.GetLogger().Errorf("failed to create k8s client, please check that the k8s service is running normally")
-			return
-		}
-		namespaces, err := k8sService.ListNamespace(context.TODO())
-		if err != nil {
-			logs.GetLogger().Errorf("Failed get all namespace, error: %+v", err)
-			return
-		}
-
-		for _, namespace := range namespaces {
-			if strings.HasPrefix(namespace, constants.K8S_NAMESPACE_NAME_PREFIX) {
-				deployments, err := k8sService.k8sClient.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
-				if err != nil {
-					logs.GetLogger().Errorf("Error getting deployments in namespace %s: %v\n", namespace, err)
-					continue
-				}
-
-				for _, deployment := range deployments.Items {
-					creationTimestamp := deployment.ObjectMeta.CreationTimestamp.Time
-					currentTime := time.Now()
-					age := currentTime.Sub(creationTimestamp)
-					if deployment.Status.AvailableReplicas == 0 && age.Hours() >= 2 {
-						logs.GetLogger().Infof("Cleaning up deployment %s in namespace %s", deployment.Name, namespace)
-						err := k8sService.k8sClient.AppsV1().Deployments(namespace).Delete(context.TODO(), deployment.Name, metav1.DeleteOptions{})
-						if err != nil {
-							if errors.IsNotFound(err) {
-								logs.GetLogger().Errorf("Deployment %s not found. Ignoring", deployment.Name)
-							} else {
-								logs.GetLogger().Errorf("Error deleting deployment %s: %v", deployment.Name, err)
-							}
-						} else {
-							logs.GetLogger().Errorf("abnormal Deployment %s deleted successfully.", deployment.Name)
-						}
-					}
-				}
-			}
-		}
-	})
-	c.Start()
 }
 
 func (task *CronTask) setFailedUbiTaskStatus() {
@@ -463,9 +70,6 @@ func (task *CronTask) setFailedUbiTaskStatus() {
 			ubiTask := entity
 
 			if ubiTask.CreateTime < oneHourAgo {
-				JobName := strings.ToLower(models.UbiTaskTypeStr(ubiTask.Type)) + "-" + strconv.Itoa(int(ubiTask.Id))
-				k8sNameSpace := "ubi-task-" + strconv.Itoa(int(ubiTask.Id))
-				NewK8sService().k8sClient.BatchV1().Jobs(k8sNameSpace).Delete(context.TODO(), JobName, metav1.DeleteOptions{})
 				ubiTask.Status = models.TASK_FAILED_STATUS
 			}
 
@@ -476,29 +80,6 @@ func (task *CronTask) setFailedUbiTaskStatus() {
 			}
 
 			NewTaskService().SaveTaskEntity(&ubiTask)
-		}
-	})
-	c.Start()
-}
-
-func (task *CronTask) checkJobReward() {
-	c := cron.New(cron.WithSeconds(), cron.WithChain(cron.DelayIfStillRunning(cron.DefaultLogger)))
-	c.AddFunc("@every 10h", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("task job: [checkJobReward], error: %+v", err)
-			}
-		}()
-
-		taskManager, err := NewTaskManagerContract()
-		if err != nil {
-			logs.GetLogger().Errorf("failed to create task manager, error: %v", err)
-			return
-		}
-		err = taskManager.Scan()
-		if err != nil {
-			logs.GetLogger().Errorf("failed to scan task, error: %v", err)
-			return
 		}
 	})
 	c.Start()
@@ -519,41 +100,6 @@ func (task *CronTask) getUbiTaskReward() {
 	c.Start()
 }
 
-func addNodeLabel() {
-	k8sService := NewK8sService()
-	if k8sService == nil || k8sService.k8sClient == nil {
-		logs.GetLogger().Errorf("failed to create k8s client, please check that the k8s service is running normally")
-		return
-	}
-	nodes, err := k8sService.k8sClient.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
-	if err != nil {
-		logs.GetLogger().Error(err)
-		return
-	}
-
-	nodeGpuInfoMap, err := k8sService.GetResourceExporterPodLog(context.TODO())
-	if err != nil {
-		logs.GetLogger().Error(err)
-		return
-	}
-
-	for _, node := range nodes.Items {
-		cpNode := node
-		if collectInfo, ok := nodeGpuInfoMap[cpNode.Name]; ok {
-			for _, detail := range collectInfo.Gpu.Details {
-				if err = k8sService.AddNodeLabel(cpNode.Name, detail.ProductName); err != nil {
-					logs.GetLogger().Errorf("add node label, nodeName %s, gpuName: %s, error: %+v", cpNode.Name, detail.ProductName, err)
-					continue
-				}
-			}
-			err := k8sService.AddNodeLabelForArchitecture(cpNode.Name, collectInfo.CpuName)
-			if err != nil {
-				logs.GetLogger().Errorf("nodeName: %s, error: %v", cpNode.Name, err)
-			}
-		}
-	}
-}
-
 func (task *CronTask) CheckCpBalance() {
 	c := cron.New(cron.WithSeconds())
 	c.AddFunc("0 0/30 * * * ?", func() {
@@ -563,28 +109,6 @@ func (task *CronTask) CheckCpBalance() {
 			}
 		}()
 		GetCpBalance()
-	})
-	c.Start()
-}
-
-func (task *CronTask) UpdateContainerLog() {
-	c := cron.New(cron.WithSeconds())
-	c.AddFunc("0 0/10 * * * ?", func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("update container log catch panic error: %+v", err)
-			}
-		}()
-
-		jobList, err := NewJobService().GetJobList(models.UN_DELETEED_FLAG, -1)
-		if err != nil {
-			logs.GetLogger().Errorf("failed to get job data, error: %+v", err)
-			return
-		}
-
-		for _, job := range jobList {
-			NewK8sService().UpdateContainerLogToFile(job.JobUuid)
-		}
 	})
 	c.Start()
 }
@@ -619,85 +143,6 @@ func (task *CronTask) DeleteSpaceLog() {
 		}
 	})
 	c.Start()
-}
-
-func reportJobStatus(jobUuid string, deployStatus int) bool {
-	var job = new(models.JobEntity)
-	job.JobUuid = jobUuid
-	job.DeployStatus = deployStatus
-	if deployStatus < models.DEPLOY_TO_K8S {
-		job.PodStatus = models.POD_UNKNOWN_STATUS
-		job.Status = models.JOB_DEPLOY_STATUS
-	} else {
-		job.PodStatus = models.POD_RUNNING_STATUS
-		job.Status = models.JOB_RUNNING_STATUS
-	}
-
-	if err := NewJobService().UpdateJobEntityByJobUuid(job); err != nil {
-		logs.GetLogger().Errorf("update job info by jobUuid failed, error: %v", err)
-	}
-	return true
-}
-
-func checkFcpCollateralBalance() (string, error) {
-
-	chainRpc, err := conf.GetRpcByNetWorkName()
-	if err != nil {
-		return "", err
-	}
-	client, err := contract.GetEthClient(chainRpc)
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-
-	fcpCollateralStub, err := fcp.NewCollateralStub(client)
-	if err != nil {
-		return "", err
-	}
-
-	fcpCollateralInfo, err := fcpCollateralStub.CollateralInfo()
-	if err != nil {
-		return "", err
-	}
-	return fcpCollateralInfo.AvailableBalance, nil
-}
-
-func checkFcpJobInfoInChain(job *models.JobEntity) {
-	var taskInfo models.TaskInfoOnChain
-	var err error
-	chainRpc, err := conf.GetRpcByNetWorkName()
-	if err != nil {
-		return
-	}
-	client, err := contract.GetEthClient(chainRpc)
-	if err != nil {
-		return
-	}
-	defer client.Close()
-	taskManagerStub, err := fcp.NewTaskManagerStub(client)
-	if err != nil {
-		return
-	}
-	taskInfo, err = taskManagerStub.GetTaskInfo(job.TaskUuid)
-	if err != nil {
-		return
-	}
-	if taskInfo.TaskUuid != "" {
-		if taskInfo.TaskStatus == models.COMPLETED {
-			job.Status = models.JOB_COMPLETED_STATUS
-		} else if taskInfo.TaskStatus == models.TERMINATED {
-			job.Status = models.JOB_TERMINATED_STATUS
-		}
-
-		expiredTime := taskInfo.StartTimestamp + taskInfo.Duration
-		if expiredTime > 0 {
-			job.ExpireTime = expiredTime
-			if err := NewJobService().UpdateJobEntityByJobUuid(job); err != nil {
-				logs.GetLogger().Errorf("update job info by jobUuid failed, error: %v", err)
-			}
-		}
-	}
 }
 
 type TaskGroup struct {

@@ -409,16 +409,12 @@ func (c *ECP2Client) sendHeartbeat() {
 }
 
 func (c *ECP2Client) collectMetrics() map[string]float64 {
-	// Collect GPU/CPU metrics from K8s service
+	// Collect GPU/CPU metrics via Docker resource exporter
 	metrics := make(map[string]float64)
 
-	k8sService := NewK8sService()
-	if k8sService != nil && k8sService.k8sClient != nil {
-		// Get GPU utilization if available
-		// This is a placeholder - implement actual metric collection
-		metrics["gpu_utilization"] = 0.0
-		metrics["memory_utilization"] = 0.0
-	}
+	// Placeholder for actual metric collection from Docker containers
+	metrics["gpu_utilization"] = 0.0
+	metrics["memory_utilization"] = 0.0
 
 	return metrics
 }

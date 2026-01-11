@@ -33,7 +33,6 @@ func main() {
 		},
 		Commands: []*cli.Command{
 			initCmd,
-			runCmd,
 			infoCmd,
 			stateCmd,
 			accountCmd,

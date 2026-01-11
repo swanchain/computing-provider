@@ -134,13 +134,6 @@ type CpCollateralInfoForECP struct {
 	Status            string
 }
 
-type CpCollateralInfoForFCP struct {
-	CpAddress        string
-	AvailableBalance string
-	LockedCollateral string
-	Status           string
-}
-
 type EcpTaskInfo struct {
 	TaskID               *big.Int
 	TaskType             *big.Int
@@ -160,19 +153,6 @@ type WithdrawRequest struct {
 	Amount        string
 	RequestBlock  int64
 	WithdrawDelay int64
-}
-
-type TaskInfoOnChain struct {
-	TaskUuid           string
-	CpList             []string
-	OwnerAddress       string
-	Reward             *big.Int
-	Collateral         *big.Int
-	StartTimestamp     int64
-	TerminateTimestamp int64
-	Duration           int64
-	TaskStatus         int
-	CollateralStatus   int
 }
 
 type ResourcePrice struct {
@@ -210,46 +190,6 @@ func JobOnChainStatus(status int) string {
 	return str
 }
 
-type FcpDeployImageReq struct {
-	Uuid          string              `json:"uuid"`
-	TaskUuid      string              `json:"task_uuid"`
-	Name          string              `json:"name"`
-	InstanceName  string              `json:"instance_name"`
-	Duration      int                 `json:"duration"`
-	Sign          string              `json:"sign"`
-	WalletAddress string              `json:"wallet_address"`
-	IpWhitelist   []string            `json:"ip_whitelist"`
-	DeployConfig  DeployConfig        `json:"deploy_config"`
-	Resource      K8sResourceForImage `json:"resource"`
-	IpWhiteList   []string            `json:"ip_white_list"`
-	BidPrice      string              `json:"bid_price"` // Amount users are willing to pay
-	JobType       int                 `json:"job_type"`
-	DeployType    int                 `json:"deploy_type"` // 0: field; 1: docker; 2: yaml
-	DeployContent string              `json:"deploy_content"`
-	HealthPath    string              `json:"health_path"` // deploy_type=1 or 2, used
-}
-
-type YamlContent struct {
-	Version  string `yaml:"version"`
-	Services struct {
-		Image       string   `yaml:"image"`
-		Cmd         []string `yaml:"cmd"`
-		RunCommands []string `yaml:"run_commands"`
-		Envs        []string `yaml:"envs"`
-		ExposePort  []int    `yaml:"expose_port"`
-	} `yaml:"services"`
-}
-
-type DeployConfig struct {
-	Image       string            `json:"image"`
-	HealthPath  string            `json:"health_path"`
-	Envs        map[string]string `json:"envs"`
-	Cmd         []string          `json:"cmd"`
-	RunCommands []string          `json:"run_commands"`
-	Ports       map[string][]int  `json:"ports"`
-	WorkDir     string            `json:"work_dir"`
-}
-
 type K8sResourceForImage struct {
 	Cpu       int64
 	Memory    float64
@@ -261,16 +201,6 @@ type K8sResourceForImage struct {
 type ReqGpu struct {
 	GpuModel string `json:"gpu_model"`
 	GPU      int    `json:"count"`
-}
-
-type FcpDeployImageResp struct {
-	UUID               string    `json:"uuid,omitempty"`
-	ServiceUrl         string    `json:"service_url,omitempty"`
-	HealthPath         string    `json:"health_path,omitempty"`
-	Price              float64   `json:"price"`
-	ServicePortMapping []PortMap `json:"service_port_mapping,omitempty"`
-	ContainerLog       string    `json:"container_log"`
-	BuildLog           string    `json:"build_log"`
 }
 
 // =========

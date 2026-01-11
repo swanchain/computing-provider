@@ -38,8 +38,6 @@ type ComputeNode struct {
 	API      API
 	UBI      UBI
 	LOG      LOG
-	HUB      HUB
-	MCS      MCS
 	Registry Registry
 	RPC      RPC
 	CONTRACT CONTRACT `toml:"CONTRACT,omitempty"`
@@ -79,18 +77,6 @@ type UBI struct {
 type LOG struct {
 	CrtFile string
 	KeyFile string
-}
-
-type HUB struct {
-	BalanceThreshold float64
-	OrchestratorPk   string
-	VerifySign       bool
-}
-
-type MCS struct {
-	ApiKey     string
-	BucketName string
-	Network    string
 }
 
 type Registry struct {
@@ -262,9 +248,6 @@ func requiredFieldsAreGiven(metaData toml.MetaData) bool {
 		{"API"},
 		{"LOG"},
 		{"UBI"},
-		{"HUB"},
-		{"MCS"},
-		{"Registry"},
 		{"RPC"},
 
 		{"API", "MultiAddress"},
@@ -278,14 +261,6 @@ func requiredFieldsAreGiven(metaData toml.MetaData) bool {
 		{"UBI", "EnableSequencer"},
 		{"UBI", "AutoChainProof"},
 		{"UBI", "SequencerUrl"},
-
-		{"HUB", "OrchestratorPk"},
-		{"HUB", "BalanceThreshold"},
-		{"HUB", "VerifySign"},
-
-		{"MCS", "ApiKey"},
-		{"MCS", "BucketName"},
-		{"MCS", "Network"},
 
 		{"RPC", "SWAN_CHAIN_RPC"},
 	}
@@ -342,7 +317,6 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 			ncCopy := nc
 			if ncCopy.Network == build.NetWorkTag {
 				defaultComputeNode.UBI.UbiEnginePk = ncCopy.Config.ZkEnginePk
-				defaultComputeNode.HUB.OrchestratorPk = ncCopy.Config.OrchestratorPk
 				defaultComputeNode.RPC.SwanChainRpc = ncCopy.Config.ChainRpc
 				defaultComputeNode.UBI.SequencerUrl = ncCopy.Config.SequencerUrl
 				defaultComputeNode.UBI.EdgeUrl = ncCopy.Config.EdgeUrl
@@ -426,16 +400,6 @@ func generateDefaultConfig() ComputeNode {
 		LOG: LOG{
 			CrtFile: "",
 			KeyFile: "",
-		},
-		HUB: HUB{
-			BalanceThreshold: 0.1,
-			OrchestratorPk:   "",
-			VerifySign:       true,
-		},
-		MCS: MCS{
-			ApiKey:     "",
-			BucketName: "",
-			Network:    "polygon.mainnet",
 		},
 		Registry: Registry{
 			ServerAddress: "",

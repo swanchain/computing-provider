@@ -4,17 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/gin-contrib/pprof"
-	"github.com/gin-gonic/gin"
-	cors "github.com/itsjamie/gin-cors"
 	"github.com/olekukonko/tablewriter"
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
@@ -22,82 +17,10 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"github.com/swanchain/computing-provider-v2/internal/contract/account"
 	"github.com/swanchain/computing-provider-v2/internal/contract/ecp"
-	"github.com/swanchain/computing-provider-v2/internal/contract/fcp"
-	"github.com/swanchain/computing-provider-v2/internal/initializer"
 	"github.com/swanchain/computing-provider-v2/internal/models"
-	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/swanchain/computing-provider-v2/wallet"
 	"github.com/urfave/cli/v2"
 )
-
-var runCmd = &cli.Command{
-	Name:  "run",
-	Usage: "Start a cp process",
-	Action: func(cctx *cli.Context) error {
-		logs.GetLogger().Info("Starting a computing provider client.")
-
-		cpRepoPath, ok := os.LookupEnv("CP_PATH")
-		if !ok {
-			return fmt.Errorf("missing CP_PATH env, please set export CP_PATH=<YOUR CP_PATH>")
-		}
-		initializer.ProjectInit(cpRepoPath)
-		logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
-
-		gin.SetMode(gin.ReleaseMode)
-		r := gin.Default()
-		r.Use(cors.Middleware(cors.Config{
-			Origins:         "*",
-			Methods:         "GET, PUT, POST, DELETE",
-			RequestHeaders:  "Origin, Authorization, Content-Type",
-			ExposedHeaders:  "",
-			MaxAge:          50 * time.Second,
-			ValidateHeaders: false,
-		}))
-		pprof.Register(r)
-
-		v1 := r.Group("/api/v1")
-		cpManager(v1.Group("/computing"))
-
-		shutdownChan := make(chan struct{})
-		// Only enable SSL if certificate files are configured
-		useSSL := conf.GetConfig().LOG.CrtFile != "" && conf.GetConfig().LOG.KeyFile != ""
-		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), useSSL)
-		if err != nil {
-			logs.GetLogger().Fatal("failed to start cp-api endpoint: %s", err)
-		}
-		logs.GetLogger().Infof("CP service started successfully, listening on port: %d", conf.GetConfig().API.Port)
-
-		finishCh := util.MonitorShutdown(shutdownChan,
-			util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
-		)
-		<-finishCh
-
-		return nil
-	},
-}
-
-func cpManager(router *gin.RouterGroup) {
-	router.GET("/cp", computing.StatisticalSources)
-	router.GET("/host/info", computing.GetServiceProviderInfo)
-	router.GET("/cp/metrics", computing.GetResourceExporterMetrics)
-	router.POST("/lagrange/jobs", computing.ReceiveJob)
-	router.DELETE("/lagrange/jobs", computing.CancelJob)
-	router.POST("/lagrange/jobs/renew", computing.ReNewJob)
-	router.GET("/lagrange/spaces/log", computing.GetSpaceLog)
-	router.POST("/lagrange/cp/proof", computing.DoProof)
-	router.GET("/lagrange/cp/whitelist", computing.WhiteList)
-	router.GET("/lagrange/cp/blacklist", computing.BlackList)
-	router.GET("/lagrange/job/:job_uuid", computing.GetJobStatus)
-	router.GET("/lagrange/cp/public_key", computing.GetPublicKey)
-	router.GET("/lagrange/cp/price", computing.GetPrice)
-	router.GET("/lagrange/cp/check_node_port", computing.CheckNodeportServiceEnv)
-	router.POST("/lagrange/cp/deploy", computing.DeployImage)
-
-	router.POST("/cp/ubi", computing.DoUbiTaskForK8s)
-	router.POST("/cp/receive/ubi", computing.ReceiveUbiProof)
-	router.POST("/cp/zk_task", computing.DoZkTaskForK8s)
-
-}
 
 var infoCmd = &cli.Command{
 	Name:  "info",
@@ -112,13 +35,6 @@ var infoCmd = &cli.Command{
 		}
 
 		localNodeId := computing.GetNodeId(cpRepoPath)
-		k8sService := computing.NewK8sService()
-		var count int
-		if k8sService.Version == "" {
-			count = 0
-		} else {
-			count, _ = k8sService.GetDeploymentActiveCount()
-		}
 
 		chainRpc, err := conf.GetRpcByNetWorkName()
 		if err != nil {
@@ -142,8 +58,6 @@ var infoCmd = &cli.Command{
 		}
 
 		var sequencerBalance = "0.000000"
-		var fcpCollateralBalance = "0.0000"
-		var fcpEscrowBalance = "0.0000"
 		var ecpCollateralBalance = "0.0000"
 		var ecpEscrowBalance = "0.0000"
 		var ownerBalance = "0.0000"
@@ -175,14 +89,6 @@ var infoCmd = &cli.Command{
 
 		ownerBalance, err = wallet.Balance(context.TODO(), client, ownerAddress)
 		workerBalance, err = wallet.Balance(context.TODO(), client, workerAddress)
-		fcpCollateralStub, err := fcp.NewCollateralStub(client)
-		if err == nil {
-			fcpCollateralInfo, err := fcpCollateralStub.CollateralInfo()
-			if err == nil {
-				fcpCollateralBalance = fcpCollateralInfo.AvailableBalance
-				fcpEscrowBalance = fcpCollateralInfo.LockedCollateral
-			}
-		}
 
 		ecpCollateral, err := ecp.NewCollateralStub(client, ecp.WithPublicKey(ownerAddress))
 		if err == nil {
@@ -216,7 +122,6 @@ var infoCmd = &cli.Command{
 		taskData = append(taskData, []string{""})
 		taskData = append(taskData, []string{"Capabilities:"})
 		taskData = append(taskData, []string{"   Task Types:", taskTypes})
-		taskData = append(taskData, []string{"   Applications:", strconv.Itoa(count)})
 		taskData = append(taskData, []string{""})
 		taskData = append(taskData, []string{"Owner Balance(ETH):", ownerBalance})
 		taskData = append(taskData, []string{"Worker Balance(ETH):", workerBalance})
@@ -225,9 +130,6 @@ var infoCmd = &cli.Command{
 		taskData = append(taskData, []string{"ECP Balance(SWAN):"})
 		taskData = append(taskData, []string{"   Collateral:", ecpCollateralBalance})
 		taskData = append(taskData, []string{"   Escrow:", ecpEscrowBalance})
-		taskData = append(taskData, []string{"FCP Balance(SWAN):"})
-		taskData = append(taskData, []string{"   Collateral:", fcpCollateralBalance})
-		taskData = append(taskData, []string{"   Escrow:", fcpEscrowBalance})
 
 		var rowColorList []RowColor
 		if taskTypes != "" {
@@ -238,7 +140,7 @@ var infoCmd = &cli.Command{
 					color:  []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgBlueColor}},
 				},
 				RowColor{
-					row:    11,
+					row:    10,
 					column: []int{1},
 					color:  []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgGreenColor}},
 				})
@@ -308,8 +210,6 @@ var stateInfoCmd = &cli.Command{
 		}
 
 		var sequencerBalance = "0.0000"
-		var fcpCollateralBalance = "0.0000"
-		var fcpEscrowBalance = "0.0000"
 		var ecpCollateralBalance = "0.0000"
 		var ecpEscrowBalance = "0.0000"
 		var ownerBalance = "0.0000"
@@ -346,14 +246,6 @@ var stateInfoCmd = &cli.Command{
 
 		ownerBalance, err = wallet.Balance(context.TODO(), client, ownerAddress)
 		workerBalance, err = wallet.Balance(context.TODO(), client, workerAddress)
-		fcpCollateralStub, err := fcp.NewCollateralStub(client, fcp.WithCpAccountAddress(contractAddress))
-		if err == nil {
-			fcpCollateralInfo, err := fcpCollateralStub.CollateralInfo()
-			if err == nil {
-				fcpCollateralBalance = fcpCollateralInfo.AvailableBalance
-				fcpEscrowBalance = fcpCollateralInfo.LockedCollateral
-			}
-		}
 
 		ecpCollateral, err := ecp.NewCollateralStub(client, ecp.WithCpAccountAddress(contractAddress))
 		if err == nil {
@@ -384,9 +276,6 @@ var stateInfoCmd = &cli.Command{
 		taskData = append(taskData, []string{"ECP Balance(SWAN):"})
 		taskData = append(taskData, []string{"   Collateral:", ecpCollateralBalance})
 		taskData = append(taskData, []string{"   Escrow:", ecpEscrowBalance})
-		taskData = append(taskData, []string{"FCP Balance(SWAN):"})
-		taskData = append(taskData, []string{"   Collateral:", fcpCollateralBalance})
-		taskData = append(taskData, []string{"   Escrow:", fcpEscrowBalance})
 
 		var rowColorList []RowColor
 		if taskTypes != "" {

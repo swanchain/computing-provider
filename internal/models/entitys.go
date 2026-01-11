@@ -403,8 +403,7 @@ func (*ScanChainEntity) TableName() string {
 }
 
 const (
-	ScannerTaskPaymentId    = 1
-	ScannerFcpTaskManagerId = 2
+	ScannerTaskPaymentId = 1
 )
 
 type CpBalanceEntity struct {
