@@ -8,7 +8,7 @@ SGLang is the recommended inference engine for ECP2 providers due to:
 - **29% higher throughput** than vLLM (16,215 vs 12,553 tok/s)
 - **Stable concurrency** handling (30-31 tok/s under load)
 - **RadixAttention** for 10% boost in multi-turn conversations
-- **OpenAI-compatible API** for seamless ECP2 integration
+- **OpenAI-compatible API** for seamless Swan Inference integration
 
 ## Prerequisites
 
@@ -180,7 +180,7 @@ docker run -d \
     --quantization fp8
 ```
 
-## ECP2 Integration
+## Swan Inference Integration
 
 ### Configure Computing Provider
 
@@ -189,8 +189,8 @@ Edit `~/.swan/computing/config.toml`:
 ```toml
 [ECP2]
 Enable = true
-ServiceURL = "http://ecp2-service.swanchain.io"
-WebSocketURL = "wss://ecp2-service.swanchain.io"
+ServiceURL = "http://inference.swanchain.io"
+WebSocketURL = "wss://inference.swanchain.io"
 Models = ["llama-3.1-8b", "qwen-2.5-7b"]
 ```
 

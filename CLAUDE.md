@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to run computing providers that offer computational resources (CPU, GPU, memory, storage) to the network.
 
-**ECP2 (Edge Computing Provider 2) is the default and primary mode** for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support.
+**ECP2 (Edge Computing Provider 2) is the default and primary mode** for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. ECP2 mode connects to **Swan Inference**, the decentralized inference marketplace.
 
 ### Provider Modes
 

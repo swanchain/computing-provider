@@ -1,11 +1,11 @@
-# ECP2 Integration Design Document
+# Swan Inference Integration Design Document
 
 ## Executive Summary
 
-This document outlines the design for integrating the Computing Provider (CP) with the ECP2-service inference marketplace. ECP2 is a centralized coordination layer that connects AI model consumers with GPU providers through WebSocket-based real-time communication.
+This document outlines the design for integrating the Computing Provider (CP) with Swan Inference, the decentralized inference marketplace. Swan Inference is a centralized coordination layer that connects AI model consumers with GPU providers through WebSocket-based real-time communication.
 
 The integration enables Computing Providers to:
-1. Register as inference providers in the ECP2 marketplace
+1. Register as inference providers in the Swan Inference marketplace
 2. Receive and execute inference requests via WebSocket
 3. Report usage metrics for billing and settlement
 4. Participate in model verification challenges
@@ -14,7 +14,7 @@ The integration enables Computing Providers to:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         ECP2 Service                                │
+│                       Swan Inference                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
 │  │   REST API  │  │  WebSocket  │  │   MySQL DB  │                  │
 │  │   :8080     │  │    Hub      │  │             │                  │
@@ -32,7 +32,7 @@ The integration enables Computing Providers to:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## ECP2 Service Components (Backend)
+## Swan Inference Components (Backend)
 
 ### 1. Data Entities
 
@@ -47,7 +47,7 @@ The integration enables Computing Providers to:
 
 ### 2. WebSocket Protocol
 
-The ECP2 service uses JSON messages over WebSocket for real-time communication:
+Swan Inference uses JSON messages over WebSocket for real-time communication:
 
 **Message Types:**
 - `register` - Provider announces availability with signed worker address
@@ -57,7 +57,7 @@ The ECP2 service uses JSON messages over WebSocket for real-time communication:
 - `ack` - Acknowledgment responses
 - `error` - Error responses
 
-**Register Payload (Provider → ECP2):**
+**Register Payload (Provider → Swan Inference):**
 ```json
 {
   "type": "register",
@@ -71,7 +71,7 @@ The ECP2 service uses JSON messages over WebSocket for real-time communication:
 }
 ```
 
-**Inference Payload (ECP2 → Provider):**
+**Inference Payload (Swan Inference → Provider):**
 ```json
 {
   "type": "inference",
@@ -84,7 +84,7 @@ The ECP2 service uses JSON messages over WebSocket for real-time communication:
 }
 ```
 
-**Heartbeat Payload (Provider → ECP2):**
+**Heartbeat Payload (Provider → Swan Inference):**
 ```json
 {
   "type": "heartbeat",
@@ -104,7 +104,7 @@ The ECP2 service uses JSON messages over WebSocket for real-time communication:
 ### 1. New Components Required
 
 #### `internal/computing/ecp2_client.go`
-WebSocket client for ECP2 service communication:
+WebSocket client for Swan Inference communication:
 
 ```go
 type ECP2Client struct {
@@ -117,7 +117,7 @@ type ECP2Client struct {
     done            chan struct{}
 }
 
-// Connect establishes WebSocket connection to ECP2 service
+// Connect establishes WebSocket connection to Swan Inference
 func (c *ECP2Client) Connect(wsURL string) error
 
 // Register sends registration message with signature
@@ -126,7 +126,7 @@ func (c *ECP2Client) Register() error
 // SendHeartbeat sends periodic heartbeat with metrics
 func (c *ECP2Client) SendHeartbeat(metrics map[string]float64) error
 
-// HandleMessage processes incoming messages from ECP2
+// HandleMessage processes incoming messages from Swan Inference
 func (c *ECP2Client) HandleMessage(msg Message)
 ```
 
@@ -267,11 +267,11 @@ computing-provider ecp2 status
    - hardware info (GPU type, VRAM, count)
    - location info
 
-2. ECP2 service creates ProviderEntity (status: pending)
+2. Swan Inference creates ProviderEntity (status: pending)
 
 3. Provider may need on-chain collateral verification
 
-4. ECP2 service activates provider (status: active)
+4. Swan Inference activates provider (status: active)
 
 5. CP receives provider_id, stores in config
 ```
@@ -291,9 +291,9 @@ computing-provider ecp2 status
      }
    }
 
-3. ECP2 verifies signature, registers client in Hub
+3. Swan Inference verifies signature, registers client in Hub
 
-4. ECP2 responds with ack:
+4. Swan Inference responds with ack:
    {
      "type": "ack",
      "payload": {"success": true, "message": "registered"}
@@ -306,14 +306,14 @@ computing-provider ecp2 status
 ```
 1. Consumer creates endpoint via POST /api/v1/endpoints
 
-2. ECP2 assigns provider to endpoint based on:
+2. Swan Inference assigns provider to endpoint based on:
    - Model availability
    - Provider capacity
    - Provider performance/reputation
 
-3. Consumer sends inference request to ECP2
+3. Consumer sends inference request to Swan Inference
 
-4. ECP2 routes to CP via WebSocket:
+4. Swan Inference routes to CP via WebSocket:
    {
      "type": "inference",
      "request_id": "uuid",
@@ -340,7 +340,7 @@ computing-provider ecp2 status
      }
    }
 
-7. ECP2 records usage, returns response to consumer
+7. Swan Inference records usage, returns response to consumer
 ```
 
 ### 5. Model Execution
@@ -397,7 +397,7 @@ func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceRespons
 ### Security
 - All WebSocket messages must be signed with worker key
 - TLS required for production (wss://)
-- Verify ECP2 service identity before connecting
+- Verify Swan Inference service identity before connecting
 - Rate limit inference requests to prevent abuse
 
 ### Performance
@@ -409,7 +409,7 @@ func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceRespons
 ### Reliability
 - Auto-reconnect on WebSocket disconnect
 - Exponential backoff for reconnection attempts
-- Graceful degradation if ECP2 service unavailable
+- Graceful degradation if Swan Inference service unavailable
 - Local request logging for audit trail
 
 ### Monitoring
@@ -437,8 +437,8 @@ func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceRespons
 
 ## References
 
-- ECP2 Service Repository: `../ecp2-service`
-- ECP2 API Documentation: `../ecp2-service/README.md`
+- Swan Inference Repository: `../swan-inference`
+- Swan Inference API Documentation: `../swan-inference/README.md`
 - WebSocket Protocol: `../ecp2-service/api/ws/protocol.go`
 - Provider Entity: `../ecp2-service/internal/module/repository/entity/provider.go`
 - Endpoint Entity: `../ecp2-service/internal/module/repository/entity/endpoint.go`
