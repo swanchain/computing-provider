@@ -1,0 +1,481 @@
+# SGLang Deployment Guide for ECP2 Providers
+
+This guide covers deploying SGLang as the inference engine for ECP2 providers on Swan Chain.
+
+## Overview
+
+SGLang is the recommended inference engine for ECP2 providers due to:
+- **29% higher throughput** than vLLM (16,215 vs 12,553 tok/s)
+- **Stable concurrency** handling (30-31 tok/s under load)
+- **RadixAttention** for 10% boost in multi-turn conversations
+- **OpenAI-compatible API** for seamless ECP2 integration
+
+## Prerequisites
+
+### Hardware Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| GPU | NVIDIA Volta V100+ (CC 7.0+) | Ampere A100 / Ada RTX 4090 |
+| VRAM | 16GB | 24GB+ (48-80GB for 70B+ models) |
+| RAM | 32GB | 64GB+ |
+| Storage | 100GB SSD | 500GB+ NVMe |
+
+### Software Requirements
+
+- Docker with NVIDIA Container Toolkit
+- CUDA 12.1+ drivers
+- HuggingFace account (for gated models)
+
+### Install NVIDIA Container Toolkit
+
+```bash
+# Add NVIDIA GPG key
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+# Add repository
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# Install
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# Verify
+docker run --rm --gpus all nvidia/cuda:12.1-base nvidia-smi
+```
+
+## Quick Start
+
+### 1. Pull SGLang Docker Image
+
+```bash
+# Official SGLang image
+docker pull lmsysorg/sglang:latest
+
+# Or NVIDIA NGC image (optimized)
+docker pull nvcr.io/nvidia/sglang:25.04
+```
+
+### 2. Start SGLang Server
+
+```bash
+# Basic deployment with Llama 3.1 8B
+docker run -d \
+  --name sglang-llama \
+  --gpus all \
+  --shm-size 32g \
+  --ipc=host \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=${HF_TOKEN} \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name llama-3.1-8b
+```
+
+### 3. Verify Server
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Test inference
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama-3.1-8b",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 100
+  }'
+```
+
+## Model Deployment Examples
+
+### Llama 3.1 8B (24GB VRAM)
+
+```bash
+docker run -d \
+  --name sglang-llama-8b \
+  --gpus all \
+  --shm-size 32g \
+  --ipc=host \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=${HF_TOKEN} \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name llama-3.1-8b \
+    --mem-fraction-static 0.9
+```
+
+### Qwen 2.5 7B (16GB VRAM)
+
+```bash
+docker run -d \
+  --name sglang-qwen \
+  --gpus all \
+  --shm-size 32g \
+  --ipc=host \
+  -p 8001:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path Qwen/Qwen2.5-7B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name qwen-2.5-7b \
+    --mem-fraction-static 0.85
+```
+
+### Llama 3.1 70B (Multi-GPU with Tensor Parallelism)
+
+```bash
+docker run -d \
+  --name sglang-llama-70b \
+  --gpus all \
+  --shm-size 64g \
+  --ipc=host \
+  -p 8002:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=${HF_TOKEN} \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-70B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name llama-3.1-70b \
+    --tp 4 \
+    --mem-fraction-static 0.9
+```
+
+### DeepSeek V3 (FP8 Quantization)
+
+```bash
+docker run -d \
+  --name sglang-deepseek \
+  --gpus all \
+  --shm-size 64g \
+  --ipc=host \
+  -p 8003:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path deepseek-ai/DeepSeek-V3 \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --served-model-name deepseek-v3 \
+    --tp 8 \
+    --quantization fp8
+```
+
+## ECP2 Integration
+
+### Configure Computing Provider
+
+Edit `~/.swan/computing/config.toml`:
+
+```toml
+[ECP2]
+Enable = true
+ServiceURL = "http://ecp2-service.swanchain.io"
+WebSocketURL = "wss://ecp2-service.swanchain.io"
+Models = ["llama-3.1-8b", "qwen-2.5-7b"]
+```
+
+### Model-to-Container Mapping
+
+Create a mapping file `~/.swan/computing/models.json`:
+
+```json
+{
+  "llama-3.1-8b": {
+    "container": "sglang-llama-8b",
+    "endpoint": "http://localhost:8000",
+    "gpu_memory": 24
+  },
+  "qwen-2.5-7b": {
+    "container": "sglang-qwen",
+    "endpoint": "http://localhost:8001",
+    "gpu_memory": 16
+  },
+  "llama-3.1-70b": {
+    "container": "sglang-llama-70b",
+    "endpoint": "http://localhost:8002",
+    "gpu_memory": 160
+  }
+}
+```
+
+### Start ECP2 Daemon
+
+```bash
+# Start SGLang containers first
+docker start sglang-llama-8b sglang-qwen
+
+# Then start computing provider
+export CP_PATH=~/.swan/computing
+computing-provider ubi daemon
+```
+
+## Performance Tuning
+
+### Memory Optimization
+
+```bash
+# Adjust memory fraction (default 0.9)
+--mem-fraction-static 0.85    # Leave more for KV cache
+
+# Enable chunked prefill for long contexts
+--chunked-prefill-size 8192
+
+# Set max concurrent requests
+--max-running-requests 64
+```
+
+### Throughput Optimization
+
+```bash
+# Enable FlashInfer backend (faster attention)
+--attention-backend flashinfer
+
+# Enable CUDA graphs (reduces kernel launch overhead)
+--disable-cuda-graph false
+
+# Batch size tuning
+--max-num-seqs 256
+```
+
+### Latency Optimization
+
+```bash
+# Reduce first token latency
+--schedule-policy lpm    # Longest prefix match
+
+# Enable prefix caching
+--enable-prefix-caching
+
+# Speculative decoding (if supported)
+--speculative-model meta-llama/Llama-3.1-8B-Instruct
+```
+
+## Monitoring
+
+### Enable Metrics Endpoint
+
+```bash
+docker run -d \
+  --name sglang-llama \
+  --gpus all \
+  -p 8000:8000 \
+  -p 9090:9090 \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --enable-metrics \
+    --metrics-port 9090
+```
+
+### Prometheus Metrics
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'sglang'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+
+### Key Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `sglang_num_running_requests` | Active inference requests |
+| `sglang_num_waiting_requests` | Queued requests |
+| `sglang_token_throughput` | Tokens per second |
+| `sglang_time_to_first_token_seconds` | TTFT latency |
+| `sglang_gpu_memory_used_bytes` | GPU memory usage |
+
+## Docker Compose Setup
+
+Create `docker-compose.yml` for multi-model deployment:
+
+```yaml
+version: '3.8'
+
+services:
+  sglang-llama-8b:
+    image: lmsysorg/sglang:latest
+    container_name: sglang-llama-8b
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    shm_size: '32g'
+    ipc: host
+    ports:
+      - "8000:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+    command: >
+      python3 -m sglang.launch_server
+      --model-path meta-llama/Llama-3.1-8B-Instruct
+      --host 0.0.0.0 --port 8000
+      --served-model-name llama-3.1-8b
+      --mem-fraction-static 0.9
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  sglang-qwen:
+    image: lmsysorg/sglang:latest
+    container_name: sglang-qwen
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+    shm_size: '32g'
+    ipc: host
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      python3 -m sglang.launch_server
+      --model-path Qwen/Qwen2.5-7B-Instruct
+      --host 0.0.0.0 --port 8000
+      --served-model-name qwen-2.5-7b
+      --mem-fraction-static 0.85
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+Start with:
+
+```bash
+docker compose up -d
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Out of Memory (OOM)**
+```bash
+# Reduce memory fraction
+--mem-fraction-static 0.8
+
+# Use quantization
+--quantization fp8    # Requires Ada/Hopper GPUs
+--quantization awq    # Works on all GPUs
+```
+
+**Slow First Request**
+```bash
+# Model loading is slow on first request
+# Pre-warm with a dummy request after startup
+curl http://localhost:8000/v1/chat/completions \
+  -d '{"model":"llama-3.1-8b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}'
+```
+
+**Container Keeps Restarting**
+```bash
+# Check logs
+docker logs sglang-llama-8b
+
+# Common causes:
+# - Insufficient GPU memory
+# - Missing HF_TOKEN for gated models
+# - CUDA version mismatch
+```
+
+**FlashInfer Errors**
+```bash
+# Use triton backend instead
+--attention-backend triton
+```
+
+### Health Check Script
+
+```bash
+#!/bin/bash
+# check_sglang.sh
+
+CONTAINERS=("sglang-llama-8b" "sglang-qwen")
+PORTS=(8000 8001)
+
+for i in "${!CONTAINERS[@]}"; do
+  container="${CONTAINERS[$i]}"
+  port="${PORTS[$i]}"
+
+  if curl -sf "http://localhost:${port}/health" > /dev/null; then
+    echo "[OK] ${container} is healthy"
+  else
+    echo "[ERROR] ${container} is not responding"
+    docker logs --tail 20 "${container}"
+  fi
+done
+```
+
+## vLLM Alternative
+
+If SGLang doesn't work for your setup, vLLM is a reliable alternative:
+
+```bash
+docker run -d \
+  --name vllm-llama \
+  --runtime nvidia \
+  --gpus all \
+  -p 8000:8000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=${HF_TOKEN} \
+  --ipc=host \
+  vllm/vllm-openai:latest \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --gpu-memory-utilization 0.9
+```
+
+vLLM advantages:
+- Simpler setup
+- Lower time-to-first-token
+- More mature documentation
+
+## References
+
+- [SGLang Documentation](https://docs.sglang.ai/)
+- [SGLang GitHub](https://github.com/sgl-project/sglang)
+- [SGLang Docker Hub](https://hub.docker.com/r/lmsysorg/sglang)
+- [NVIDIA NGC SGLang](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/sglang)
+- [HuggingFace Model Hub](https://huggingface.co/models)
