@@ -182,7 +182,6 @@ const (
 	DEPLOY_BUILD_IMAGE
 	DEPLOY_PUSH_IMAGE
 	DEPLOY_PULL_IMAGE
-	DEPLOY_TO_K8S
 )
 
 func GetDeployStatusStr(deployStatus int) string {
@@ -198,8 +197,6 @@ func GetDeployStatusStr(deployStatus int) string {
 		statusStr = "pushImage"
 	case DEPLOY_PULL_IMAGE:
 		statusStr = "pullImage"
-	case DEPLOY_TO_K8S:
-		statusStr = "deployToK8s"
 	}
 	return statusStr
 }

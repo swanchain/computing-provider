@@ -43,7 +43,6 @@ func main() {
 			ubiTaskCmd,
 			contractCmd,
 			priceCmd,
-			networkCmd,
 			ubiZeroCmd,
 			researchCmd,
 		},

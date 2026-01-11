@@ -31,10 +31,9 @@ type DeployJobParam struct {
 	Image               string
 	Cmd                 []string
 	Ports               []int
-	HealthPath          string
-	Envs                []string
-	NeedResource        container.Resources
-	K8sResourceForImage K8sResourceForImage
+	HealthPath   string
+	Envs         []string
+	NeedResource container.Resources
 
 	BuildImagePath string
 	BuildImageName string

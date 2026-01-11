@@ -190,19 +190,6 @@ func JobOnChainStatus(status int) string {
 	return str
 }
 
-type K8sResourceForImage struct {
-	Cpu       int64
-	Memory    float64
-	Storage   float64
-	Gpus      []ReqGpu `json:"gpus"`
-	FilC2Flag string
-}
-
-type ReqGpu struct {
-	GpuModel string `json:"gpu_model"`
-	GPU      int    `json:"count"`
-}
-
 // =========
 
 type ZkTaskReq struct {
