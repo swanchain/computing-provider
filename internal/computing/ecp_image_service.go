@@ -1125,7 +1125,7 @@ func CheckWalletWhiteListForEcp(walletAddress string) bool {
 	}
 	whiteList, err := getWalletList(walletWhiteListUrl)
 	if err != nil {
-		logs.GetLogger().Errorf("get whiteList By url failed, url: %s, error: %v", err)
+		logs.GetLogger().Errorf("get whiteList By url failed, url: %s, error: %v", walletWhiteListUrl, err)
 		return true
 	}
 
@@ -1144,7 +1144,7 @@ func CheckWalletBlackListForEcp(walletAddress string) bool {
 	}
 	blackList, err := getWalletList(walletBlackListUrl)
 	if err != nil {
-		logs.GetLogger().Errorf("get blacklist By url failed, url: %s, error: %v", err)
+		logs.GetLogger().Errorf("get blacklist By url failed, url: %s, error: %v", walletBlackListUrl, err)
 		return true
 	}
 

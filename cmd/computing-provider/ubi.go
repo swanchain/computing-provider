@@ -243,7 +243,7 @@ var daemonCmd = &cli.Command{
 		shutdownChan := make(chan struct{})
 		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
 		if err != nil {
-			logs.GetLogger().Fatal("failed to start cp-api endpoint: %s", err)
+			logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
 		}
 		logs.GetLogger().Infof("CP service started successfully, listening on port: %d", conf.GetConfig().API.Port)
 

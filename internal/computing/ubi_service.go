@@ -73,7 +73,7 @@ func DoUbiTaskForDocker(c *gin.Context) {
 
 	var ubiTask models.UBITaskReq
 	if err := c.ShouldBindJSON(&ubiTask); err != nil {
-		logs.GetLogger().Error("failed to parse json, error: %v", err)
+		logs.GetLogger().Errorf("failed to parse json, error: %v", err)
 		c.JSON(http.StatusBadRequest, util.CreateErrorResponse(util.JsonError))
 		return
 	}
@@ -357,7 +357,7 @@ func DoUbiTaskForDocker(c *gin.Context) {
 func DoZkTask(c *gin.Context) {
 	var zkTask models.ZkTaskReq
 	if err := c.ShouldBindJSON(&zkTask); err != nil {
-		logs.GetLogger().Error("failed to parse json, error: %v", err)
+		logs.GetLogger().Errorf("failed to parse json, error: %v", err)
 		c.JSON(http.StatusBadRequest, util.CreateErrorResponse(util.JsonError))
 		return
 	}
@@ -1767,7 +1767,7 @@ func submitTaskToSequencer(proof string, task *models.TaskEntity, timeOut int64,
 			ki = nil
 			taskStub, err := ecp.NewTaskStub(client, ecp.WithTaskContractAddress(task.Contract), ecp.WithTaskPrivateKey(workerPrivateKey))
 			if err != nil {
-				return fmt.Errorf("failed to create ubi task client, taskId: %s, contract: %s, error: %v", task.Id, task.Contract, err)
+				return fmt.Errorf("failed to create ubi task client, taskId: %d, contract: %s, error: %v", task.Id, task.Contract, err)
 			}
 
 			logs.GetLogger().Infof("taskId: %d, failed to submit proof using sequencer, starting to create task contract", task.Id)
@@ -1869,7 +1869,7 @@ func GetCpBalance() {
 	}
 	client, err := contract.GetEthClient(chainUrl)
 	if err != nil {
-		logs.GetLogger().Errorf("failed to dial rpc, cpAccount: %d, error: %v", cpAccountAddress, err)
+		logs.GetLogger().Errorf("failed to dial rpc, cpAccount: %s, error: %v", cpAccountAddress, err)
 		return
 	}
 	client.Close()

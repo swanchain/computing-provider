@@ -156,7 +156,7 @@ var hardwareCmd = &cli.Command{
 	Name:  "hardware",
 	Usage: "Display all hardware information",
 	Action: func(cctx *cli.Context) error {
-		fmt.Println("=== System Hardware Information ===\n")
+		fmt.Println("=== System Hardware Information ===")
 
 		// CPU Info
 		fmt.Println("CPU Information:")
