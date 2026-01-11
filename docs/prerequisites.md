@@ -11,91 +11,124 @@ Before setting up your Computing Provider, ensure your system meets all the nece
 
 ### Hardware Requirements
 
-#### Minimum Requirements
+#### Minimum Requirements (ECP2)
 - **CPU**: 4 cores, 2.0 GHz
 - **RAM**: 8GB
 - **Storage**: 100GB available space
 - **Network**: 100 Mbps internet connection
+- **GPU**: NVIDIA GPU with 8GB+ VRAM
+
+#### Minimum Requirements (ECP - ZK Proofs)
+- **CPU**: 8 cores, 3.0 GHz
+- **RAM**: 16GB
+- **Storage**: 300GB available space (200GB for v28 parameters)
+- **Network**: 100 Mbps internet connection
+- **GPU**: NVIDIA GPU with 8GB+ VRAM and CUDA support
 
 #### Recommended Requirements
 - **CPU**: 8+ cores, 3.0 GHz+
-- **RAM**: 16GB+
+- **RAM**: 32GB+
 - **Storage**: 500GB+ SSD
 - **Network**: 1 Gbps internet connection
-- **GPU**: NVIDIA GPU with CUDA support (for AI tasks)
+- **GPU**: NVIDIA RTX 3090/4090 or A100
 
 ### Software Dependencies
 
 #### Required Software
-- **Go**: Version 1.21+
-- **Docker**: Version 20.10+ (for container runtime)
-- **Kubernetes**: Version 1.24+ (for FCP)
+- **Go**: Version 1.22+
+- **Docker**: Version 20.10+
 - **NVIDIA Drivers**: Latest stable (for GPU support)
+- **NVIDIA Container Toolkit**: For Docker GPU access
 
 #### Optional Software
 - **Nginx**: For reverse proxy
 - **Certbot**: For SSL certificate management
-- **Prometheus**: For monitoring
 
 ## Network Requirements
 
 ### Public IP Address
 - A static public IP address is required
-- Port forwarding may be necessary for certain configurations
+- Port forwarding: Map internal port 8085 to public IP
 
-### Domain Name
-- A domain name in the format `*.example.com`
+### Domain Name (ECP2)
+- A wildcard domain (e.g., `*.example.com`) for ECP2 services
 - DNS records properly configured
 
-### SSL Certificate
-- Valid SSL certificate for your domain
-- Can be obtained from Let's Encrypt or other providers
+### Ports
+- **8085**: Provider API port
+- **40000-40050**: Container port range (configurable)
 
-## Kubernetes Requirements (FCP Only)
+## Docker Setup
 
-### Container Runtime
-Choose one of the following:
+### Install Docker
 
-#### Option 1: Docker + cri-dockerd (Recommended)
 ```bash
 # Install Docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 
-# Install cri-dockerd
-# Follow instructions at: https://github.com/Mirantis/cri-dockerd
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Start Docker service
+sudo systemctl enable docker
+sudo systemctl start docker
 ```
 
-#### Option 2: Docker + Containerd
+### Install NVIDIA Container Toolkit
+
 ```bash
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+# Add NVIDIA repository
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Install Containerd
-# Follow instructions at: https://github.com/containerd/containerd/blob/main/docs/getting-started.md
+# Install toolkit
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 ```
 
-### Kubernetes Cluster
-- **Version**: 1.24.0+
-- **Network Plugin**: Calico, Flannel, or Weave Net
-- **NVIDIA Plugin**: For GPU support
-- **Ingress Controller**: nginx-ingress
+### Verify GPU Access in Docker
 
-## Security Requirements
+```bash
+# Test GPU access
+docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+```
 
-### Firewall Configuration
-- **Inbound Ports**: 80, 443, 6443 (Kubernetes API)
-- **Outbound**: All traffic allowed
+## ECP Prerequisites (ZK Proofs)
 
-### User Permissions
-- **Docker Group**: User must be in docker group
-- **Kubernetes**: Proper RBAC configuration
-- **File Permissions**: Appropriate file ownership
+### Download v28 Parameters
+
+The v28 parameters are required for ZK proof generation (~200GB):
+
+```bash
+# Set parameter path
+export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
+mkdir -p $FIL_PROOFS_PARAMETER_CACHE
+
+# Download parameters (see Filecoin documentation for download instructions)
+```
+
+### Configure GPU for ZK Proofs
+
+```bash
+# Set GPU configuration
+export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"
+# Example: "GeForce RTX 4090:16384"
+
+# Add to shell profile
+echo 'export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"' >> ~/.bashrc
+```
 
 ## Environment Setup
 
 ### Environment Variables
+
 ```bash
 # Set the computing provider path
 export CP_PATH=~/.swan/computing
@@ -105,15 +138,16 @@ echo "export CP_PATH=~/.swan/computing" >> ~/.bashrc
 ```
 
 ### Directory Structure
+
 ```bash
 # Create necessary directories
 mkdir -p ~/.swan/computing
-mkdir -p /docker_repo  # For Docker registry (optional)
 ```
 
 ## Verification Commands
 
 ### Check System Requirements
+
 ```bash
 # Check Go version
 go version
@@ -121,8 +155,8 @@ go version
 # Check Docker
 docker --version
 
-# Check Kubernetes (if installed)
-kubectl version --client
+# Check Docker GPU access
+docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 
 # Check available memory
 free -h
@@ -134,27 +168,31 @@ df -h
 ping -c 3 google.com
 ```
 
-### Check GPU Support (if applicable)
+### Check GPU Support
+
 ```bash
 # Check NVIDIA drivers
 nvidia-smi
 
 # Check CUDA installation
 nvcc --version
+
+# Verify GPU in Docker
+docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ## Pre-installation Checklist
 
-- [ ] Go 1.21+ installed and in PATH
+- [ ] Go 1.22+ installed and in PATH
 - [ ] Docker installed and running
-- [ ] Kubernetes cluster configured (FCP only)
+- [ ] NVIDIA drivers installed
+- [ ] NVIDIA Container Toolkit installed
+- [ ] Docker GPU access verified
 - [ ] Public IP address available
-- [ ] Domain name configured
-- [ ] SSL certificate obtained
-- [ ] Firewall configured
-- [ ] User permissions set correctly
+- [ ] Domain name configured (for ECP2)
 - [ ] Environment variables configured
 - [ ] Required directories created
+- [ ] v28 parameters downloaded (for ECP ZK proofs)
 
 ## Next Steps
 
@@ -162,4 +200,4 @@ Once all prerequisites are met:
 
 1. [Install the Computing Provider](installation.md)
 2. [Configure your environment](configuration.md)
-3. [Set up your wallet](wallet.md) 
+3. [Get started](getting-started.md)

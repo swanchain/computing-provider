@@ -12,10 +12,7 @@ computing-provider state
 computing-provider info
 
 # Check wallet status
-computing-provider wallet status
-
-# Check network connectivity
-computing-provider network status
+computing-provider wallet list
 
 # Check system resources
 htop
@@ -44,14 +41,11 @@ echo $CP_PATH
 ls -la ~/.swan/computing/
 
 # Initialize if missing
-computing-provider init
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 ```
 
 **Check Configuration**
 ```bash
-# Validate configuration
-computing-provider config validate
-
 # Check configuration file
 cat ~/.swan/computing/config.toml
 
@@ -68,7 +62,52 @@ chmod -R 755 ~/.swan/computing/
 ls -la ~/.swan/computing/
 ```
 
-### 2. Wallet Issues
+### 2. Docker Issues
+
+#### Symptoms
+- "permission denied...docker.sock" errors
+- Container startup failures
+- GPU not accessible in containers
+
+#### Solutions
+
+**Docker Permission Error**
+```bash
+# Add user to docker group
+sudo usermod -aG docker $USER
+
+# Apply group changes without logout
+newgrp docker
+
+# Or run with sg
+sg docker -c "computing-provider ubi daemon"
+```
+
+**Container Already Exists**
+```bash
+# Remove existing container
+docker rm -f resource-exporter
+```
+
+**GPU Not Available in Docker**
+```bash
+# Check NVIDIA Container Toolkit installation
+nvidia-container-cli info
+
+# Reinstall NVIDIA Container Toolkit
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# Test GPU access
+docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
+```
+
+### 3. Wallet Issues
 
 #### Symptoms
 - "Wallet not found" errors
@@ -82,11 +121,8 @@ ls -la ~/.swan/computing/
 # List wallets
 computing-provider wallet list
 
-# Check wallet status
-computing-provider wallet status
-
 # Verify addresses
-computing-provider account info
+computing-provider info
 ```
 
 **Reinitialize Wallet**
@@ -94,27 +130,22 @@ computing-provider account info
 # Backup existing wallet (if needed)
 cp -r ~/.swan/computing/keystore ~/.swan/computing/keystore.backup
 
-# Reinitialize wallet
-computing-provider wallet init
+# Create new wallet
+computing-provider wallet new
 
-# Set addresses again
-computing-provider account set-owner --address <OWNER_ADDRESS>
-computing-provider account set-worker --address <WORKER_ADDRESS>
-computing-provider account set-beneficiary --address <BENEFICIARY_ADDRESS>
+# Or import existing wallet
+computing-provider wallet import <private_key_file>
 ```
 
 **Check Network Configuration**
 ```bash
-# Verify network settings
-computing-provider network status
-
 # Test RPC endpoint
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  <RPC_URL>
+  https://mainnet-rpc.swanchain.io
 ```
 
-### 3. Network Connectivity Issues
+### 4. Network Connectivity Issues
 
 #### Symptoms
 - "Connection refused" errors
@@ -131,45 +162,32 @@ ping -c 3 google.com
 # Test RPC endpoint
 curl -X POST -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  <RPC_URL>
+  https://mainnet-rpc.swanchain.io
 
 # Check firewall settings
 sudo ufw status
 ```
 
 **Update RPC Endpoint**
-```bash
-# Set new RPC endpoint
-computing-provider network set --rpc-url <NEW_RPC_URL>
 
-# Test new endpoint
-computing-provider network status
+Edit `~/.swan/computing/config.toml`:
+```toml
+[RPC]
+SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
 ```
 
-**Check DNS Resolution**
+### 5. Task Execution Issues
+
+#### ECP2/ECP Issues
+
+**CP Account Empty**
 ```bash
-# Test DNS
-nslookup <RPC_HOSTNAME>
-
-# Use IP address if DNS fails
-# Update config.toml with IP address
-```
-
-### 4. Task Execution Issues
-
-#### ECP Issues
-
-**UBI Parameters Missing**
-```bash
-# Check UBI parameters
-ls -la ubi/
-
-# Download parameters
-cd ubi
-./setup.sh
-
-# Verify parameters
-ls -la *.params
+# Create account first
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 4
 ```
 
 **GPU Not Detected**
@@ -197,49 +215,16 @@ htop
 nvidia-smi
 ```
 
-#### FCP Issues
-
-**Kubernetes Cluster Issues**
+**UBI/ZK Parameters Missing (ECP Mode)**
 ```bash
-# Check cluster status
-kubectl cluster-info
+# Set parameter path
+export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
 
-# Check node status
-kubectl get nodes
-
-# Check system pods
-kubectl get pods -n kube-system
-
-# Check events
-kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+# Verify parameters exist
+ls -la $FIL_PROOFS_PARAMETER_CACHE
 ```
 
-**GPU Not Available in Kubernetes**
-```bash
-# Check NVIDIA device plugin
-kubectl get pods -n kube-system | grep nvidia
-
-# Check GPU allocation
-kubectl get nodes -o json | jq '.items[].status.allocatable."nvidia.com/gpu"'
-
-# Reinstall NVIDIA plugin if needed
-kubectl delete -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
-kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
-```
-
-**Pod Scheduling Issues**
-```bash
-# Check pod status
-kubectl get pods --all-namespaces
-
-# Check pod events
-kubectl describe pod <pod-name> -n <namespace>
-
-# Check resource quotas
-kubectl get resourcequota --all-namespaces
-```
-
-### 5. Resource Exhaustion
+### 6. Resource Exhaustion
 
 #### Symptoms
 - Tasks stuck in pending
@@ -254,37 +239,22 @@ kubectl get resourcequota --all-namespaces
 htop
 free -h
 df -h
-
-# Check Kubernetes resources
-kubectl top nodes
-kubectl top pods --all-namespaces
+nvidia-smi
 ```
 
-**Adjust Resource Limits**
+**Clean Up Docker Resources**
 ```bash
-# Update configuration
-# Edit ~/.swan/computing/config.toml
+# Remove stopped containers
+docker container prune
 
-[fcp]
-resource_limits = { cpu = "2", memory = "4Gi" }  # Reduce limits
+# Remove unused images
+docker image prune
 
-# Restart provider
-pkill computing-provider
-nohup computing-provider run >> cp.log 2>&1 &
+# Remove all unused resources
+docker system prune
 ```
 
-**Clean Up Resources**
-```bash
-# Delete completed tasks
-computing-provider task list --fcp --show-completed
-computing-provider task delete <job_uuid> --fcp
-
-# Clean up Kubernetes resources
-kubectl delete pods --field-selector=status.phase=Succeeded --all-namespaces
-kubectl delete pods --field-selector=status.phase=Failed --all-namespaces
-```
-
-### 6. Collateral Issues
+### 7. Collateral Issues
 
 #### Symptoms
 - "Insufficient collateral" errors
@@ -295,27 +265,24 @@ kubectl delete pods --field-selector=status.phase=Failed --all-namespaces
 
 **Check Collateral Status**
 ```bash
-# Check collateral info
-computing-provider collateral info --ecp  # or --fcp
+# Check provider info (includes collateral)
+computing-provider info
 
 # Check account balance
-computing-provider wallet balance <WORKER_ADDRESS>
+computing-provider wallet list
 ```
 
 **Add Collateral**
 ```bash
-# Add collateral
-computing-provider collateral add --ecp --owner <OWNER_ADDRESS> --amount <AMOUNT>
+# Add collateral for ECP/ECP2
+computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
 
 # Verify addition
-computing-provider collateral info --ecp
+computing-provider info
 ```
 
 **Withdrawal Issues**
 ```bash
-# Check withdrawal status
-computing-provider collateral info --ecp
-
 # Request withdrawal (7-day waiting period)
 computing-provider collateral withdraw-request --ecp --owner <OWNER_ADDRESS> <AMOUNT>
 
@@ -338,21 +305,8 @@ free -h
 # Monitor disk I/O
 iotop
 
-# Monitor network
-iftop
-```
-
-**Optimize Configuration**
-```bash
-# Increase resource limits
-# Edit ~/.swan/computing/config.toml
-
-[fcp]
-resource_limits = { cpu = "8", memory = "16Gi" }
-
-# Restart provider
-pkill computing-provider
-nohup computing-provider run >> cp.log 2>&1 &
+# Monitor GPU usage
+nvidia-smi -l 1
 ```
 
 ### High Resource Usage
@@ -367,15 +321,6 @@ ps aux --sort=-%mem | head -10
 
 # Check disk usage
 du -sh /* | sort -hr | head -10
-```
-
-**Optimize Resource Allocation**
-```bash
-# Adjust Kubernetes resource quotas
-kubectl patch resourcequota <quota-name> -p '{"spec":{"hard":{"cpu":"8","memory":"16Gi"}}}'
-
-# Update provider configuration
-# Edit ~/.swan/computing/config.toml
 ```
 
 ## Log Analysis
@@ -400,25 +345,13 @@ grep <job_uuid> cp.log
 **System Logs**
 ```bash
 # Check system logs
-journalctl -u computing-provider -f
+journalctl -f
 
 # Check kernel logs
 dmesg | tail -20
 
-# Check network logs
-journalctl -u systemd-networkd -f
-```
-
-**Kubernetes Logs (FCP)**
-```bash
-# Check pod logs
-kubectl logs <pod-name> -n <namespace>
-
-# Check service logs
-kubectl logs -l app=computing-provider -n <namespace>
-
-# Check ingress logs
-kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
+# Check Docker logs
+docker logs <container_name>
 ```
 
 ## Recovery Procedures
@@ -443,27 +376,13 @@ pkill computing-provider
 rm -rf ~/.swan/computing
 
 # Reinitialize
-computing-provider init
-computing-provider wallet init
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
+
+# Restore wallet
+cp -r ~/.swan/computing.backup/keystore ~/.swan/computing/
 
 # Restore configuration
 cp ~/.swan/computing.backup/config.toml ~/.swan/computing/
-cp -r ~/.swan/computing.backup/keystore ~/.swan/computing/
-```
-
-### Kubernetes Reset (FCP)
-
-**Reset Kubernetes Cluster**
-```bash
-# Reset cluster
-sudo kubeadm reset
-
-# Reinitialize cluster
-sudo kubeadm init --pod-network-cidr=10.244.0.0/16
-
-# Reinstall components
-kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
 ```
 
 ## Getting Help
@@ -475,11 +394,11 @@ kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.
    # System information
    uname -a
    cat /etc/os-release
-   
+
    # Provider information
    computing-provider info
    computing-provider state
-   
+
    # Logs
    tail -100 cp.log
    ```
@@ -492,8 +411,8 @@ kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.
 
 ### Support Channels
 
-- **Discord**: [Swan Chain Community](https://discord.gg/Jd2BFSVCKw)
-- **GitHub**: [Issue Tracker](https://github.com/lagrangedao/go-computing-provider/issues)
+- **Discord**: [Swan Chain Community](https://discord.gg/swanchain)
+- **GitHub**: [Issue Tracker](https://github.com/swanchain/computing-provider-v2/issues)
 - **Documentation**: [Swan Chain Docs](https://docs.swanchain.io)
 
 ### Useful Commands for Support
@@ -503,8 +422,8 @@ kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.
 computing-provider info > debug_info.txt
 computing-provider state >> debug_info.txt
 tail -100 cp.log >> debug_info.txt
-nvidia-smi >> debug_info.txt  # if using GPU
-kubectl get nodes -o wide >> debug_info.txt  # if using FCP
+nvidia-smi >> debug_info.txt
+docker ps -a >> debug_info.txt
 ```
 
 ## Prevention
@@ -514,7 +433,6 @@ kubectl get nodes -o wide >> debug_info.txt  # if using FCP
 1. **Monitor System Resources**
    ```bash
    # Set up monitoring
-   watch -n 30 'htop -n 1'
    watch -n 30 'nvidia-smi'
    ```
 
@@ -528,14 +446,15 @@ kubectl get nodes -o wide >> debug_info.txt  # if using FCP
    ```bash
    # Update system
    sudo apt update && sudo apt upgrade
-   
+
    # Update provider
    git pull
-   make build
+   make clean && make mainnet
+   make install
    ```
 
 4. **Check Logs Regularly**
    ```bash
    # Monitor logs
    tail -f cp.log
-   ``` 
+   ```

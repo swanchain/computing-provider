@@ -4,108 +4,84 @@ This guide covers all configuration aspects of the Go Computing Provider.
 
 ## Configuration Files
 
-The Computing Provider uses several configuration files located in your repository directory (`~/.swan/computing` by default).
+The Computing Provider uses configuration files located in your repository directory (`~/.swan/computing` by default).
 
 ### Main Configuration File
 
-The main configuration file is `config.toml`. You can use the sample configuration as a starting point:
+The main configuration file is `config.toml`. Initialize it with:
 
 ```bash
-# Copy the sample configuration
-cp config.toml.sample ~/.swan/computing/config.toml
+# Initialize computing provider repository
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 ```
 
 ## Configuration Structure
 
-### Basic Configuration
+### API Configuration
 
 ```toml
-# config.toml
-[server]
-host = "0.0.0.0"
-port = 8080
-ssl_enabled = true
-ssl_cert = "/path/to/cert.pem"
-ssl_key = "/path/to/key.pem"
-
-[provider]
-type = "fcp"  # or "ecp"
-name = "my-computing-provider"
-description = "My computing provider description"
-
-[network]
-chain_id = 1
-rpc_url = "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-ws_url = "wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID"
-
-[wallet]
-owner_address = "0x..."
-worker_address = "0x..."
-beneficiary_address = "0x..."
+[API]
+Port = 8085
+MultiAddress = "/ip4/<PUBLIC_IP>/tcp/<PORT>"
+Domain = "*.example.com"        # Domain for single-port services
+NodeName = "my-computing-provider"
+PortRange = ["40000-40050"]     # Ports for multi-port containers
+Pricing = true
 ```
 
-### Provider-Specific Configuration
-
-#### FCP Configuration
+### UBI Configuration (ZK Proofs)
 
 ```toml
-[fcp]
-kubernetes_config = "/path/to/kubeconfig"
-namespace = "default"
-resource_limits = { cpu = "4", memory = "8Gi" }
-gpu_enabled = true
-nvidia_runtime = "nvidia"
-
-[fcp.storage]
-type = "local"
-path = "/data/storage"
-
-[fcp.network]
-ingress_enabled = true
-ingress_class = "nginx"
+[UBI]
+UbiEnginePk = ""                # ZK engine public key (auto-configured)
+EnableSequencer = true          # Submit proofs to Sequencer (reduces gas)
+AutoChainProof = false          # Fallback to chain when sequencer unavailable
+VerifySign = true
 ```
 
-#### ECP Configuration
+### RPC Configuration
 
 ```toml
-[ecp]
-task_types = ["fil-c2"]  # Supported task types
-gpu_requirements = { memory = "8Gi", compute_capability = "7.0" }
+[RPC]
+SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
+```
 
-[ecp.ubi]
-enabled = true
-param_path = "/path/to/ubi/params"
+### Registry Configuration (Optional)
+
+```toml
+[Registry]
+ServerAddress = ""              # Docker registry for image storage
+UserName = ""
+Password = ""
+```
+
+### ECP2 Configuration (Inference)
+
+```toml
+[ECP2]
+Enable = false                  # Enable ECP2/Swan Inference mode
+ServiceURL = "http://localhost:8080"
+WebSocketURL = "ws://localhost:8081"
+Models = []                     # Models this provider serves
 ```
 
 ## Environment Variables
 
-You can override configuration values using environment variables:
+The CLI respects the `CP_PATH` environment variable:
 
 ```bash
-# Server configuration
-export CP_SERVER_HOST="0.0.0.0"
-export CP_SERVER_PORT="8080"
-export CP_SERVER_SSL_ENABLED="true"
+# Set repository path
+export CP_PATH=~/.swan/computing
 
-# Provider configuration
-export CP_PROVIDER_TYPE="fcp"
-export CP_PROVIDER_NAME="my-provider"
-
-# Network configuration
-export CP_NETWORK_CHAIN_ID="1"
-export CP_NETWORK_RPC_URL="https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-
-# Wallet configuration
-export CP_WALLET_OWNER_ADDRESS="0x..."
-export CP_WALLET_WORKER_ADDRESS="0x..."
-export CP_WALLET_BENEFICIARY_ADDRESS="0x..."
+# Or use flag
+computing-provider --repo /custom/path init
 ```
 
 ## Wallet Configuration
 
 ### Address Types
 
-The Computing Provider uses three different wallet addresses for security:
+The Computing Provider uses three different wallet addresses:
 
 1. **Owner Address**: Controls account settings and permissions
 2. **Worker Address**: Used for submitting proofs and paying gas fees
@@ -114,161 +90,114 @@ The Computing Provider uses three different wallet addresses for security:
 ### Setting Up Wallets
 
 ```bash
-# Initialize wallet
-computing-provider wallet init
+# Create new wallet
+computing-provider wallet new
 
 # Import existing wallet
-computing-provider wallet import --private-key <PRIVATE_KEY>
+computing-provider wallet import <private_key_file>
 
-# Set addresses
-computing-provider account set-owner --address <OWNER_ADDRESS>
-computing-provider account set-worker --address <WORKER_ADDRESS>
-computing-provider account set-beneficiary --address <BENEFICIARY_ADDRESS>
+# List wallets
+computing-provider wallet list
+```
+
+## Account Configuration
+
+### Create Account
+
+```bash
+# For ECP2 (inference) - task type 4
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 4
+
+# For ECP (ZK proofs) - task types 1,2,4
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 1,2,4
+```
+
+### Add Collateral
+
+```bash
+# Add collateral for ECP/ECP2
+computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
 ```
 
 ## Network Configuration
 
 ### Supported Networks
 
-- **Mainnet**: Chain ID 1
-- **Testnet**: Chain ID 11155111 (Sepolia)
-- **Local**: Chain ID 1337
+- **Mainnet**: Chain ID 254
+- **Testnet**: Chain ID 20241133
 
-### RPC Configuration
+### RPC Endpoints
 
 ```toml
-[network]
-chain_id = 1
-rpc_url = "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-ws_url = "wss://mainnet.infura.io/ws/v3/YOUR_PROJECT_ID"
-gas_limit = 3000000
-gas_price = "20000000000"  # 20 Gwei
+[RPC]
+# Mainnet
+SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
+
+# Testnet
+SWAN_CHAIN_RPC = "https://testnet-rpc.swanchain.io"
 ```
 
-## Resource Configuration
+## Pricing Configuration
 
-### Hardware Resources
+Resource pricing is configured in `$CP_PATH/price.toml`:
 
 ```toml
-[resources]
-cpu_cores = 8
-memory_gb = 16
-storage_gb = 500
-gpu_count = 1
-gpu_memory_gb = 8
+[pricing]
+cpu_per_hour = "0.01"           # Price per CPU core per hour
+memory_per_hour = "0.005"       # Price per GB RAM per hour
+gpu_per_hour = "0.50"           # Price per GPU per hour
+storage_per_hour = "0.001"      # Price per GB storage per hour
 ```
 
-### Resource Limits
+## ECP2 Mode Configuration
+
+For AI inference with Swan Inference:
 
 ```toml
-[limits]
-max_concurrent_tasks = 10
-max_cpu_per_task = "4"
-max_memory_per_task = "8Gi"
-max_gpu_per_task = 1
+[API]
+Domain = "*.example.com"        # Wildcard domain for services
+PortRange = ["40000-40050", "40060"]
+
+[ECP2]
+Enable = true
+ServiceURL = "https://inference.swanchain.io"
+WebSocketURL = "wss://inference.swanchain.io/ws"
 ```
 
-## Security Configuration
+## ECP Mode Configuration (ZK Proofs)
 
-### SSL/TLS Configuration
+For ZK proof generation:
 
-```toml
-[ssl]
-enabled = true
-cert_file = "/path/to/cert.pem"
-key_file = "/path/to/key.pem"
-ca_file = "/path/to/ca.pem"  # Optional
+```bash
+# Required environment variables
+export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
+export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"
 ```
 
-### Authentication
-
 ```toml
-[auth]
-enabled = true
-jwt_secret = "your-jwt-secret"
-session_timeout = 3600  # seconds
-```
-
-## Monitoring Configuration
-
-### Metrics
-
-```toml
-[monitoring]
-enabled = true
-metrics_port = 9090
-prometheus_enabled = true
-health_check_interval = 30  # seconds
-```
-
-### Logging
-
-```toml
-[logging]
-level = "info"  # debug, info, warn, error
-format = "json"  # json, text
-file = "/var/log/computing-provider.log"
-max_size = 100  # MB
-max_backups = 3
+[UBI]
+EnableSequencer = true
+AutoChainProof = false
 ```
 
 ## Validation
 
-Validate your configuration:
+Verify your configuration:
 
 ```bash
-# Validate configuration file
-computing-provider config validate
+# Check provider information
+computing-provider info
 
-# Check configuration
-computing-provider config show
-```
-
-## Configuration Examples
-
-### Minimal FCP Configuration
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 8080
-
-[provider]
-type = "fcp"
-name = "my-fcp"
-
-[network]
-chain_id = 1
-rpc_url = "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-
-[wallet]
-owner_address = "0x..."
-worker_address = "0x..."
-beneficiary_address = "0x..."
-```
-
-### Minimal ECP Configuration
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 8080
-
-[provider]
-type = "ecp"
-name = "my-ecp"
-
-[network]
-chain_id = 1
-rpc_url = "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
-
-[wallet]
-owner_address = "0x..."
-worker_address = "0x..."
-beneficiary_address = "0x..."
-
-[ecp]
-task_types = ["fil-c2"]
+# Check provider state
+computing-provider state
 ```
 
 ## Troubleshooting Configuration
@@ -280,23 +209,20 @@ task_types = ["fil-c2"]
 3. **Permission errors**: Ensure proper file permissions
 4. **Network connectivity**: Verify RPC endpoints
 
-### Configuration Commands
+### Debug Commands
 
 ```bash
-# Show current configuration
-computing-provider config show
+# Show provider info
+computing-provider info
 
-# Validate configuration
-computing-provider config validate
-
-# Generate sample configuration
-computing-provider config generate
+# Show provider state
+computing-provider state
 ```
 
 ## Next Steps
 
 After configuring your Computing Provider:
 
-1. [Set up your wallet](wallet.md)
-2. [Initialize your account](getting-started.md)
-3. [Start the provider](getting-started.md) 
+1. [Set up your wallet](cli/wallet.md)
+2. [Start the provider](getting-started.md)
+3. [Monitor tasks](cli/task.md)

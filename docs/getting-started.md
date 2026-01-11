@@ -7,25 +7,25 @@ This guide will walk you through the complete setup process for your Computing P
 1. [Install Dependencies](prerequisites.md)
 2. [Install Computing Provider](installation.md)
 3. [Configure Your Environment](configuration.md)
-4. [Set Up Your Wallet](wallet.md)
-5. [Choose Provider Type](#choose-provider-type)
+4. [Set Up Your Wallet](#set-up-wallet)
+5. [Choose Provider Mode](#choose-provider-mode)
 6. [Start Your Provider](#start-your-provider)
 
-## Choose Provider Type
+## Choose Provider Mode
 
-The Computing Provider supports two types of providers:
+The Computing Provider supports two modes:
 
-### Edge Computing Provider (ECP)
-- **Best for**: ZK-SNARK proof generation, low-latency tasks
-- **Hardware**: GPU with 8GB+ VRAM, 8GB+ RAM
-- **Setup**: Simpler setup, no Kubernetes required
-- **Tasks**: Filecoin C2 proofs, future ZK proof types
+### ECP2 - AI Inference (Default)
+- **Best for**: AI model inference, containerized workloads
+- **Hardware**: GPU with 8GB+ VRAM, Docker with NVIDIA Container Toolkit
+- **Setup**: Simple Docker-based setup
+- **Tasks**: AI inference via Swan Inference marketplace
 
-### Fog Computing Provider (FCP)
-- **Best for**: AI training, data processing, scalable workloads
-- **Hardware**: 16GB+ RAM, 500GB+ storage, GPU recommended
-- **Setup**: Requires Kubernetes cluster
-- **Tasks**: AI model training, inference, custom workloads
+### ECP - ZK Proof Generation
+- **Best for**: ZK-SNARK proof generation, FIL-C2 proofs
+- **Hardware**: GPU with 8GB+ VRAM, 200GB+ storage for v28 parameters
+- **Setup**: Requires v28 parameter files
+- **Tasks**: Filecoin C2 proofs, mining proofs
 
 ## Initial Setup
 
@@ -33,7 +33,7 @@ The Computing Provider supports two types of providers:
 
 ```bash
 # Initialize computing provider repository
-computing-provider init
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 
 # Verify initialization
 ls -la ~/.swan/computing/
@@ -42,91 +42,128 @@ ls -la ~/.swan/computing/
 ### 2. Set Up Wallet
 
 ```bash
-# Initialize wallet
-computing-provider wallet init
+# Create new wallet
+computing-provider wallet new
 
-# Import existing wallet (optional)
-computing-provider wallet import --private-key <PRIVATE_KEY>
+# Or import existing wallet
+computing-provider wallet import <private_key_file>
 
 # List wallets
 computing-provider wallet list
 ```
 
-### 3. Configure Addresses
+### 3. Create Account
 
 ```bash
-# Set owner address (controls account settings)
-computing-provider account set-owner --address <OWNER_ADDRESS>
+# For ECP2 (inference) - task type 4
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 4
 
-# Set worker address (pays gas fees, submits proofs)
-computing-provider account set-worker --address <WORKER_ADDRESS>
-
-# Set beneficiary address (receives earnings)
-computing-provider account set-beneficiary --address <BENEFICIARY_ADDRESS>
+# For ECP (ZK proofs) - task types 1,2,4
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 1,2,4
 ```
 
-### 4. Configure Network
+### 4. Add Collateral
 
 ```bash
-# For mainnet
-computing-provider network set --chain-id 1
+# Add collateral
+computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
 
-# For testnet (Sepolia)
-computing-provider network set --chain-id 11155111
+# Check collateral status
+computing-provider info
 ```
 
-## Provider-Specific Setup
+## ECP2 Setup (AI Inference)
 
-### ECP Setup
+### Prerequisites
+
+1. **Install Docker with NVIDIA Container Toolkit**:
 
 ```bash
-# Set provider type to ECP
-computing-provider account set-type --type ecp
-
-# Enable Filecoin C2 tasks
-computing-provider account changeTaskTypes --ownerAddress <OWNER_ADDRESS> 1
-
-# Download UBI parameters (required for ZK proofs)
-cd ubi
-./setup.sh
+# Install NVIDIA Container Toolkit
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 ```
 
-### FCP Setup
+2. **Configure domain and ports** in `$CP_PATH/config.toml`:
 
-```bash
-# Set provider type to FCP
-computing-provider account set-type --type fcp
-
-# Enable FCP tasks
-computing-provider account changeTaskTypes --ownerAddress <OWNER_ADDRESS> 1
-
-# Verify Kubernetes cluster
-kubectl cluster-info
-kubectl get nodes
+```toml
+[API]
+Domain = "*.example.com"
+PortRange = ["40000-40050", "40060"]
 ```
 
-## Collateral Setup
-
-Both provider types require collateral to participate in the network.
-
-### Check Requirements
+### Start ECP2 Provider
 
 ```bash
-# For ECP
-computing-provider collateral info --ecp
+# Set environment variable
+export CP_PATH=~/.swan/computing
 
-# For FCP
-computing-provider collateral info --fcp
+# Start the provider
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
+
+# Check if running
+ps aux | grep computing-provider
 ```
 
-### Add Collateral
+## ECP Setup (ZK Proofs)
+
+### Prerequisites
+
+1. **Download v28 parameters** (~200GB):
 
 ```bash
-# For ECP
-computing-provider collateral add --ecp --owner <OWNER_ADDRESS> --amount <AMOUNT>
+# Set parameter path
+export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
 
-# For FCP
-computing-provider collateral add --fcp --owner <OWNER_ADDRESS> --amount <AMOUNT>
+# Download parameters (see Filecoin documentation)
+```
+
+2. **Configure GPU**:
+
+```bash
+export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"
+# Example: "GeForce RTX 4090:16384"
+```
+
+### Configure Sequencer
+
+Edit `$CP_PATH/config.toml`:
+
+```toml
+[UBI]
+EnableSequencer = true
+AutoChainProof = false
+```
+
+### Add Sequencer Deposit
+
+```bash
+computing-provider sequencer add --from <OWNER_ADDRESS> <AMOUNT>
+```
+
+### Start ECP Provider
+
+```bash
+# Set environment variables
+export CP_PATH=~/.swan/computing
+export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
+export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
+
+# Start the provider
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
 ```
 
 ## Start Your Provider
@@ -139,9 +176,6 @@ computing-provider info
 
 # Check provider state
 computing-provider state
-
-# Check wallet status
-computing-provider wallet status
 ```
 
 ### 2. Start the Service
@@ -151,7 +185,7 @@ computing-provider wallet status
 export CP_PATH=~/.swan/computing
 
 # Start the provider
-nohup computing-provider run >> cp.log 2>&1 &
+nohup computing-provider ubi daemon >> cp.log 2>&1 &
 
 # Check if it's running
 ps aux | grep computing-provider
@@ -167,37 +201,36 @@ tail -f cp.log
 computing-provider state
 
 # List tasks
-computing-provider task list --ecp  # or --fcp
+computing-provider task list
 ```
 
-## First Tasks
+## Monitoring Tasks
 
-### ECP First Task
-
-1. **Wait for UBI Tasks**: ECP providers automatically receive UBI (Universal Basic Income) tasks
-2. **Monitor Task Status**: Check task list for new tasks
-3. **Verify Completion**: Tasks are automatically verified on-chain
+### View Task List
 
 ```bash
-# Monitor for new tasks
-watch -n 30 'computing-provider task list --ecp --tail 5'
+# List all tasks
+computing-provider task list
 
-# Check task details
-computing-provider task get <job_uuid> --ecp
+# Show recent tasks
+computing-provider task list --tail 10
 ```
 
-### FCP First Task
-
-1. **Register with Orchestrator**: FCP providers register with the Swan Orchestrator
-2. **Receive Tasks**: Tasks are assigned based on your capabilities
-3. **Execute Tasks**: Kubernetes manages task execution
+### View Task Details
 
 ```bash
-# Monitor for new tasks
-watch -n 30 'computing-provider task list --fcp --tail 5'
+# Get task details
+computing-provider task get <job_uuid>
+```
 
-# Check task details
-computing-provider task get <job_uuid> --fcp
+### View UBI Tasks (ZK Proofs)
+
+```bash
+# List UBI tasks
+computing-provider ubi list
+
+# Show recent UBI tasks
+computing-provider ubi list --tail 10
 ```
 
 ## Verification and Monitoring
@@ -210,9 +243,6 @@ computing-provider info
 
 # Provider state
 computing-provider state
-
-# Network status
-computing-provider network status
 ```
 
 ### Monitor Performance
@@ -220,13 +250,10 @@ computing-provider network status
 ```bash
 # System resources
 htop
-nvidia-smi  # if using GPU
+nvidia-smi  # GPU monitoring
 
-# Task completion
-computing-provider task list --ecp --show-completed  # or --fcp
-
-# Earnings
-computing-provider collateral info --ecp  # or --fcp
+# Docker containers
+docker ps -a
 ```
 
 ### Check Logs
@@ -235,56 +262,46 @@ computing-provider collateral info --ecp  # or --fcp
 # Provider logs
 tail -f cp.log
 
-# System logs
-journalctl -u computing-provider -f
-
-# Kubernetes logs (FCP only)
-kubectl logs -f deployment/computing-provider
+# Docker container logs
+docker logs <container_name>
 ```
 
 ## Troubleshooting
 
 ### Common Startup Issues
 
-1. **Configuration Errors**
+1. **Docker Permission Error**
    ```bash
-   # Validate configuration
-   computing-provider config validate
-   
-   # Check configuration
-   computing-provider config show
+   # Add user to docker group
+   sudo usermod -aG docker $USER
+   # Or run with sg
+   sg docker -c "computing-provider ubi daemon"
    ```
 
-2. **Wallet Issues**
+2. **NVIDIA Container Toolkit Not Found**
    ```bash
-   # Check wallet status
-   computing-provider wallet status
-   
-   # Verify addresses
-   computing-provider account info
+   # Reinstall nvidia-container-toolkit
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
    ```
 
-3. **Network Issues**
+3. **Container Already Exists**
    ```bash
-   # Check network connectivity
-   computing-provider network status
-   
-   # Test RPC endpoint
-   curl -X POST -H "Content-Type: application/json" --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' <RPC_URL>
+   # Remove existing container
+   docker rm -f resource-exporter
    ```
 
-4. **Resource Issues**
+4. **CP Account Empty**
    ```bash
-   # Check system resources
-   free -h
-   df -h
-   nvidia-smi  # if using GPU
+   # Create account first
+   computing-provider account create ...
    ```
 
 ### Getting Help
 
-- [Discord Community](https://discord.gg/Jd2BFSVCKw)
-- [GitHub Issues](https://github.com/lagrangedao/go-computing-provider/issues)
+- [Discord Community](https://discord.gg/swanchain)
+- [GitHub Issues](https://github.com/swanchain/computing-provider-v2/issues)
 - [Troubleshooting Guide](troubleshooting.md)
 
 ## Next Steps
@@ -295,13 +312,3 @@ After successfully starting your provider:
 2. **Optimize Resources**: Adjust resource allocation based on usage
 3. **Scale Up**: Consider adding more hardware for increased capacity
 4. **Join Community**: Connect with other providers on Discord
-
-## Provider Status Dashboard
-
-Check your provider status at: [https://provider.swanchain.io](https://provider.swanchain.io)
-
-This dashboard shows:
-- Provider registration status
-- Task completion statistics
-- Earnings and collateral information
-- Network health metrics 
