@@ -6,7 +6,18 @@ Welcome to the comprehensive documentation for the Go Computing Provider, a dece
 
 The Go Computing Provider is a command-line tool that enables individuals and organizations to participate in Swan Chain's decentralized computing network by offering computational resources such as processing power (CPU and GPU), memory, storage, and bandwidth.
 
+**Key Features:**
+- Docker-based deployment (no Kubernetes required)
+- NVIDIA GPU support via Container Toolkit
+- AI inference and ZK proof generation
+- Cross-platform support (Linux, macOS including Apple Silicon)
+
 ## Provider Modes
+
+| Mode | Task Type | Description |
+|------|-----------|-------------|
+| **ECP2** (Default) | 4 | Deploy AI inference containers via Docker |
+| ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining ZK-SNARK proofs |
 
 ### ECP2 - Edge Computing Provider 2 (Default)
 The primary mode for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. ECP2 connects to **Swan Inference**, the decentralized inference marketplace.
@@ -35,6 +46,11 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 - [Command Line Interface](cli/README.md) - Complete CLI reference
 - [Task Management](cli/task.md) - Managing computing tasks
 - [Wallet Management](cli/wallet.md) - Wallet operations and security
+
+### Hardware & Research
+- `computing-provider research hardware` - Display system hardware info
+- `computing-provider research gpu-info` - Display GPU information
+- `computing-provider research gpu-benchmark` - Run GPU benchmark tests
 
 ### Advanced Topics
 - [SGLang Deployment](sglang-deployment.md) - Deploy SGLang for inference
