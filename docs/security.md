@@ -364,20 +364,17 @@ computing-provider collateral info --ecp
 - `trivy`: Vulnerability scanning
 - `falco`: Runtime security monitoring
 - `opa`: Policy enforcement
-- `kyverno`: Kubernetes policy engine
 
 ## Resources
 
 ### Security Documentation
 
 - [Swan Chain Security Guidelines](https://docs.swanchain.io/security)
-- [Kubernetes Security Best Practices](https://kubernetes.io/docs/concepts/security/)
 - [Docker Security Best Practices](https://docs.docker.com/develop/security/)
 
 ### Security Communities
 
 - [Swan Chain Discord](https://discord.gg/Jd2BFSVCKw)
-- [Kubernetes Security SIG](https://github.com/kubernetes/community/tree/master/sig-security)
 - [Docker Security](https://www.docker.com/security)
 
 ### Security Tools
