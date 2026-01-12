@@ -3,6 +3,7 @@ package computing
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -152,11 +153,19 @@ type ECP2Client struct {
 // NewECP2Client creates a new ECP2 client
 func NewECP2Client(providerID, workerAddr string) *ECP2Client {
 	config := conf.GetConfig()
+
+	// Allow env var override for dev mode
+	wsURL := config.ECP2.WebSocketURL
+	if envURL := os.Getenv("ECP2_WS_URL"); envURL != "" {
+		wsURL = envURL
+		logs.GetLogger().Infof("Using ECP2_WS_URL env override: %s", wsURL)
+	}
+
 	return &ECP2Client{
 		providerID: providerID,
 		workerAddr: workerAddr,
 		models:     config.ECP2.Models,
-		wsURL:      config.ECP2.WebSocketURL,
+		wsURL:      wsURL,
 		send:       make(chan []byte, 256),
 		stopCh:     make(chan struct{}),
 	}
