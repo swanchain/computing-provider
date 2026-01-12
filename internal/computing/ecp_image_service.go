@@ -1,6 +1,5 @@
 package computing
 
-import "C"
 import (
 	"bufio"
 	"context"
