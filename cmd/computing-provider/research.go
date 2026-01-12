@@ -279,7 +279,7 @@ func runMemoryBenchmark(gpuIndex int, iterations int) (float64, error) {
 	}
 
 	var totalBandwidth float64
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		cmd := exec.Command("bandwidthTest", "--device="+strconv.Itoa(gpuIndex))
 		output, err := cmd.Output()
 		if err != nil {

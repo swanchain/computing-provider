@@ -7,6 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
@@ -17,14 +27,6 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/swanchain/computing-provider-v2/util"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const traefikListenPortMapHost = 9000
@@ -65,7 +67,7 @@ func (*ImageJobService) CheckJobCondition(c *gin.Context) {
 
 	receive, _, _, _, _, _, _, err := checkResourceForImageAndMutilGpu(job.Uuid, job.Resource)
 	if receive {
-		c.JSON(http.StatusOK, util.CreateSuccessResponse(map[string]interface{}{
+		c.JSON(http.StatusOK, util.CreateSuccessResponse(map[string]any{
 			"price": totalCost,
 		}))
 	} else {
@@ -358,15 +360,17 @@ func (imageJob *ImageJobService) DeployJob(c *gin.Context) {
 			}
 		}
 	} else {
-		var gNameStr string
+		var gNameBuilder strings.Builder
 		if len(job.Resource.Gpus) > 0 {
 			for _, g := range job.Resource.Gpus {
 				if g.GPUModel == "" || g.GPU == 0 {
 					continue
 				}
-				gNameStr += g.GPUModel + "="
+				gNameBuilder.WriteString(g.GPUModel)
+				gNameBuilder.WriteString("=")
 			}
 		}
+		gNameStr := gNameBuilder.String()
 
 		if err = NewEcpJobService().SaveEcpJobEntity(&models.EcpJobEntity{
 			Uuid:          job.Uuid,
@@ -662,7 +666,7 @@ func (*ImageJobService) DeployMining(c *gin.Context, deployJob models.DeployJobP
 		}
 	}()
 
-	c.JSON(http.StatusOK, util.CreateSuccessResponse(map[string]interface{}{
+	c.JSON(http.StatusOK, util.CreateSuccessResponse(map[string]any{
 		"uuid":    deployJob.Uuid,
 		"price":   totalCost,
 		"log_url": logUrl,
@@ -797,11 +801,11 @@ func handleMultiPort(ports []int) (map[nat.Port][]nat.PortBinding, []models.Port
 	}
 	var usedPort = make(map[int]int)
 	var count int
-	for i := 0; i < len(ports); i++ {
-		for j := 0; i < len(portRange); j++ {
-			if _, ok := usedPort[portRange[j]]; !ok {
-				if util.IsPortAvailable(portRange[j]) {
-					usedPort[portRange[j]] = ports[i]
+	for _, port := range ports {
+		for _, rangePort := range portRange {
+			if _, ok := usedPort[rangePort]; !ok {
+				if util.IsPortAvailable(rangePort) {
+					usedPort[rangePort] = port
 					count++
 					break
 				}
@@ -1109,11 +1113,7 @@ func BytesToHumanReadable(bytes int64) string {
 func checkGpu(gpuName, index string, taskUseGpu map[string][]string) bool {
 	taskUseIndex, ok := taskUseGpu[gpuName]
 	if ok {
-		for _, taskU := range taskUseIndex {
-			if taskU == index {
-				return true
-			}
-		}
+		return slices.Contains(taskUseIndex, index)
 	}
 	return false
 }
@@ -1128,13 +1128,7 @@ func CheckWalletWhiteListForEcp(walletAddress string) bool {
 		logs.GetLogger().Errorf("get whiteList By url failed, url: %s, error: %v", walletWhiteListUrl, err)
 		return true
 	}
-
-	for _, address := range whiteList {
-		if walletAddress == address {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(whiteList, walletAddress)
 }
 
 func CheckWalletBlackListForEcp(walletAddress string) bool {
@@ -1147,13 +1141,7 @@ func CheckWalletBlackListForEcp(walletAddress string) bool {
 		logs.GetLogger().Errorf("get blacklist By url failed, url: %s, error: %v", walletBlackListUrl, err)
 		return true
 	}
-
-	for _, address := range blackList {
-		if walletAddress == address {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(blackList, walletAddress)
 }
 
 func parseDockerfileContentForEcp(jobUuid, dockerfileContent string) (*models.DeployJobParam, error) {
