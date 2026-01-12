@@ -10,7 +10,7 @@ var CurrentCommit string
 
 var NetWorkTag string
 
-const BuildVersion = "2.0.0-rc1"
+const BuildVersion = "0.1.0"
 
 const UBITaskImageIntelCpu = "swanhub/ubi-worker-cpu-intel:latest"
 const UBITaskImageIntelGpu = "swanhub/ubi-worker-gpu-intel:latest"
