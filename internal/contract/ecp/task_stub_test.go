@@ -1,13 +1,15 @@
-package ecp
+package ecp_test
 
 import (
 	"fmt"
+	"log"
+	"testing"
+
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/contract/ecp"
 	"github.com/swanchain/computing-provider-v2/internal/db"
-	"log"
-	"testing"
 )
 
 func TestTaskStub_GetTaskInfo(t *testing.T) {
@@ -18,7 +20,7 @@ func TestTaskStub_GetTaskInfo(t *testing.T) {
 	}
 	defer client.Close()
 
-	taskClient, err := NewTaskStub(client, WithTaskContractAddress("0x739Dd2e1c4Ed2D56B9c1DFcB8114b17E1A73E5B5"))
+	taskClient, err := ecp.NewTaskStub(client, ecp.WithTaskContractAddress("0x739Dd2e1c4Ed2D56B9c1DFcB8114b17E1A73E5B5"))
 	if err != nil {
 		log.Fatalln(err)
 		return
