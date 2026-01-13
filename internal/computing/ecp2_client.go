@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,13 +37,26 @@ type Message struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// HardwareInfo contains GPU hardware specifications
+type HardwareInfo struct {
+	GPUType           string `json:"gpu_type"`
+	GPUModel          string `json:"gpu_model"`
+	VRAMGB            int    `json:"vram_gb"`
+	GPUCount          int    `json:"gpu_count"`
+	ComputeCapability string `json:"compute_capability"`
+	DriverVersion     string `json:"driver_version"`
+	CUDAVersion       string `json:"cuda_version"`
+}
+
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
-	ProviderID   string   `json:"provider_id"`
-	WorkerAddr   string   `json:"worker_addr"`
-	Signature    string   `json:"signature"`
-	Models       []string `json:"models"`
-	Capabilities []string `json:"capabilities"`
+	ProviderID   string        `json:"provider_id"`
+	WorkerAddr   string        `json:"worker_addr"`
+	OwnerAddr    string        `json:"owner_addr"`
+	Signature    string        `json:"signature"`
+	Models       []string      `json:"models"`
+	Capabilities []string      `json:"capabilities"`
+	Hardware     *HardwareInfo `json:"hardware,omitempty"`
 }
 
 // InferencePayload is sent to provider for inference request
@@ -139,6 +155,7 @@ type StreamingInferenceHandler func(requestID string, payload InferencePayload, 
 type ECP2Client struct {
 	providerID                string
 	workerAddr                string
+	ownerAddr                 string
 	models                    []string
 	wsURL                     string
 	conn                      *websocket.Conn
@@ -151,7 +168,7 @@ type ECP2Client struct {
 }
 
 // NewECP2Client creates a new ECP2 client
-func NewECP2Client(providerID, workerAddr string) *ECP2Client {
+func NewECP2Client(providerID, workerAddr, ownerAddr string) *ECP2Client {
 	config := conf.GetConfig()
 
 	// Allow env var override for dev mode
@@ -164,6 +181,7 @@ func NewECP2Client(providerID, workerAddr string) *ECP2Client {
 	return &ECP2Client{
 		providerID: providerID,
 		workerAddr: workerAddr,
+		ownerAddr:  ownerAddr,
 		models:     config.ECP2.Models,
 		wsURL:      wsURL,
 		send:       make(chan []byte, 256),
@@ -257,12 +275,82 @@ func (c *ECP2Client) reconnect() {
 	}
 }
 
+// detectGPUHardware detects GPU hardware information using nvidia-smi
+func detectGPUHardware() *HardwareInfo {
+	// Run nvidia-smi to get GPU info
+	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
+	output, err := cmd.Output()
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to detect GPU hardware: %v", err)
+		return nil
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	if len(lines) == 0 {
+		return nil
+	}
+
+	// Parse first GPU (primary)
+	parts := strings.Split(lines[0], ", ")
+	if len(parts) < 3 {
+		logs.GetLogger().Warnf("Unexpected nvidia-smi output format: %s", lines[0])
+		return nil
+	}
+
+	gpuModel := strings.TrimSpace(parts[0])
+	vramStr := strings.TrimSpace(parts[1])
+	driverVersion := strings.TrimSpace(parts[2])
+
+	// Parse VRAM (in MiB from nvidia-smi)
+	vramMiB, _ := strconv.Atoi(vramStr)
+	vramGB := vramMiB / 1024
+	if vramGB == 0 {
+		vramGB = 1 // Minimum 1GB
+	}
+
+	// Convert GPU model to type (e.g., "NVIDIA GeForce RTX 3070" -> "RTX 3070")
+	gpuType := gpuModel
+	if strings.Contains(gpuModel, "GeForce") {
+		gpuType = strings.Replace(gpuModel, "NVIDIA GeForce ", "", 1)
+	} else if strings.Contains(gpuModel, "Tesla") {
+		gpuType = strings.Replace(gpuModel, "NVIDIA ", "", 1)
+		gpuType = strings.Replace(gpuType, "Tesla ", "", 1)
+	} else if strings.Contains(gpuModel, "NVIDIA") {
+		gpuType = strings.Replace(gpuModel, "NVIDIA ", "", 1)
+	}
+
+	// Get CUDA version
+	cudaVersion := ""
+	cudaCmd := exec.Command("nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader")
+	if cudaOutput, err := cudaCmd.Output(); err == nil {
+		cudaVersion = strings.TrimSpace(string(cudaOutput))
+	}
+
+	hardware := &HardwareInfo{
+		GPUType:           gpuType,
+		GPUModel:          gpuModel,
+		VRAMGB:            vramGB,
+		GPUCount:          len(lines), // Count of GPUs
+		ComputeCapability: cudaVersion,
+		DriverVersion:     driverVersion,
+		CUDAVersion:       "", // nvidia-smi doesn't directly expose CUDA version
+	}
+
+	logs.GetLogger().Infof("Detected GPU hardware: %s (%dGB VRAM x%d)", gpuType, vramGB, len(lines))
+	return hardware
+}
+
 func (c *ECP2Client) register() error {
+	// Detect GPU hardware
+	hardware := detectGPUHardware()
+
 	payload := RegisterPayload{
 		ProviderID:   c.providerID,
 		WorkerAddr:   c.workerAddr,
+		OwnerAddr:    c.ownerAddr,
 		Models:       c.models,
 		Capabilities: []string{"inference", "verification"},
+		Hardware:     hardware,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -282,7 +370,7 @@ func (c *ECP2Client) register() error {
 	}
 
 	c.send <- msgBytes
-	logs.GetLogger().Infof("Sent registration for provider %s with models: %v", c.providerID, c.models)
+	logs.GetLogger().Infof("Sent registration for provider %s (owner: %s) with models: %v", c.providerID, c.ownerAddr, c.models)
 	return nil
 }
 
