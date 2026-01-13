@@ -60,9 +60,19 @@ Password = ""
 ```toml
 [ECP2]
 Enable = false                  # Enable ECP2/Swan Inference mode
-ServiceURL = "http://localhost:8080"
-WebSocketURL = "ws://localhost:8081"
-Models = []                     # Models this provider serves
+ServiceURL = "http://localhost:8080"      # HTTP API (not used currently)
+WebSocketURL = "ws://localhost:8081"      # WebSocket connection to Swan Inference
+Models = []                               # Models this provider serves
+
+# Base Sepolia contracts (for development/testing)
+ChainRPC = "https://sepolia.base.org"
+CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
+TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+```
+
+**Environment variable override:**
+```bash
+export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL
 ```
 
 ## Environment Variables
@@ -168,9 +178,27 @@ PortRange = ["40000-40050", "40060"]
 
 [ECP2]
 Enable = true
-ServiceURL = "https://inference.swanchain.io"
-WebSocketURL = "wss://inference.swanchain.io/ws"
+WebSocketURL = "wss://inference.swanchain.io/ws"  # Production
+Models = ["your-model-name"]
+
+# For development (Base Sepolia testnet)
+# WebSocketURL = "ws://localhost:8081"
+# ChainRPC = "https://sepolia.base.org"
+# CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
+# TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
 ```
+
+### Base Sepolia Development
+
+For testing ECP2 with Swan Inference on Base Sepolia:
+
+| Contract | Address |
+|----------|---------|
+| Collateral | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
+| Task | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
+
+**Network:** Base Sepolia (chainId: 84532)
+**RPC:** `https://sepolia.base.org`
 
 ## ECP Mode Configuration (ZK Proofs)
 

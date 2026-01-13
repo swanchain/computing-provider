@@ -46,10 +46,13 @@ type ComputeNode struct {
 
 // ECP2 is the ECP2 marketplace configuration
 type ECP2 struct {
-	Enable       bool     `toml:"Enable"`
-	ServiceURL   string   `toml:"ServiceURL"`   // HTTP API URL (e.g., http://localhost:8080)
-	WebSocketURL string   `toml:"WebSocketURL"` // WebSocket URL (e.g., ws://localhost:8081)
-	Models       []string `toml:"Models"`       // Models this provider serves
+	Enable             bool     `toml:"Enable"`
+	ServiceURL         string   `toml:"ServiceURL"`         // HTTP API URL (e.g., http://localhost:8080)
+	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., ws://localhost:8081)
+	Models             []string `toml:"Models"`             // Models this provider serves
+	ChainRPC           string   `toml:"ChainRPC"`           // Base Sepolia RPC for Swan Inference
+	CollateralContract string   `toml:"CollateralContract"` // Collateral contract address
+	TaskContract       string   `toml:"TaskContract"`       // Task contract address
 }
 
 type API struct {
@@ -424,10 +427,13 @@ func generateDefaultConfig() ComputeNode {
 			EdgeTaskPaymentCreated: 0,
 		},
 		ECP2: ECP2{
-			Enable:       false,
-			ServiceURL:   "http://localhost:8080",
-			WebSocketURL: "ws://localhost:8081",
-			Models:       []string{},
+			Enable:             false,
+			ServiceURL:         "http://localhost:8080",
+			WebSocketURL:       "ws://localhost:8081",
+			Models:             []string{},
+			ChainRPC:           "https://sepolia.base.org",
+			CollateralContract: "0x5EBc65E856ad97532354565560ccC6FAB51b255a",
+			TaskContract:       "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2",
 		},
 	}
 }

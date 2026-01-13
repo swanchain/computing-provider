@@ -104,6 +104,21 @@ PortRange = ["40000-40050", "40060"]           # Ports for multi-port containers
 
 [RPC]
 SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
+
+[ECP2]
+Enable = true
+WebSocketURL = "wss://inference.swanchain.io/ws"  # Swan Inference WebSocket
+Models = ["your-model-name"]                       # Models this provider serves
+
+# For development/testnet (Base Sepolia)
+# ChainRPC = "https://sepolia.base.org"
+# CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
+# TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+```
+
+**Environment variable overrides:**
+```bash
+export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
 ```
 
 **Port Configuration:**

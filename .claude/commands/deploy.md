@@ -49,9 +49,15 @@ Enable = true
 ServiceURL = "http://localhost:8080"      # HTTP API (not currently used by client)
 WebSocketURL = "ws://localhost:8081"      # WebSocket connection to Swan Inference
 Models = ["llama-3.1-8b", "qwen2.5-7b"]   # Models this provider serves
+
+# Base Sepolia (Swan Inference chain)
+ChainRPC = "https://sepolia.base.org"
+CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
+TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
 ```
 
 **Note:** The ECP2 client connects to Swan Inference via WebSocket (`WebSocketURL`), not HTTP.
+Contracts are deployed on Base Sepolia (chainId: 84532).
 
 ### Step 3: Set Environment Variables
 

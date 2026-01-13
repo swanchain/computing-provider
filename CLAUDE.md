@@ -106,6 +106,19 @@ computing-provider collateral add --ecp --from <addr> <amount>
 [API]
 Domain = "*.example.com"               # Domain for single-port services
 PortRange = ["40000-40050", "40060"]   # Ports for multi-port containers
+
+[ECP2]
+Enable = true
+WebSocketURL = "ws://localhost:8081"   # Swan Inference WebSocket
+Models = ["your-model-name"]           # Models this provider serves
+ChainRPC = "https://sepolia.base.org"  # Base Sepolia for dev
+CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
+TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+```
+
+**Environment variable overrides (for dev):**
+```bash
+export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL
 ```
 
 **Start ECP2 daemon:**
@@ -145,6 +158,40 @@ computing-provider sequencer add --from <addr> <amount>
 EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
 AutoChainProof = false    # Fallback to chain when sequencer unavailable
 ```
+
+## ECP2 Development Mode (Base Sepolia)
+
+For development and testing, ECP2 uses Base Sepolia testnet for smart contracts.
+
+**Base Sepolia Contracts:**
+| Contract | Address |
+|----------|---------|
+| Collateral | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
+| Task | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
+
+**Network:** Base Sepolia (chainId: 84532)
+**RPC:** `https://sepolia.base.org`
+
+**Dev setup:**
+```bash
+# Build for testnet
+make clean && make testnet
+
+# Set environment for dev
+export ECP2_WS_URL=ws://localhost:8081
+
+# Run daemon
+./computing-provider ubi daemon
+```
+
+**ECP2 Config Fields:**
+- `Enable`: Enable/disable ECP2 service
+- `ServiceURL`: HTTP API URL (unused currently)
+- `WebSocketURL`: WebSocket connection to Swan Inference
+- `Models`: List of models this provider serves
+- `ChainRPC`: Base Sepolia RPC endpoint
+- `CollateralContract`: Collateral contract address
+- `TaskContract`: Task contract address
 
 ## Architecture
 
