@@ -171,8 +171,9 @@ For development and testing, ECP2 uses Base Sepolia testnet for smart contracts.
 
 **Network:** Base Sepolia (chainId: 84532)
 **RPC:** `https://sepolia.base.org`
+**Explorer:** https://sepolia.basescan.org
 
-**Dev setup:**
+**Dev setup (no on-chain registration required):**
 ```bash
 # Build for testnet
 make clean && make testnet
@@ -180,9 +181,16 @@ make clean && make testnet
 # Set environment for dev
 export ECP2_WS_URL=ws://localhost:8081
 
-# Run daemon
+# Run daemon (uses Node ID auth, skips on-chain account)
 ./computing-provider ubi daemon
 ```
+
+**Authentication:**
+- **Production**: On-chain CP account registration on Swan Chain
+- **Development**: Node ID based authentication (wallet signature)
+  - No on-chain account required
+  - Provider authenticates via signed messages
+  - Suitable for local testing with Swan Inference
 
 **ECP2 Config Fields:**
 - `Enable`: Enable/disable ECP2 service
@@ -192,6 +200,19 @@ export ECP2_WS_URL=ws://localhost:8081
 - `ChainRPC`: Base Sepolia RPC endpoint
 - `CollateralContract`: Collateral contract address
 - `TaskContract`: Task contract address
+
+**Model Configuration:**
+Create `$CP_PATH/models.json` to map models to local endpoints:
+```json
+{
+  "llama-3.1-8b": {
+    "container": "vllm/vllm-openai:latest",
+    "endpoint": "http://localhost:8000",
+    "gpu_memory": 16000,
+    "category": "text-generation"
+  }
+}
+```
 
 ## Architecture
 

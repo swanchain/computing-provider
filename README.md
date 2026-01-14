@@ -121,6 +121,28 @@ Models = ["your-model-name"]                       # Models this provider serves
 export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
 ```
 
+### Development Mode (Base Sepolia)
+
+For local development, ECP2 supports Node ID based authentication without on-chain registration:
+
+| Property | Value |
+|----------|-------|
+| Network | Base Sepolia (chainId: 84532) |
+| RPC | https://sepolia.base.org |
+| Collateral Contract | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
+| Task Contract | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
+
+```bash
+# Quick start for dev (no on-chain account required)
+make clean && make testnet
+ECP2_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+```
+
+The provider authenticates via wallet signature using the Node ID. This is suitable for:
+- Local development and testing
+- Integration testing with Swan Inference
+- Rapid iteration without gas costs
+
 **Port Configuration:**
 - Single-port containers: Use `traefik` with domain resolution (port 9000)
 - Multi-port containers: Use `PortRange` with direct IP + port mapping

@@ -10,6 +10,35 @@ This command helps deploy and configure the Computing Provider to connect to a l
 
 ---
 
+## Testnet Information
+
+### Base Sepolia (Swan Inference Chain)
+
+| Property | Value |
+|----------|-------|
+| Network | Base Sepolia |
+| Chain ID | 84532 |
+| RPC | https://sepolia.base.org |
+| Explorer | https://sepolia.basescan.org |
+
+### Deployed Contracts
+
+| Contract | Address |
+|----------|---------|
+| Collateral | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
+| Task | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
+
+### Authentication Mode
+
+**Development:** Node ID based authentication (no on-chain registration required)
+- Provider authenticates via wallet signature
+- No gas fees required for testing
+- Suitable for local development
+
+**Production:** On-chain CP account registration on Swan Chain required
+
+---
+
 ## Development Server Configuration
 
 ### Swan Inference Dev Server

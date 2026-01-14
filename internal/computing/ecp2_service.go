@@ -15,6 +15,7 @@ import (
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/wallet"
 )
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
@@ -72,14 +73,16 @@ func (s *ECP2Service) Start() error {
 		return nil
 	}
 
-	// Get worker address
-	_, workerAddr, err := GetOwnerAddressAndWorkerAddress()
+	// Get owner and worker addresses
+	ownerAddr, workerAddr, err := GetOwnerAddressAndWorkerAddress()
 	if err != nil {
-		logs.GetLogger().Warnf("Failed to get worker address, using node ID: %v", err)
+		logs.GetLogger().Warnf("Failed to get addresses from CP account: %v", err)
+		// For dev mode: use wallet address as owner
+		ownerAddr = s.getDefaultWalletAddress()
 		workerAddr = s.nodeID
 	}
 
-	s.client = NewECP2Client(s.nodeID, workerAddr)
+	s.client = NewECP2Client(s.nodeID, workerAddr, ownerAddr)
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 
@@ -87,8 +90,32 @@ func (s *ECP2Service) Start() error {
 		return fmt.Errorf("failed to start ECP2 client: %w", err)
 	}
 
-	logs.GetLogger().Infof("ECP2 service started with provider ID: %s", s.nodeID)
+	logs.GetLogger().Infof("ECP2 service started with provider ID: %s, owner: %s", s.nodeID, ownerAddr)
 	return nil
+}
+
+// getDefaultWalletAddress returns the first wallet address from keystore (for dev mode)
+func (s *ECP2Service) getDefaultWalletAddress() string {
+	localWallet, err := wallet.SetupWallet(wallet.WalletRepo)
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to setup wallet: %v", err)
+		return ""
+	}
+
+	addresses, err := localWallet.List()
+	if err != nil || len(addresses) == 0 {
+		logs.GetLogger().Warnf("No wallet addresses found")
+		return ""
+	}
+
+	// Remove "wallet-" prefix if present
+	addr := addresses[0]
+	if strings.HasPrefix(addr, "wallet-") {
+		addr = strings.TrimPrefix(addr, "wallet-")
+	}
+
+	logs.GetLogger().Infof("Using wallet address as owner for dev mode: %s", addr)
+	return addr
 }
 
 // Stop gracefully shuts down the ECP2 service

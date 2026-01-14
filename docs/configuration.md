@@ -199,6 +199,32 @@ For testing ECP2 with Swan Inference on Base Sepolia:
 
 **Network:** Base Sepolia (chainId: 84532)
 **RPC:** `https://sepolia.base.org`
+**Explorer:** https://sepolia.basescan.org
+
+### Development Mode (No On-Chain Registration)
+
+For local development, ECP2 supports Node ID based authentication without requiring on-chain account registration:
+
+```bash
+# Build for testnet
+make clean && make testnet
+
+# Start with local Swan Inference
+ECP2_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+```
+
+**Authentication Flow:**
+1. Provider connects to Swan Inference via WebSocket
+2. Sends registration with Node ID and wallet signature
+3. Swan Inference verifies signature and registers provider
+4. No on-chain transaction required
+
+This is suitable for:
+- Local development and testing
+- Integration testing with Swan Inference
+- Rapid iteration without gas costs
+
+For production, on-chain account registration on Swan Chain is required for collateral and rewards.
 
 ## ECP Mode Configuration (ZK Proofs)
 
