@@ -165,6 +165,7 @@ type ECP2Client struct {
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
 	mu                        sync.RWMutex
+	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 }
 
 // NewECP2Client creates a new ECP2 client
@@ -432,8 +433,11 @@ func (c *ECP2Client) writePump() {
 				continue
 			}
 
+			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			err := conn.WriteMessage(websocket.TextMessage, message)
+			c.writeMu.Unlock()
+			if err != nil {
 				logs.GetLogger().Errorf("WebSocket write error: %v", err)
 				return
 			}
@@ -446,8 +450,11 @@ func (c *ECP2Client) writePump() {
 				continue
 			}
 
+			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := conn.WriteMessage(websocket.PingMessage, nil)
+			c.writeMu.Unlock()
+			if err != nil {
 				logs.GetLogger().Errorf("WebSocket ping error: %v", err)
 				return
 			}
