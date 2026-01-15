@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -231,6 +232,9 @@ func (c *ECP2Client) Stop() {
 func (c *ECP2Client) connect() error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
+		TLSClientConfig: &tls.Config{
+			NextProtos: []string{"http/1.1"}, // Force HTTP/1.1 to enable WebSocket upgrade through Cloudflare
+		},
 	}
 
 	conn, _, err := dialer.Dial(c.wsURL+"/ws", nil)
