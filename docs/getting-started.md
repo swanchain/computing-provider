@@ -1,96 +1,43 @@
 # Getting Started
 
-This guide will walk you through the complete setup process for your Computing Provider, from installation to running your first tasks.
+This guide will walk you through the complete setup process for your Computing Provider.
 
-## Quick Start Overview
+## Quick Start (Inference Mode)
 
-1. [Install Dependencies](prerequisites.md)
-2. [Install Computing Provider](installation.md)
-3. [Configure Your Environment](configuration.md)
-4. [Set Up Your Wallet](#set-up-wallet)
-5. [Choose Provider Mode](#choose-provider-mode)
-6. [Start Your Provider](#start-your-provider)
+Inference mode is the simplest way to get started. No wallet, no blockchain, no public IP required.
+
+```bash
+# 1. Install
+git clone https://github.com/swanchain/computing-provider-v2.git
+cd computing-provider-v2
+make clean && make mainnet && sudo make install
+
+# 2. Initialize
+export CP_PATH=~/.swan/computing
+computing-provider init --node-name=my-provider
+
+# 3. Configure models.json (see below)
+
+# 4. Start your inference backend (Ollama, vLLM, etc.)
+
+# 5. Run
+computing-provider run
+```
+
+That's it! Your provider will connect to Swan Inference and start receiving requests.
 
 ## Choose Provider Mode
 
-The Computing Provider supports two modes:
+| Mode | Use Case | Requirements | Blockchain |
+|------|----------|--------------|------------|
+| **Inference** (Default) | AI model inference | Ollama/Docker | Not required |
+| **ECP** (ZK Proofs) | FIL-C2 proofs | NVIDIA GPU, v28 params | Required |
 
-### Inference Mode (Default)
-- **Best for**: AI model inference, containerized workloads
-- **Hardware**: GPU with 8GB+ VRAM (or Apple Silicon Mac)
-- **Setup**: Docker-based (Linux) or Ollama (macOS), no public IP required
-- **Tasks**: AI inference via Swan Inference marketplace
+## Inference Mode Setup (Linux)
 
-### ECP - ZK Proof Generation
-- **Best for**: ZK-SNARK proof generation, FIL-C2 proofs
-- **Hardware**: GPU with 8GB+ VRAM, 200GB+ storage for v28 parameters
-- **Setup**: Requires v28 parameter files
-- **Tasks**: Filecoin C2 proofs, mining proofs
-
-## Initial Setup
-
-### 1. Initialize Repository
+### 1. Install Docker with NVIDIA Container Toolkit
 
 ```bash
-# Initialize for Inference mode (no public IP required)
-computing-provider init --node-name=<NAME>
-
-# Or with public IP for ZK-proof mode
-computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
-
-# Verify initialization
-ls -la ~/.swan/computing/
-```
-
-### 2. Set Up Wallet
-
-```bash
-# Create new wallet
-computing-provider wallet new
-
-# Or import existing wallet
-computing-provider wallet import <private_key_file>
-
-# List wallets
-computing-provider wallet list
-```
-
-### 3. Create Account
-
-```bash
-# For Inference mode - task type 4
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 4
-
-# For ZK proofs (ECP) - task types 1,2,4
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 1,2,4
-```
-
-### 4. Add Collateral
-
-```bash
-# Add collateral
-computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
-
-# Check collateral status
-computing-provider info
-```
-
-## Inference Mode Setup
-
-### Prerequisites
-
-1. **Install Docker with NVIDIA Container Toolkit**:
-
-```bash
-# Install NVIDIA Container Toolkit
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
   sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
@@ -100,25 +47,35 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-2. **Configure domain and ports** in `$CP_PATH/config.toml`:
-
-```toml
-[API]
-Domain = "*.example.com"
-PortRange = ["40000-40050", "40060"]
-```
-
-### Start Inference Provider
+### 2. Initialize
 
 ```bash
-# Set environment variable
 export CP_PATH=~/.swan/computing
+computing-provider init --node-name=my-provider
+```
 
+### 3. Configure Models
+
+Create `$CP_PATH/models.json`:
+
+```json
+{
+  "llama-3.1-8b": {
+    "endpoint": "http://localhost:8000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+```
+
+### 4. Start Provider
+
+```bash
 # Start the provider
 nohup computing-provider run >> cp.log 2>&1 &
 
 # Check if running
-ps aux | grep computing-provider
+tail -f cp.log
 ```
 
 ## macOS Setup (Apple Silicon with Ollama)
@@ -192,25 +149,50 @@ For detailed macOS instructions, see [Apple Silicon Support](apple-silicon-suppo
 
 ## ECP Setup (ZK Proofs)
 
-### Prerequisites
+ECP mode requires blockchain registration for proof submission and rewards.
 
-1. **Download v28 parameters** (~200GB):
+### 1. Prerequisites
+
+Download v28 parameters (~200GB):
 
 ```bash
-# Set parameter path
 export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
-
 # Download parameters (see Filecoin documentation)
 ```
 
-2. **Configure GPU**:
+### 2. Initialize with Public IP
 
 ```bash
-export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"
-# Example: "GeForce RTX 4090:16384"
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 ```
 
-### Configure Sequencer
+### 3. Set Up Wallet
+
+```bash
+# Create new wallet (can be done offline)
+computing-provider wallet new
+
+# List wallets
+computing-provider wallet list
+```
+
+### 4. Create Account (On-Chain)
+
+```bash
+computing-provider account create \
+  --ownerAddress <OWNER_ADDRESS> \
+  --workerAddress <WORKER_ADDRESS> \
+  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
+  --task-types 1,2,4
+```
+
+### 5. Add Collateral
+
+```bash
+computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
+```
+
+### 6. Configure Sequencer
 
 Edit `$CP_PATH/config.toml`:
 
@@ -220,21 +202,19 @@ EnableSequencer = true
 AutoChainProof = false
 ```
 
-### Add Sequencer Deposit
+Add sequencer deposit:
 
 ```bash
 computing-provider sequencer add --from <OWNER_ADDRESS> <AMOUNT>
 ```
 
-### Start ECP Provider
+### 7. Start ECP Provider
 
 ```bash
-# Set environment variables
 export CP_PATH=~/.swan/computing
 export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
 export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 
-# Start the provider
 nohup computing-provider run >> cp.log 2>&1 &
 ```
 
@@ -364,10 +344,13 @@ docker logs <container_name>
    docker rm -f resource-exporter
    ```
 
-4. **CP Account Empty**
+4. **Ollama Connection Failed** (macOS)
    ```bash
-   # Create account first
-   computing-provider account create ...
+   # Ensure Ollama is running
+   ollama serve
+
+   # Test endpoint
+   curl http://localhost:11434/v1/models
    ```
 
 ### Getting Help
