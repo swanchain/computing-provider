@@ -25,3 +25,6 @@ computing-provider
 .env
 config.toml
 logs/
+
+# Dashboard UI
+internal/dashboard/ui/node_modules/
