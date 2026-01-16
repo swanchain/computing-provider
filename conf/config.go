@@ -139,9 +139,12 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 		config.API.GpuUtilizationRejectThreshold = 1.0
 	}
 
-	multiAddressSplit := strings.Split(config.API.MultiAddress, "/")
-	if len(multiAddressSplit) < 4 {
-		log.Fatalf("MultiAddress %s is invalid\n", multiAddressSplit[2])
+	// Validate MultiAddress format if provided (optional for Inference mode)
+	if config.API.MultiAddress != "" {
+		multiAddressSplit := strings.Split(config.API.MultiAddress, "/")
+		if len(multiAddressSplit) < 5 {
+			log.Printf("Warning: MultiAddress %s may be invalid. Expected format: /ip4/<IP>/tcp/<PORT>\n", config.API.MultiAddress)
+		}
 	}
 
 	if standalone {

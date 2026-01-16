@@ -15,10 +15,10 @@ This guide will walk you through the complete setup process for your Computing P
 
 The Computing Provider supports two modes:
 
-### ECP2 - AI Inference (Default)
+### Inference Mode (Default)
 - **Best for**: AI model inference, containerized workloads
 - **Hardware**: GPU with 8GB+ VRAM, Docker with NVIDIA Container Toolkit
-- **Setup**: Simple Docker-based setup
+- **Setup**: Simple Docker-based setup, no public IP required
 - **Tasks**: AI inference via Swan Inference marketplace
 
 ### ECP - ZK Proof Generation
@@ -32,7 +32,10 @@ The Computing Provider supports two modes:
 ### 1. Initialize Repository
 
 ```bash
-# Initialize computing provider repository
+# Initialize for Inference mode (no public IP required)
+computing-provider init --node-name=<NAME>
+
+# Or with public IP for ZK-proof mode
 computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 
 # Verify initialization
@@ -55,14 +58,14 @@ computing-provider wallet list
 ### 3. Create Account
 
 ```bash
-# For ECP2 (inference) - task type 4
+# For Inference mode - task type 4
 computing-provider account create \
   --ownerAddress <OWNER_ADDRESS> \
   --workerAddress <WORKER_ADDRESS> \
   --beneficiaryAddress <BENEFICIARY_ADDRESS> \
   --task-types 4
 
-# For ECP (ZK proofs) - task types 1,2,4
+# For ZK proofs (ECP) - task types 1,2,4
 computing-provider account create \
   --ownerAddress <OWNER_ADDRESS> \
   --workerAddress <WORKER_ADDRESS> \
@@ -80,7 +83,7 @@ computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
 computing-provider info
 ```
 
-## ECP2 Setup (AI Inference)
+## Inference Mode Setup
 
 ### Prerequisites
 
@@ -105,7 +108,7 @@ Domain = "*.example.com"
 PortRange = ["40000-40050", "40060"]
 ```
 
-### Start ECP2 Provider
+### Start Inference Provider
 
 ```bash
 # Set environment variable
