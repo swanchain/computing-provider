@@ -17,8 +17,8 @@ The Computing Provider supports two modes:
 
 ### Inference Mode (Default)
 - **Best for**: AI model inference, containerized workloads
-- **Hardware**: GPU with 8GB+ VRAM, Docker with NVIDIA Container Toolkit
-- **Setup**: Simple Docker-based setup, no public IP required
+- **Hardware**: GPU with 8GB+ VRAM (or Apple Silicon Mac)
+- **Setup**: Docker-based (Linux) or Ollama (macOS), no public IP required
 - **Tasks**: AI inference via Swan Inference marketplace
 
 ### ECP - ZK Proof Generation
@@ -120,6 +120,75 @@ nohup computing-provider run >> cp.log 2>&1 &
 # Check if running
 ps aux | grep computing-provider
 ```
+
+## macOS Setup (Apple Silicon with Ollama)
+
+For Apple Silicon Macs (M1/M2/M3/M4), use Ollama instead of Docker for native Metal GPU acceleration.
+
+### 1. Install Ollama
+
+```bash
+# Install via Homebrew
+brew install ollama
+
+# Or download from https://ollama.com/download
+```
+
+### 2. Pull Models
+
+```bash
+# Start Ollama service
+ollama serve &
+
+# Pull a model
+ollama pull llama3.2:3b
+```
+
+### 3. Install Computing Provider
+
+```bash
+# Install Go
+brew install go
+
+# Clone and build
+git clone https://github.com/swanchain/computing-provider-v2.git
+cd computing-provider-v2
+make clean && make mainnet
+sudo make install
+```
+
+### 4. Initialize and Configure
+
+```bash
+# Initialize (no public IP required)
+export CP_PATH=~/.swan/computing
+computing-provider init --node-name=my-mac-provider
+```
+
+Create `$CP_PATH/models.json`:
+
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation"
+  }
+}
+```
+
+### 5. Start Provider
+
+```bash
+# Ensure Ollama is running
+ollama serve &
+
+# Start provider
+export CP_PATH=~/.swan/computing
+nohup computing-provider run >> cp.log 2>&1 &
+```
+
+For detailed macOS instructions, see [Apple Silicon Support](apple-silicon-support.md).
 
 ## ECP Setup (ZK Proofs)
 
@@ -273,12 +342,12 @@ docker logs <container_name>
 
 ### Common Startup Issues
 
-1. **Docker Permission Error**
+1. **Docker Permission Error** (Linux only)
    ```bash
    # Add user to docker group
    sudo usermod -aG docker $USER
    # Or run with sg
-   sg docker -c "computing-provider ubi daemon"
+   sg docker -c "computing-provider run"
    ```
 
 2. **NVIDIA Container Toolkit Not Found**

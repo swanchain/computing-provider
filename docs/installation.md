@@ -1,31 +1,38 @@
 # Installation Guide
 
-This guide will walk you through the installation process for the Go Computing Provider.
+This guide will walk you through the installation process for the Computing Provider.
 
 ## Prerequisites
 
 Before installing the Computing Provider, ensure you have the following:
 
 ### System Requirements
-- **Operating System**: Linux (Ubuntu 20.04+ recommended)
-- **Go Version**: 1.21+ 
-- **Public IP**: Required for network connectivity
-- **Domain Name**: `*.example.com` format
-- **SSL Certificate**: For secure communications
+- **Operating System**: Linux (Ubuntu 20.04+) or macOS (Apple Silicon recommended)
+- **Go Version**: 1.22+
+- **Public IP**: Optional (not required for Inference mode)
 
 ### Hardware Requirements
-- **CPU**: Multi-core processor (4+ cores recommended)
-- **RAM**: Minimum 8GB, 16GB+ recommended
-- **Storage**: 100GB+ available space
-- **Network**: Stable internet connection
 
-## Installing Go
+**Linux (NVIDIA GPU)**:
+- Multi-core CPU (4+ cores recommended)
+- NVIDIA GPU with 8GB+ VRAM
+- 16GB+ RAM
+- 100GB+ storage
+- Docker with NVIDIA Container Toolkit
 
-If you don't have Go installed, follow these steps:
+**macOS (Apple Silicon)**:
+- Apple Silicon Mac (M1/M2/M3/M4)
+- 8GB+ unified memory (16GB+ recommended)
+- 20GB+ storage
+- Ollama for inference
+
+## Installing on Linux
+
+### Install Go
 
 ```bash
-# Download and install Go 1.21+
-wget -c https://golang.org/dl/go1.21.7.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
+# Download and install Go 1.22+
+wget -c https://golang.org/dl/go1.22.0.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
 
 # Add Go to your PATH
 echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
@@ -34,33 +41,53 @@ echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
 go version
 ```
 
+## Installing on macOS
+
+### Install Dependencies
+
+```bash
+# Install Homebrew (if not installed)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Go
+brew install go
+
+# Install Ollama (recommended for inference)
+brew install ollama
+
+# Verify installation
+go version
+ollama --version
+```
+
 ## Building from Source
 
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/lagrangedao/go-computing-provider.git
-cd go-computing-provider
+git clone https://github.com/swanchain/computing-provider-v2.git
+cd computing-provider-v2
 ```
 
 ### 2. Build the Binary
 
 ```bash
-# Build the computing-provider binary
-make build
+# Build for mainnet
+make clean && make mainnet
 
-# Or build manually
-go build -o computing-provider cmd/computing-provider/main.go
+# Or build for testnet
+make clean && make testnet
+
+# Install system-wide
+sudo make install
 ```
 
-### 3. Install System-wide (Optional)
+### 3. Verify Installation
 
 ```bash
-# Copy to system PATH
-sudo cp computing-provider /usr/local/bin/
-
 # Verify installation
 computing-provider --version
+computing-provider --help
 ```
 
 ## Using the Install Script
