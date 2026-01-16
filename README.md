@@ -218,6 +218,86 @@ TASK UUID                               TASK NAME       IMAGE NAME              
 75f9df4e-b6a5-40b0-b7ac-02fb1840dafa    inference-01    mymodel/inference:latest                running            1.2500    2024-11-24 10:23:32
 ```
 
+## Monitoring & Management
+
+The Inference provider exposes REST APIs for monitoring and management at `http://localhost:8085/api/v1/computing/inference/`.
+
+### Metrics Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /inference/metrics` | JSON metrics (requests, latency, tokens, GPU) |
+| `GET /inference/metrics/prometheus` | Prometheus-format metrics |
+| `GET /inference/status` | Connection status and active models |
+
+**Example:**
+```bash
+# Get inference metrics
+curl http://localhost:8085/api/v1/computing/inference/metrics
+
+# Prometheus metrics for Grafana
+curl http://localhost:8085/api/v1/computing/inference/metrics/prometheus
+```
+
+### Model Management
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /inference/models` | List all models with status |
+| `GET /inference/models/:id` | Get specific model details |
+| `GET /inference/health` | Health status of all models |
+| `POST /inference/models/:id/enable` | Enable a model |
+| `POST /inference/models/:id/disable` | Disable a model |
+| `POST /inference/models/reload` | Hot-reload models.json |
+
+**Features:**
+- **Health Checking**: Automatic health probes every 30 seconds
+- **Hot-Reload**: Edit `models.json` and changes apply automatically
+- **Circuit Breaker**: Unhealthy models are temporarily excluded
+
+**Example:**
+```bash
+# List all models
+curl http://localhost:8085/api/v1/computing/inference/models
+
+# Disable a model
+curl -X POST http://localhost:8085/api/v1/computing/inference/models/llama-3.2-3b/disable
+
+# Reload configuration
+curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
+```
+
+### Request Management
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /inference/ratelimit` | Rate limiter metrics |
+| `GET /inference/concurrency` | Concurrency limiter metrics |
+| `GET /inference/request-management` | Combined status |
+| `POST /inference/ratelimit/global` | Set global rate limit |
+| `POST /inference/concurrency/global` | Set global concurrency |
+
+**Features:**
+- **Rate Limiting**: GPU-aware adaptive token bucket limiting
+- **Concurrency Control**: Per-model concurrent request limits
+- **Retry Policy**: Exponential backoff with jitter for transient failures
+
+**Example:**
+```bash
+# View rate limiter status
+curl http://localhost:8085/api/v1/computing/inference/ratelimit
+
+# Set global rate limit to 50 req/s
+curl -X POST http://localhost:8085/api/v1/computing/inference/ratelimit/global \
+  -H "Content-Type: application/json" \
+  -d '{"rate": 50}'
+
+# Set model concurrency limit
+curl -X POST http://localhost:8085/api/v1/computing/inference/concurrency/model/llama-3.2-3b \
+  -H "Content-Type: application/json" \
+  -d '{"max": 5}'
+```
+
 ---
 
 # macOS Setup (Apple Silicon)

@@ -273,6 +273,29 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
 }
 ```
 
+**Inference REST API Endpoints** (base: `/api/v1/computing/inference/`):
+
+| Category | Endpoint | Method | Description |
+|----------|----------|--------|-------------|
+| Metrics | `/metrics` | GET | JSON metrics (requests, latency, GPU) |
+| Metrics | `/metrics/prometheus` | GET | Prometheus-format metrics |
+| Metrics | `/status` | GET | Connection status |
+| Models | `/models` | GET | List all models with status |
+| Models | `/models/:id` | GET | Get model details |
+| Models | `/models/:id/health` | GET | Get model health |
+| Models | `/health` | GET | All models health status |
+| Models | `/models/:id/enable` | POST | Enable model |
+| Models | `/models/:id/disable` | POST | Disable model |
+| Models | `/models/reload` | POST | Hot-reload models.json |
+| Rate Limit | `/ratelimit` | GET | Rate limiter metrics |
+| Rate Limit | `/ratelimit/global` | POST | Set global rate limit |
+| Rate Limit | `/ratelimit/model/:id` | POST | Set model rate limit |
+| Concurrency | `/concurrency` | GET | Concurrency metrics |
+| Concurrency | `/concurrency/global` | POST | Set global concurrency |
+| Concurrency | `/concurrency/model/:id` | POST | Set model concurrency |
+| Combined | `/request-management` | GET | All request management status |
+| Combined | `/retries` | GET | Retry policy metrics |
+
 ## Architecture
 
 ### Directory Structure
@@ -298,6 +321,22 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
 - `inference_service.go`: Inference service for Swan Inference marketplace
 - `inference_client.go`: WebSocket client for Swan Inference connection
 - `provider.go`: Main provider service orchestration
+
+### Inference Mode Components in `internal/computing/`
+
+**Metrics & Monitoring:**
+- `inference_metrics.go`: Request tracking, latency percentiles (P50/P95/P99), token throughput
+- `gpu_metrics_collector.go`: Real-time GPU metrics via nvidia-smi (utilization, memory, temperature)
+
+**Model Management:**
+- `model_health_checker.go`: Periodic health probes with circuit breaker pattern
+- `model_registry.go`: In-memory model state tracking with hot-reload via fsnotify
+
+**Request Management:**
+- `request_queue.go`: Priority queue with backpressure handling and per-model limits
+- `rate_limiter.go`: GPU-aware adaptive token bucket rate limiting
+- `concurrency_limiter.go`: Semaphore-based per-model concurrent request limits
+- `retry_policy.go`: Exponential backoff with jitter, error classification, circuit breaker
 
 ### Configuration
 
