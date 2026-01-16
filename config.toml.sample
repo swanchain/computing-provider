@@ -44,10 +44,26 @@ SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"                     # Swan
 
 # Inference Mode Configuration - Swan Inference Marketplace (DEFAULT)
 # Inference mode does NOT require a public IP - connects outbound via WebSocket
-# Metrics endpoints (automatically enabled when Inference mode is on):
-#   GET /api/v1/computing/inference/metrics           - JSON metrics
-#   GET /api/v1/computing/inference/metrics/prometheus - Prometheus format
-#   GET /api/v1/computing/inference/status            - Connection status
+#
+# API Endpoints (automatically enabled when Inference mode is on):
+#   Metrics:
+#     GET /api/v1/computing/inference/metrics           - JSON metrics
+#     GET /api/v1/computing/inference/metrics/prometheus - Prometheus format
+#     GET /api/v1/computing/inference/status            - Connection status
+#   Model Management:
+#     GET  /api/v1/computing/inference/models           - List all models with status
+#     GET  /api/v1/computing/inference/models/:id       - Get specific model status
+#     GET  /api/v1/computing/inference/models/:id/health - Get model health details
+#     GET  /api/v1/computing/inference/health           - Health status of all models
+#     POST /api/v1/computing/inference/models/:id/enable  - Enable a model
+#     POST /api/v1/computing/inference/models/:id/disable - Disable a model
+#     POST /api/v1/computing/inference/models/:id/healthcheck - Force health check
+#     POST /api/v1/computing/inference/models/reload    - Reload models.json config
+#
+# Features:
+#   - Automatic health checking of model endpoints (30s interval)
+#   - Hot-reload: models.json changes are automatically detected
+#   - Circuit breaker: unhealthy models are temporarily excluded from routing
 [Inference]
 Enable = true                                                             # Inference mode is enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint

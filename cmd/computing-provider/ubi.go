@@ -269,6 +269,66 @@ func runDaemon() error {
 		})
 	})
 
+	// Model management endpoints
+	router.GET("/inference/models", func(c *gin.Context) {
+		models := inferenceService.GetAllModels()
+		summary := inferenceService.GetModelsSummary()
+		c.JSON(200, gin.H{
+			"models":  models,
+			"summary": summary,
+		})
+	})
+	router.GET("/inference/models/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		model, ok := inferenceService.GetModelStatus(modelID)
+		if !ok {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
+		}
+		c.JSON(200, model)
+	})
+	router.GET("/inference/models/:model_id/health", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		health, ok := inferenceService.GetModelHealth(modelID)
+		if !ok {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
+		}
+		c.JSON(200, health)
+	})
+	router.GET("/inference/health", func(c *gin.Context) {
+		health := inferenceService.GetAllModelHealth()
+		c.JSON(200, health)
+	})
+	router.POST("/inference/models/:model_id/enable", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		if err := inferenceService.EnableModel(modelID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "enabled", "model_id": modelID})
+	})
+	router.POST("/inference/models/:model_id/disable", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		if err := inferenceService.DisableModel(modelID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "disabled", "model_id": modelID})
+	})
+	router.POST("/inference/models/:model_id/healthcheck", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		inferenceService.ForceHealthCheck(modelID)
+		c.JSON(200, gin.H{"status": "health check triggered", "model_id": modelID})
+	})
+	router.POST("/inference/models/reload", func(c *gin.Context) {
+		if err := inferenceService.ReloadModels(); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "models reloaded"})
+	})
+
 	shutdownChan := make(chan struct{})
 	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
 	if err != nil {

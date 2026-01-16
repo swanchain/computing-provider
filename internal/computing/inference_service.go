@@ -32,17 +32,67 @@ type InferenceService struct {
 	nodeID        string
 	cpPath        string
 	modelMappings map[string]ModelMapping
+	registry      *ModelRegistry
+	healthChecker *ModelHealthChecker
 }
 
 // NewInferenceService creates a new Inference service
 func NewInferenceService(nodeID, cpPath string) *InferenceService {
+	// Create health checker with default config
+	healthChecker := NewModelHealthChecker(DefaultHealthCheckConfig())
+
+	// Create model registry with health checker
+	registry := NewModelRegistry(cpPath, healthChecker)
+
 	s := &InferenceService{
 		nodeID:        nodeID,
 		cpPath:        cpPath,
 		modelMappings: make(map[string]ModelMapping),
+		registry:      registry,
+		healthChecker: healthChecker,
 	}
+
+	// Set up registry callbacks to update modelMappings for backward compatibility
+	registry.SetCallbacks(
+		func(model *RegisteredModel) {
+			// On model added
+			s.modelMappings[model.ID] = ModelMapping{
+				Container: model.Container,
+				Endpoint:  model.Endpoint,
+				GPUMemory: model.GPUMemory,
+				Category:  model.Category,
+			}
+			s.updateClientModels()
+		},
+		func(modelID string) {
+			// On model removed
+			delete(s.modelMappings, modelID)
+			s.updateClientModels()
+		},
+		func(model *RegisteredModel) {
+			// On model updated
+			s.modelMappings[model.ID] = ModelMapping{
+				Container: model.Container,
+				Endpoint:  model.Endpoint,
+				GPUMemory: model.GPUMemory,
+				Category:  model.Category,
+			}
+		},
+	)
+
 	s.loadModelMappings()
 	return s
+}
+
+// updateClientModels updates the client's model list based on ready models
+func (s *InferenceService) updateClientModels() {
+	if s.client != nil && s.registry != nil {
+		models := s.registry.GetReadyModelIDs()
+		s.client.models = models
+		if s.client.IsConnected() {
+			s.client.register()
+		}
+	}
 }
 
 // loadModelMappings loads model-to-endpoint mappings from models.json
@@ -72,6 +122,14 @@ func (s *InferenceService) Start() error {
 		logs.GetLogger().Info("Inference mode is disabled")
 		return nil
 	}
+
+	// Start model registry (loads models and starts file watcher)
+	if err := s.registry.Start(); err != nil {
+		logs.GetLogger().Warnf("Failed to start model registry: %v", err)
+	}
+
+	// Start health checker
+	s.healthChecker.Start()
 
 	// Get owner and worker addresses
 	ownerAddr, workerAddr, err := GetOwnerAddressAndWorkerAddress()
@@ -123,20 +181,36 @@ func (s *InferenceService) Stop() {
 	if s.client != nil {
 		s.client.Stop()
 	}
+	if s.healthChecker != nil {
+		s.healthChecker.Stop()
+	}
+	if s.registry != nil {
+		s.registry.Stop()
+	}
 }
 
 // handleInference processes inference requests from Inference service
 func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
-	// Check if we have a Docker model mapping
-	mapping, ok := s.modelMappings[payload.ModelID]
+	// Try to get endpoint from registry first (preferred)
+	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
 	if !ok {
-		return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+		// Fall back to direct mapping lookup for backward compatibility
+		mapping, mapOk := s.modelMappings[payload.ModelID]
+		if !mapOk {
+			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+		}
+		endpoint = mapping.Endpoint
 	}
 
-	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s", payload.ModelID, mapping.Endpoint)
-	response, err := s.forwardToDockerModel(mapping.Endpoint, payload.Request)
+	// Check model health before forwarding
+	if s.healthChecker != nil && !s.healthChecker.IsModelHealthy(payload.ModelID) {
+		logs.GetLogger().Warnf("Model %s is unhealthy, but attempting request anyway", payload.ModelID)
+	}
+
+	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s", payload.ModelID, endpoint)
+	response, err := s.forwardToDockerModel(endpoint, payload.Request)
 	if err != nil {
 		return nil, fmt.Errorf("inference failed: %w", err)
 	}
@@ -211,14 +285,24 @@ func (s *InferenceService) RegisterModels(models []string) {
 func (s *InferenceService) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
-	// Check if we have a Docker model mapping
-	mapping, ok := s.modelMappings[payload.ModelID]
+	// Try to get endpoint from registry first (preferred)
+	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
 	if !ok {
-		return &StreamResult{Error: fmt.Errorf("model %s not deployed on this provider", payload.ModelID)}
+		// Fall back to direct mapping lookup for backward compatibility
+		mapping, mapOk := s.modelMappings[payload.ModelID]
+		if !mapOk {
+			return &StreamResult{Error: fmt.Errorf("model %s not deployed on this provider", payload.ModelID)}
+		}
+		endpoint = mapping.Endpoint
 	}
 
-	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s", payload.ModelID, mapping.Endpoint)
-	return s.streamFromDockerModel(mapping.Endpoint, payload.Request, sendChunk)
+	// Check model health before forwarding
+	if s.healthChecker != nil && !s.healthChecker.IsModelHealthy(payload.ModelID) {
+		logs.GetLogger().Warnf("Model %s is unhealthy, but attempting streaming request anyway", payload.ModelID)
+	}
+
+	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s", payload.ModelID, endpoint)
+	return s.streamFromDockerModel(endpoint, payload.Request, sendChunk)
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
@@ -326,4 +410,92 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 	}
 
 	return result
+}
+
+// === Model Management API ===
+
+// GetRegistry returns the model registry
+func (s *InferenceService) GetRegistry() *ModelRegistry {
+	return s.registry
+}
+
+// GetHealthChecker returns the model health checker
+func (s *InferenceService) GetHealthChecker() *ModelHealthChecker {
+	return s.healthChecker
+}
+
+// GetAllModels returns all registered models with their status
+func (s *InferenceService) GetAllModels() []*RegisteredModel {
+	if s.registry == nil {
+		return nil
+	}
+	return s.registry.GetAllModels()
+}
+
+// GetModelStatus returns the status of a specific model
+func (s *InferenceService) GetModelStatus(modelID string) (*RegisteredModel, bool) {
+	if s.registry == nil {
+		return nil, false
+	}
+	return s.registry.GetModel(modelID)
+}
+
+// GetModelHealth returns the health status of a specific model
+func (s *InferenceService) GetModelHealth(modelID string) (*ModelStatus, bool) {
+	if s.healthChecker == nil {
+		return nil, false
+	}
+	return s.healthChecker.GetModelStatus(modelID)
+}
+
+// GetAllModelHealth returns health status of all models
+func (s *InferenceService) GetAllModelHealth() map[string]*ModelStatus {
+	if s.healthChecker == nil {
+		return nil
+	}
+	return s.healthChecker.GetAllStatuses()
+}
+
+// EnableModel enables a model for serving requests
+func (s *InferenceService) EnableModel(modelID string) error {
+	if s.registry == nil {
+		return fmt.Errorf("registry not initialized")
+	}
+	return s.registry.EnableModel(modelID)
+}
+
+// DisableModel disables a model from serving requests
+func (s *InferenceService) DisableModel(modelID string) error {
+	if s.registry == nil {
+		return fmt.Errorf("registry not initialized")
+	}
+	return s.registry.DisableModel(modelID)
+}
+
+// ReloadModels manually triggers a reload of the models configuration
+func (s *InferenceService) ReloadModels() error {
+	if s.registry == nil {
+		return fmt.Errorf("registry not initialized")
+	}
+	return s.registry.ReloadConfig()
+}
+
+// ForceHealthCheck triggers an immediate health check for a model
+func (s *InferenceService) ForceHealthCheck(modelID string) {
+	if s.healthChecker != nil {
+		s.healthChecker.ForceCheck(modelID)
+	}
+}
+
+// GetModelsSummary returns a summary of model statuses
+func (s *InferenceService) GetModelsSummary() map[string]interface{} {
+	if s.registry == nil {
+		return map[string]interface{}{
+			"total":     0,
+			"ready":     0,
+			"unhealthy": 0,
+			"disabled":  0,
+		}
+	}
+	return s.registry.GetStatusSummary()
 }
