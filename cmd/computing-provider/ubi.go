@@ -244,6 +244,31 @@ func runDaemon() error {
 	router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
 	router.POST("/cp/zk_task", computing.DoZkTask)
 
+	// Inference metrics endpoints
+	router.GET("/inference/metrics", func(c *gin.Context) {
+		metrics := inferenceService.GetMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Inference service not running"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/metrics/prometheus", func(c *gin.Context) {
+		prometheusMetrics := inferenceService.GetMetricsPrometheus()
+		if prometheusMetrics == "" {
+			c.String(503, "# Inference service not running\n")
+			return
+		}
+		c.Header("Content-Type", "text/plain; charset=utf-8")
+		c.String(200, prometheusMetrics)
+	})
+	router.GET("/inference/status", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"connected":     inferenceService.IsConnected(),
+			"active_models": inferenceService.GetActiveModels(),
+		})
+	})
+
 	shutdownChan := make(chan struct{})
 	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
 	if err != nil {

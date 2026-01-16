@@ -167,6 +167,10 @@ type InferenceClient struct {
 	streamingInferenceHandler StreamingInferenceHandler
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
+
+	// Metrics tracking
+	metrics      *InferenceMetrics
+	gpuCollector *GPUMetricsCollector
 }
 
 // NewInferenceClient creates a new Inference client
@@ -181,13 +185,15 @@ func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClie
 	}
 
 	return &InferenceClient{
-		providerID: providerID,
-		workerAddr: workerAddr,
-		ownerAddr:  ownerAddr,
-		models:     config.Inference.Models,
-		wsURL:      wsURL,
-		send:       make(chan []byte, 256),
-		stopCh:     make(chan struct{}),
+		providerID:   providerID,
+		workerAddr:   workerAddr,
+		ownerAddr:    ownerAddr,
+		models:       config.Inference.Models,
+		wsURL:        wsURL,
+		send:         make(chan []byte, 256),
+		stopCh:       make(chan struct{}),
+		metrics:      NewInferenceMetrics(),
+		gpuCollector: NewGPUMetricsCollector(),
 	}
 }
 
@@ -231,6 +237,8 @@ func (c *InferenceClient) Stop() {
 }
 
 func (c *InferenceClient) connect() error {
+	c.metrics.RecordConnectionState("connecting")
+
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig: &tls.Config{
@@ -240,6 +248,7 @@ func (c *InferenceClient) connect() error {
 
 	conn, _, err := dialer.Dial(c.wsURL+"/ws", nil)
 	if err != nil {
+		c.metrics.RecordConnectionState("disconnected")
 		return fmt.Errorf("failed to connect to Swan Inference: %w", err)
 	}
 
@@ -248,11 +257,15 @@ func (c *InferenceClient) connect() error {
 	c.registered = false
 	c.mu.Unlock()
 
+	c.metrics.RecordConnectionState("connected")
 	logs.GetLogger().Info("Connected to Swan Inference")
 	return nil
 }
 
 func (c *InferenceClient) reconnect() {
+	c.metrics.RecordConnectionState("reconnecting")
+	c.metrics.RecordReconnect()
+
 	for {
 		select {
 		case <-c.stopCh:
@@ -517,12 +530,44 @@ func (c *InferenceClient) sendHeartbeat() {
 }
 
 func (c *InferenceClient) collectMetrics() map[string]float64 {
-	// Collect GPU/CPU metrics via Docker resource exporter
 	metrics := make(map[string]float64)
 
-	// Placeholder for actual metric collection from Docker containers
-	metrics["gpu_utilization"] = 0.0
-	metrics["memory_utilization"] = 0.0
+	// Collect real GPU metrics
+	gpuMetrics := c.gpuCollector.CollectGPUMetrics()
+	if len(gpuMetrics) > 0 {
+		// Calculate average GPU utilization across all GPUs
+		var totalUtilization, totalMemoryUsage float64
+		for _, gpu := range gpuMetrics {
+			totalUtilization += gpu.UtilizationPct
+			totalMemoryUsage += gpu.MemoryUsagePct
+		}
+		metrics["gpu_utilization"] = totalUtilization / float64(len(gpuMetrics))
+		metrics["memory_utilization"] = totalMemoryUsage / float64(len(gpuMetrics))
+
+		// Also include per-GPU metrics
+		for _, gpu := range gpuMetrics {
+			prefix := fmt.Sprintf("gpu_%d_", gpu.Index)
+			metrics[prefix+"utilization"] = gpu.UtilizationPct
+			metrics[prefix+"memory_used_mb"] = gpu.MemoryUsedMB
+			metrics[prefix+"memory_total_mb"] = gpu.MemoryTotalMB
+			metrics[prefix+"temperature_c"] = gpu.TemperatureC
+			metrics[prefix+"power_draw_w"] = gpu.PowerDrawW
+		}
+
+		// Update the internal metrics tracker
+		c.metrics.UpdateGPUMetrics(gpuMetrics)
+	} else {
+		metrics["gpu_utilization"] = 0.0
+		metrics["memory_utilization"] = 0.0
+	}
+
+	// Add request-level metrics from internal tracker
+	snapshot := c.metrics.GetSnapshot()
+	metrics["active_requests"] = float64(snapshot.ActiveRequests)
+	metrics["total_requests"] = float64(snapshot.TotalRequests)
+	metrics["requests_per_minute"] = snapshot.RequestsPerMinute
+	metrics["avg_latency_ms"] = snapshot.AvgLatencyMs
+	metrics["tokens_per_second"] = snapshot.TokensPerSecond
 
 	return metrics
 }
@@ -579,6 +624,9 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	startTime := time.Now()
 	logs.GetLogger().Infof("Processing inference request %s for model %s (stream=%v)", requestID, payload.ModelID, payload.Stream)
 
+	// Record request start for metrics
+	c.metrics.RecordRequestStart(payload.ModelID, payload.Stream)
+
 	// Handle streaming inference
 	if payload.Stream {
 		c.handleStreamingInference(requestID, payload, startTime)
@@ -596,14 +644,20 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	}
 
 	latency := time.Since(startTime).Milliseconds()
+	latencyFloat := float64(latency)
 
 	if err != nil {
+		// Record failed request
+		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, 0, 0, false, err.Error())
 		response = &InferenceResponse{
 			RequestID: requestID,
 			Error:     err.Error(),
 			Latency:   latency,
 		}
 	} else {
+		// Extract token counts from response if available
+		tokensIn, tokensOut := extractTokenCounts(response.Response)
+		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, tokensIn, tokensOut, true, "")
 		response.RequestID = requestID
 		response.Latency = latency
 	}
@@ -614,6 +668,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 func (c *InferenceClient) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
+		c.metrics.RecordRequestEnd(payload.ModelID, 0, 0, 0, false, "streaming not supported")
 		c.sendError(requestID, 501, "streaming not supported")
 		return
 	}
@@ -627,6 +682,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 	result := c.streamingInferenceHandler(requestID, payload, sendChunk)
 
 	latency := time.Since(startTime).Milliseconds()
+	latencyFloat := float64(latency)
 
 	// Send stream end message with token usage
 	var tokensIn, tokensOut int64
@@ -636,6 +692,14 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 		tokensOut = result.TokensOutput
 		err = result.Error
 	}
+
+	// Record metrics for streaming request
+	if err != nil {
+		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), false, err.Error())
+	} else {
+		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), true, "")
+	}
+
 	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, err)
 }
 
@@ -765,4 +829,53 @@ func (c *InferenceClient) IsConnected() bool {
 // GetProviderID returns the provider ID
 func (c *InferenceClient) GetProviderID() string {
 	return c.providerID
+}
+
+// GetMetrics returns a snapshot of the current metrics
+func (c *InferenceClient) GetMetrics() InferenceMetrics {
+	return c.metrics.GetSnapshot()
+}
+
+// GetMetricsPrometheus returns metrics in Prometheus text format
+func (c *InferenceClient) GetMetricsPrometheus() string {
+	return c.metrics.GetPrometheusMetrics()
+}
+
+// extractTokenCounts attempts to extract token usage from inference response
+// Returns (tokensIn, tokensOut) - defaults to 0 if not found
+func extractTokenCounts(response json.RawMessage) (int, int) {
+	if len(response) == 0 {
+		return 0, 0
+	}
+
+	// Try to extract from OpenAI-compatible response format
+	var openAIResponse struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(response, &openAIResponse); err == nil {
+		if openAIResponse.Usage.PromptTokens > 0 || openAIResponse.Usage.CompletionTokens > 0 {
+			return openAIResponse.Usage.PromptTokens, openAIResponse.Usage.CompletionTokens
+		}
+	}
+
+	// Try vLLM/SGLang format
+	var vllmResponse struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.Unmarshal(response, &vllmResponse); err == nil {
+		if vllmResponse.Usage.PromptTokens > 0 || vllmResponse.Usage.CompletionTokens > 0 {
+			return vllmResponse.Usage.PromptTokens, vllmResponse.Usage.CompletionTokens
+		}
+	}
+
+	return 0, 0
 }

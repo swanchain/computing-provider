@@ -44,6 +44,10 @@ SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"                     # Swan
 
 # Inference Mode Configuration - Swan Inference Marketplace (DEFAULT)
 # Inference mode does NOT require a public IP - connects outbound via WebSocket
+# Metrics endpoints (automatically enabled when Inference mode is on):
+#   GET /api/v1/computing/inference/metrics           - JSON metrics
+#   GET /api/v1/computing/inference/metrics/prometheus - Prometheus format
+#   GET /api/v1/computing/inference/status            - Connection status
 [Inference]
 Enable = true                                                             # Inference mode is enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint

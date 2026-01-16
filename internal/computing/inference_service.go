@@ -179,6 +179,23 @@ func (s *InferenceService) GetActiveModels() []string {
 	return activeModels
 }
 
+// GetMetrics returns the current inference metrics
+func (s *InferenceService) GetMetrics() *InferenceMetrics {
+	if s.client == nil {
+		return nil
+	}
+	metrics := s.client.GetMetrics()
+	return &metrics
+}
+
+// GetMetricsPrometheus returns metrics in Prometheus text format
+func (s *InferenceService) GetMetricsPrometheus() string {
+	if s.client == nil {
+		return ""
+	}
+	return s.client.GetMetricsPrometheus()
+}
+
 // RegisterModels updates the models this provider serves
 func (s *InferenceService) RegisterModels(models []string) {
 	if s.client != nil {
