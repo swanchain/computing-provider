@@ -32,6 +32,7 @@ func main() {
 			FlagRepo,
 		},
 		Commands: []*cli.Command{
+			runCmd,
 			initCmd,
 			infoCmd,
 			stateCmd,

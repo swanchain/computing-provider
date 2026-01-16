@@ -23,10 +23,17 @@ import (
 
 var ubiTaskCmd = &cli.Command{
 	Name:  "ubi",
-	Usage: "Manage ubi tasks",
+	Usage: "Manage ZK proof tasks",
 	Subcommands: []*cli.Command{
 		listCmd,
-		daemonCmd,
+	},
+}
+
+var runCmd = &cli.Command{
+	Name:  "run",
+	Usage: "Start the computing provider",
+	Action: func(cctx *cli.Context) error {
+		return runDaemon()
 	},
 }
 
@@ -159,101 +166,97 @@ var listCmd = &cli.Command{
 	},
 }
 
-var daemonCmd = &cli.Command{
-	Name:  "daemon",
-	Usage: "Start a cp process",
+// runDaemon starts the computing provider daemon
+func runDaemon() error {
+	logs.GetLogger().Info("Starting computing provider...")
+	cpRepoPath, _ := os.LookupEnv("CP_PATH")
 
-	Action: func(cctx *cli.Context) error {
-		logs.GetLogger().Info("Starting a computing-provider client.")
-		cpRepoPath, _ := os.LookupEnv("CP_PATH")
+	computing.NewDockerService().CleanResourceForDocker(true)
 
-		computing.NewDockerService().CleanResourceForDocker(true)
+	resourceExporterContainerName := "resource-exporter"
+	rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
+	if err != nil {
+		return fmt.Errorf("check %s container failed, error: %v", resourceExporterContainerName, err)
+	}
 
-		resourceExporterContainerName := "resource-exporter"
-		rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
-		if err != nil {
-			return fmt.Errorf("check %s container failed, error: %v", resourceExporterContainerName, err)
+	if version != "" {
+		if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
+			logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
 		}
+	}
 
-		if version != "" {
-			if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
-				logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
-			}
+	if !rsExist {
+		if err = computing.RestartResourceExporter(); err != nil {
+			logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
 		}
+	}
 
-		if !rsExist {
-			if err = computing.RestartResourceExporter(); err != nil {
-				logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
-			}
+	traefikServiceContainerName := "traefik-service"
+	tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
+	if err != nil {
+		return fmt.Errorf("check %s container failed, error: %v", traefikServiceContainerName, err)
+	}
+	if !tsExist {
+		if err = computing.RestartTraefikService(); err != nil {
+			logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
 		}
+	}
 
-		traefikServiceContainerName := "traefik-service"
-		tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
-		if err != nil {
-			return fmt.Errorf("check %s container failed, error: %v", traefikServiceContainerName, err)
-		}
-		if !tsExist {
-			if err = computing.RestartTraefikService(); err != nil {
-				logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
-			}
-		}
+	if err := conf.InitConfig(cpRepoPath, true); err != nil {
+		logs.GetLogger().Fatal(err)
+	}
+	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
 
-		if err := conf.InitConfig(cpRepoPath, true); err != nil {
-			logs.GetLogger().Fatal(err)
-		}
-		logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
+	computing.SyncCpAccountInfo()
+	computing.CronTaskForEcp()
 
-		computing.SyncCpAccountInfo()
-		computing.CronTaskForEcp()
+	// Start Inference mode (Swan Inference marketplace) if enabled
+	nodeID := computing.GetNodeId(cpRepoPath)
+	inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
+	if err := inferenceService.Start(); err != nil {
+		logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
+	}
 
-		// Start Inference mode (Swan Inference marketplace) if enabled
-		nodeID := computing.GetNodeId(cpRepoPath)
-		inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
-		if err := inferenceService.Start(); err != nil {
-			logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
-		}
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.Default()
+	r.Use(cors.Middleware(cors.Config{
+		Origins:         "*",
+		Methods:         "GET, PUT, POST, DELETE",
+		RequestHeaders:  "Origin, Authorization, Content-Type",
+		ExposedHeaders:  "",
+		MaxAge:          50 * time.Second,
+		ValidateHeaders: false,
+	}))
+	pprof.Register(r)
 
-		gin.SetMode(gin.ReleaseMode)
-		r := gin.Default()
-		r.Use(cors.Middleware(cors.Config{
-			Origins:         "*",
-			Methods:         "GET, PUT, POST, DELETE",
-			RequestHeaders:  "Origin, Authorization, Content-Type",
-			ExposedHeaders:  "",
-			MaxAge:          50 * time.Second,
-			ValidateHeaders: false,
-		}))
-		pprof.Register(r)
+	router := r.Group("/api/v1/computing")
+	router.GET("/cp", computing.GetCpResource)
+	router.GET("/cp/metrics", computing.GetUbiResourceExporterMetrics)
+	router.POST("/cp/ubi", computing.DoUbiTaskForDocker)
+	router.POST("/cp/docker/receive/ubi", computing.ReceiveUbiProof)
 
-		router := r.Group("/api/v1/computing")
-		router.GET("/cp", computing.GetCpResource)
-		router.GET("/cp/metrics", computing.GetUbiResourceExporterMetrics)
-		router.POST("/cp/ubi", computing.DoUbiTaskForDocker)
-		router.POST("/cp/docker/receive/ubi", computing.ReceiveUbiProof)
+	ecpImageService := computing.NewImageJobService()
+	router.POST("/cp/deploy/check", ecpImageService.CheckJobCondition)
+	router.GET("/cp/price", computing.GetPrice)
+	router.POST("/cp/deploy", ecpImageService.DeployJob)
+	router.GET("/cp/job/status", ecpImageService.GetJobStatus)
+	router.GET("/cp/job/log", ecpImageService.DockerLogsHandler)
+	router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
+	router.POST("/cp/zk_task", computing.DoZkTask)
 
-		ecpImageService := computing.NewImageJobService()
-		router.POST("/cp/deploy/check", ecpImageService.CheckJobCondition)
-		router.GET("/cp/price", computing.GetPrice)
-		router.POST("/cp/deploy", ecpImageService.DeployJob)
-		router.GET("/cp/job/status", ecpImageService.GetJobStatus)
-		router.GET("/cp/job/log", ecpImageService.DockerLogsHandler)
-		router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
-		router.POST("/cp/zk_task", computing.DoZkTask)
+	shutdownChan := make(chan struct{})
+	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
+	if err != nil {
+		logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
+	}
+	logs.GetLogger().Infof("Computing provider started successfully, listening on port: %d", conf.GetConfig().API.Port)
 
-		shutdownChan := make(chan struct{})
-		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
-		if err != nil {
-			logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
-		}
-		logs.GetLogger().Infof("CP service started successfully, listening on port: %d", conf.GetConfig().API.Port)
+	finishCh := util.MonitorShutdown(shutdownChan,
+		util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
+	)
+	<-finishCh
 
-		finishCh := util.MonitorShutdown(shutdownChan,
-			util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
-		)
-		<-finishCh
-
-		return nil
-	},
+	return nil
 }
 
 func getStatusColor(taskStatus int) []tablewriter.Colors {

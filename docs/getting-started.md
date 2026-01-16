@@ -115,7 +115,7 @@ PortRange = ["40000-40050", "40060"]
 export CP_PATH=~/.swan/computing
 
 # Start the provider
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 
 # Check if running
 ps aux | grep computing-provider
@@ -166,7 +166,7 @@ export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
 export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 
 # Start the provider
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
 ## Start Your Provider
@@ -188,7 +188,7 @@ computing-provider state
 export CP_PATH=~/.swan/computing
 
 # Start the provider
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 
 # Check if it's running
 ps aux | grep computing-provider
