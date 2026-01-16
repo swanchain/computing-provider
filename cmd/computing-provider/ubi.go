@@ -329,6 +329,99 @@ func runDaemon() error {
 		c.JSON(200, gin.H{"status": "models reloaded"})
 	})
 
+	// Request management endpoints
+	router.GET("/inference/ratelimit", func(c *gin.Context) {
+		metrics := inferenceService.GetRateLimiterMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Rate limiter not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/concurrency", func(c *gin.Context) {
+		metrics := inferenceService.GetConcurrencyMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Concurrency limiter not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/retries", func(c *gin.Context) {
+		metrics := inferenceService.GetRetryMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Retry policy not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/request-management", func(c *gin.Context) {
+		status := inferenceService.GetRequestManagementStatus()
+		c.JSON(200, status)
+	})
+	router.POST("/inference/ratelimit/global", func(c *gin.Context) {
+		var req struct {
+			Rate float64 `json:"rate"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Rate <= 0 {
+			c.JSON(400, gin.H{"error": "rate must be positive"})
+			return
+		}
+		inferenceService.SetGlobalRateLimit(req.Rate)
+		c.JSON(200, gin.H{"status": "rate limit updated", "rate": req.Rate})
+	})
+	router.POST("/inference/ratelimit/model/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		var req struct {
+			Rate  float64 `json:"rate"`
+			Burst int     `json:"burst"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Rate <= 0 || req.Burst <= 0 {
+			c.JSON(400, gin.H{"error": "rate and burst must be positive"})
+			return
+		}
+		inferenceService.SetModelRateLimit(modelID, req.Rate, req.Burst)
+		c.JSON(200, gin.H{"status": "model rate limit updated", "model_id": modelID, "rate": req.Rate, "burst": req.Burst})
+	})
+	router.POST("/inference/concurrency/global", func(c *gin.Context) {
+		var req struct {
+			Max int `json:"max"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Max <= 0 {
+			c.JSON(400, gin.H{"error": "max must be positive"})
+			return
+		}
+		inferenceService.SetGlobalConcurrencyLimit(req.Max)
+		c.JSON(200, gin.H{"status": "concurrency limit updated", "max": req.Max})
+	})
+	router.POST("/inference/concurrency/model/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		var req struct {
+			Max int `json:"max"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Max <= 0 {
+			c.JSON(400, gin.H{"error": "max must be positive"})
+			return
+		}
+		inferenceService.SetModelConcurrencyLimit(modelID, req.Max)
+		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
+	})
+
 	shutdownChan := make(chan struct{})
 	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
 	if err != nil {

@@ -28,28 +28,48 @@ type ModelMapping struct {
 
 // InferenceService manages the Inference client and inference handling
 type InferenceService struct {
-	client        *InferenceClient
-	nodeID        string
-	cpPath        string
-	modelMappings map[string]ModelMapping
-	registry      *ModelRegistry
-	healthChecker *ModelHealthChecker
+	client            *InferenceClient
+	nodeID            string
+	cpPath            string
+	modelMappings     map[string]ModelMapping
+	registry          *ModelRegistry
+	healthChecker     *ModelHealthChecker
+	rateLimiter       *RateLimiter
+	concurrencyLimiter *ConcurrencyLimiter
+	retryPolicy       *RetryPolicy
+	gpuCollector      *GPUMetricsCollector
 }
 
 // NewInferenceService creates a new Inference service
 func NewInferenceService(nodeID, cpPath string) *InferenceService {
+	// Create GPU metrics collector
+	gpuCollector := NewGPUMetricsCollector()
+
 	// Create health checker with default config
 	healthChecker := NewModelHealthChecker(DefaultHealthCheckConfig())
 
 	// Create model registry with health checker
 	registry := NewModelRegistry(cpPath, healthChecker)
 
+	// Create rate limiter with GPU awareness
+	rateLimiter := NewRateLimiter(DefaultRateLimiterConfig(), gpuCollector)
+
+	// Create concurrency limiter with GPU awareness
+	concurrencyLimiter := NewConcurrencyLimiter(DefaultConcurrencyConfig(), gpuCollector)
+
+	// Create retry policy
+	retryPolicy := NewRetryPolicy(DefaultRetryConfig())
+
 	s := &InferenceService{
-		nodeID:        nodeID,
-		cpPath:        cpPath,
-		modelMappings: make(map[string]ModelMapping),
-		registry:      registry,
-		healthChecker: healthChecker,
+		nodeID:             nodeID,
+		cpPath:             cpPath,
+		modelMappings:      make(map[string]ModelMapping),
+		registry:           registry,
+		healthChecker:      healthChecker,
+		rateLimiter:        rateLimiter,
+		concurrencyLimiter: concurrencyLimiter,
+		retryPolicy:        retryPolicy,
+		gpuCollector:       gpuCollector,
 	}
 
 	// Set up registry callbacks to update modelMappings for backward compatibility
@@ -131,6 +151,12 @@ func (s *InferenceService) Start() error {
 	// Start health checker
 	s.healthChecker.Start()
 
+	// Start rate limiter (with adaptive GPU-aware adjustment)
+	s.rateLimiter.Start()
+
+	// Start concurrency limiter (with GPU memory awareness)
+	s.concurrencyLimiter.Start()
+
 	// Get owner and worker addresses
 	ownerAddr, workerAddr, err := GetOwnerAddressAndWorkerAddress()
 	if err != nil {
@@ -186,6 +212,12 @@ func (s *InferenceService) Stop() {
 	}
 	if s.registry != nil {
 		s.registry.Stop()
+	}
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
+	}
+	if s.concurrencyLimiter != nil {
+		s.concurrencyLimiter.Stop()
 	}
 }
 
@@ -498,4 +530,79 @@ func (s *InferenceService) GetModelsSummary() map[string]interface{} {
 		}
 	}
 	return s.registry.GetStatusSummary()
+}
+
+// === Request Management API ===
+
+// GetRateLimiterMetrics returns rate limiter metrics
+func (s *InferenceService) GetRateLimiterMetrics() *RateLimiterMetrics {
+	if s.rateLimiter == nil {
+		return nil
+	}
+	metrics := s.rateLimiter.GetMetrics()
+	return &metrics
+}
+
+// GetConcurrencyMetrics returns concurrency limiter metrics
+func (s *InferenceService) GetConcurrencyMetrics() *ConcurrencyMetrics {
+	if s.concurrencyLimiter == nil {
+		return nil
+	}
+	metrics := s.concurrencyLimiter.GetMetrics()
+	return &metrics
+}
+
+// GetRetryMetrics returns retry policy metrics
+func (s *InferenceService) GetRetryMetrics() *RetryMetrics {
+	if s.retryPolicy == nil {
+		return nil
+	}
+	metrics := s.retryPolicy.GetMetrics()
+	return &metrics
+}
+
+// SetGlobalRateLimit updates the global rate limit
+func (s *InferenceService) SetGlobalRateLimit(tokensPerSecond float64) {
+	if s.rateLimiter != nil {
+		s.rateLimiter.globalBucket.SetRate(tokensPerSecond)
+		logs.GetLogger().Infof("Updated global rate limit to %.2f req/s", tokensPerSecond)
+	}
+}
+
+// SetModelRateLimit sets rate limit for a specific model
+func (s *InferenceService) SetModelRateLimit(modelID string, tokensPerSecond float64, burstSize int) {
+	if s.rateLimiter != nil {
+		s.rateLimiter.SetModelLimit(modelID, tokensPerSecond, burstSize)
+	}
+}
+
+// SetGlobalConcurrencyLimit updates the global concurrency limit
+func (s *InferenceService) SetGlobalConcurrencyLimit(max int) {
+	if s.concurrencyLimiter != nil {
+		s.concurrencyLimiter.SetGlobalMax(max)
+	}
+}
+
+// SetModelConcurrencyLimit sets concurrency limit for a specific model
+func (s *InferenceService) SetModelConcurrencyLimit(modelID string, max int) {
+	if s.concurrencyLimiter != nil {
+		s.concurrencyLimiter.SetModelMax(modelID, max)
+	}
+}
+
+// GetRequestManagementStatus returns combined status of all request management components
+func (s *InferenceService) GetRequestManagementStatus() map[string]interface{} {
+	status := make(map[string]interface{})
+
+	if s.rateLimiter != nil {
+		status["rate_limiter"] = s.rateLimiter.GetMetrics()
+	}
+	if s.concurrencyLimiter != nil {
+		status["concurrency_limiter"] = s.concurrencyLimiter.GetMetrics()
+	}
+	if s.retryPolicy != nil {
+		status["retry_policy"] = s.retryPolicy.GetMetrics()
+	}
+
+	return status
 }
