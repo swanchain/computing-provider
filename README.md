@@ -12,8 +12,8 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 
 | Mode | Description | Requirements | Command |
 |------|-------------|--------------|---------|
-| **Inference** (Default) | Deploy AI inference containers | Docker + NVIDIA Container Toolkit | `computing-provider ubi daemon` |
-| ZK-Proof | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider ubi daemon` |
+| **Inference** (Default) | Deploy AI inference containers | Docker + NVIDIA (or Ollama on macOS) | `computing-provider run` |
+| ZK-Proof | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider run` |
 
 # Table of Contents
 
@@ -22,8 +22,8 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
   - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
   - [Build Computing Provider](#build-computing-provider)
   - [Initialize and Configure](#initialize-and-configure)
-  - [Setup Wallet and Account](#setup-wallet-and-account)
   - [Start Inference Provider](#start-inference-provider)
+- [macOS Quick Start](#macos-quick-start)
 - [Configuration Reference](#configuration-reference)
 - [ZK-Proof Mode](#zk-proof-mode)
 - [CLI Reference](#cli-reference)
@@ -33,7 +33,27 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 
 # Quick Start: Inference Mode
 
-Inference Mode allows you to run AI inference containers on your GPU hardware and earn rewards from the Swan Chain network.
+Inference Mode is the simplest way to get started. **No wallet, no blockchain registration, no public IP required.**
+
+```bash
+# 1. Build and install
+git clone https://github.com/swanchain/go-computing-provider.git
+cd go-computing-provider && git checkout releases
+make clean && make mainnet && sudo make install
+
+# 2. Initialize
+export CP_PATH=~/.swan/computing
+computing-provider init --node-name=my-provider
+
+# 3. Configure models.json (see below)
+
+# 4. Start your inference server (SGLang, vLLM, or Ollama)
+
+# 5. Run the provider
+computing-provider run
+```
+
+That's it! Your provider will connect to Swan Inference and start receiving requests.
 
 ## Prerequisites
 
@@ -88,6 +108,10 @@ make install
 
 1. **Initialize the repository:**
 ```bash
+# For Inference mode (no public IP needed)
+computing-provider init --node-name=<YOUR_NODE_NAME>
+
+# For ZK-Proof mode (requires public IP)
 computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
 ```
 
@@ -169,40 +193,11 @@ Swan Inference (wss://inference-ws.swanchain.io)
 4. Forwards to local model server, returns response
 5. No inbound ports or public IP needed
 
-## Setup Wallet and Account
-
-1. **Create or import wallet:**
-```bash
-# Create new wallet
-computing-provider wallet new
-
-# Or import existing wallet
-computing-provider wallet import <YOUR_PRIVATE_KEY_FILE>
-```
-
-2. **Deposit SwanETH** to your wallet address. See the [getting started guide](https://docs.swanchain.io/swan-mainnet/getting-started-guide).
-
-3. **Create CP account with Inference task type:**
-```bash
-computing-provider account create \
-    --ownerAddress <YOUR_OWNER_ADDRESS> \
-    --workerAddress <YOUR_WORKER_ADDRESS> \
-    --beneficiaryAddress <YOUR_BENEFICIARY_ADDRESS> \
-    --task-types 4
-```
-
-> **Task Type 4** = Inference
-
-4. **Add collateral:**
-```bash
-computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS> <AMOUNT>
-```
-
 ## Start Inference Provider
 
 ```bash
 export CP_PATH=<YOUR_CP_PATH>
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
 **Check running tasks:**
@@ -215,6 +210,47 @@ computing-provider task list --ecp
 TASK UUID                               TASK NAME       IMAGE NAME                              CONTAINER STATUS   REWARD    CREATE TIME
 75f9df4e-b6a5-40b0-b7ac-02fb1840dafa    inference-01    mymodel/inference:latest                running            1.2500    2024-11-24 10:23:32
 ```
+
+---
+
+# macOS Quick Start
+
+For Apple Silicon Macs (M1/M2/M3/M4), use Ollama for native Metal GPU acceleration.
+
+```bash
+# 1. Install Ollama
+brew install ollama
+
+# 2. Pull and serve a model
+ollama serve &
+ollama pull llama3.2:3b
+
+# 3. Install computing provider
+brew install go
+git clone https://github.com/swanchain/go-computing-provider.git
+cd go-computing-provider && git checkout releases
+make clean && make mainnet && sudo make install
+
+# 4. Initialize
+export CP_PATH=~/.swan/computing
+computing-provider init --node-name=my-mac-provider
+
+# 5. Configure models.json
+cat > $CP_PATH/models.json << 'EOF'
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation"
+  }
+}
+EOF
+
+# 6. Run
+computing-provider run
+```
+
+See [Apple Silicon Support](docs/apple-silicon-support.md) for detailed instructions.
 
 ---
 
@@ -275,36 +311,43 @@ Password = ""
 
 # ZK-Proof Mode
 
-ZK-Proof mode generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). Requires additional v28 parameters (~200GB).
+ZK-Proof mode generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). **Requires wallet setup and blockchain registration.**
 
 See [ZK-Proof Documentation](docs/ubi/README.md) for full setup.
 
 **Quick overview:**
 ```bash
-# Download v28 parameters
+# 1. Download v28 parameters (~200GB)
 export PARENT_PATH="<V28_PARAMS_PATH>"
 curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
 
-# Set environment
+# 2. Set environment
 export FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
 export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 
-# Create account with ZK task types
+# 3. Create wallet
+computing-provider wallet new
+
+# 4. Deposit SwanETH to your wallet (see https://docs.swanchain.io)
+
+# 5. Create account with ZK task types
 computing-provider account create \
     --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> \
     --task-types 1,2,4
 
-# Enable sequencer (reduces gas costs)
-# In config.toml:
+# 6. Add collateral
+computing-provider collateral add --ecp --from <addr> <amount>
+
+# 7. Enable sequencer (reduces gas costs) in config.toml:
 # [UBI]
 # EnableSequencer = true
 # AutoChainProof = false
 
-# Deposit to sequencer
+# 8. Deposit to sequencer
 computing-provider sequencer add --from <addr> <amount>
 
-# Start daemon
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+# 9. Start provider
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
 ---

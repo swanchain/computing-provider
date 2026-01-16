@@ -304,7 +304,7 @@ docker start sglang-llama-8b sglang-qwen
 
 # Then start computing provider
 export CP_PATH=~/.swan/computing
-computing-provider ubi daemon
+computing-provider run
 ```
 
 ## Performance Tuning

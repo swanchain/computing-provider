@@ -241,7 +241,7 @@ export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 
 ### Start ECP Daemon
 ```bash
-computing-provider ubi daemon
+computing-provider run
 ```
 
 ### List UBI Tasks
@@ -283,7 +283,7 @@ For ECP2 (inference only), set task-types to `4`.
    ```bash
    sudo usermod -aG docker $USER
    # Or use sg docker
-   sg docker -c "computing-provider ubi daemon"
+   sg docker -c "computing-provider run"
    ```
 
 2. **NVIDIA Container Toolkit Missing**

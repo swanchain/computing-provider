@@ -9,7 +9,7 @@
 | **ECP2** (Default) | 4 | AI inference containers |
 | ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining proofs |
 
-Both modes run via `computing-provider ubi daemon` and do NOT require Kubernetes.
+Both modes run via `computing-provider run` and do NOT require Kubernetes.
 
 ---
 
@@ -86,7 +86,7 @@ PortRange = ["40000-40050", "40060", "40065"]   # Ports for multi-port container
 ## Start ECP2 Service
 
 ```bash
-nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
+nohup ./computing-provider run >> cp.log 2>&1 &
 ```
 
 ## Check ECP2 Tasks
@@ -164,7 +164,7 @@ computing-provider sequencer add --from <YOUR_WALLET_ADDRESS> <amount>
 export FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
 export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
 
-nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
+nohup ./computing-provider run >> cp.log 2>&1 &
 ```
 
 **Notes:**

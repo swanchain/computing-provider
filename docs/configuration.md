@@ -185,7 +185,7 @@ For local development, Inference mode supports Node ID based authentication with
 make clean && make testnet
 
 # Start with local Swan Inference
-INFERENCE_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+INFERENCE_WS_URL=ws://localhost:8081 ./computing-provider run
 ```
 
 **Authentication Flow:**

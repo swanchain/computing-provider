@@ -250,7 +250,7 @@ The Inference mode is integrated into the main daemon. No separate CLI commands 
 
 ```bash
 # Start daemon (Inference mode is enabled by default)
-computing-provider ubi daemon
+computing-provider run
 ```
 
 ### 4. Integration Flow

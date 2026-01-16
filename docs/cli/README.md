@@ -59,7 +59,7 @@ The CLI respects the following environment variables:
 computing-provider init
 
 # Start the provider (ECP mode)
-computing-provider ubi daemon
+computing-provider run
 
 # Check provider status
 computing-provider state
@@ -100,7 +100,7 @@ computing-provider task list --help
 - `config` - Configuration management
 
 ### Runtime Commands
-- `ubi daemon` - Start provider service (ECP mode)
+- `run` - Start provider service (Inference or ZK-Proof mode)
 
 ### Information Commands
 - `info` - Provider information

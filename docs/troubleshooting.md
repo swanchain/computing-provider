@@ -80,7 +80,7 @@ sudo usermod -aG docker $USER
 newgrp docker
 
 # Or run with sg
-sg docker -c "computing-provider ubi daemon"
+sg docker -c "computing-provider run"
 ```
 
 **Container Already Exists**

@@ -22,8 +22,8 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 
 | Mode | Task Type | Description | Command |
 |------|-----------|-------------|---------|
-| **Inference** (Default) | 4 | Deploy AI inference containers | `computing-provider ubi daemon` |
-| ZK-Proof | 1, 2 | FIL-C2 and mining proofs | `computing-provider ubi daemon` |
+| **Inference** (Default) | 4 | Deploy AI inference containers | `computing-provider run` |
+| ZK-Proof | 1, 2 | FIL-C2 and mining proofs | `computing-provider run` |
 
 ## Build Commands
 
@@ -55,14 +55,20 @@ go test -run TestSequencer ./test/
 
 ```bash
 # Initialize repo (default: ~/.swan/computing, override with CP_PATH env)
+# For Inference mode (no public IP required)
+computing-provider init --node-name=<NAME>
+# For ZK-Proof mode (requires public IP)
 computing-provider init --multi-address=/ip4/<IP>/tcp/<PORT> --node-name=<NAME>
 
-# Wallet management
+# Start provider
+computing-provider run
+
+# Wallet management (required for ZK-Proof mode, optional for Inference)
 computing-provider wallet new
 computing-provider wallet list
 computing-provider wallet import <private_key_file>
 
-# Account/collateral management (Inference mode - task-types 4)
+# Account/collateral management (required for ZK-Proof mode)
 computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
 computing-provider collateral add --ecp --from <addr> <amount>
 
@@ -80,13 +86,42 @@ computing-provider research gpu-benchmark  # Run GPU benchmark tests
 
 Inference Mode runs AI inference containers via Docker. Does NOT require Kubernetes.
 
+**Inference mode is the simplest way to get started. No wallet, no blockchain registration, no public IP required.**
+
 **Prerequisites:**
-- Docker with NVIDIA Container Toolkit installed
-- Local inference server (SGLang or vLLM)
+- Docker with NVIDIA Container Toolkit (Linux) or Ollama (macOS)
+- Local inference server (SGLang, vLLM, or Ollama)
 
 > **Note:** Inference mode does NOT require a public IP address. The provider connects outbound to Swan Inference via WebSocket.
 
-**Install NVIDIA Container Toolkit (required for GPU access in Docker):**
+**Quick Start (Linux):**
+```bash
+# Initialize (no public IP needed)
+computing-provider init --node-name=my-provider
+
+# Configure models.json (see below)
+
+# Start your inference server
+
+# Run provider
+computing-provider run
+```
+
+**Quick Start (macOS with Ollama):**
+```bash
+# Install and run Ollama
+brew install ollama
+ollama serve &
+ollama pull llama3.2:3b
+
+# Initialize
+computing-provider init --node-name=my-mac-provider
+
+# Run provider
+computing-provider run
+```
+
+**Install NVIDIA Container Toolkit (Linux only):**
 ```bash
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
@@ -95,12 +130,6 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
 sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
-```
-
-**Inference account setup (task-types 4):**
-```bash
-computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
-computing-provider collateral add --ecp --from <addr> <amount>
 ```
 
 **Configure Inference mode in `$CP_PATH/config.toml`:**
@@ -122,7 +151,9 @@ Models = ["llama-3.2-3b"]                         # Models this provider serves
 }
 ```
 
-**Start SGLang inference server:**
+For macOS with Ollama, use endpoint `http://localhost:11434`.
+
+**Start SGLang inference server (Linux):**
 ```bash
 docker run -d --gpus all -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
@@ -138,20 +169,19 @@ docker run -d --gpus all -p 30000:30000 \
 export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for local dev
 ```
 
-**Start Inference daemon:**
+**Start Inference provider:**
 ```bash
-nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
 **Common Inference mode issues:**
-- `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider ubi daemon"`
+- `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider run"`
 - `could not select device driver "nvidia"`: Install NVIDIA Container Toolkit (see above)
 - `container name "/resource-exporter" is already in use`: Run `docker rm -f resource-exporter`
-- `CP Account is empty`: Create account with `computing-provider account create ...`
 
 ## Running ZK-Proof Mode
 
-ZK-Proof mode handles ZK-Snark proof generation (FIL-C2, Aleo, etc.). Requires v28 parameters (~200GB).
+ZK-Proof mode handles ZK-Snark proof generation (FIL-C2, Aleo, etc.). **Requires wallet setup and blockchain registration.**
 
 **Additional prerequisites:**
 - Download v28 parameters (at least 200GB storage needed)
@@ -162,8 +192,19 @@ export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
 export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"  # e.g., "GeForce RTX 4090:16384"
 ```
 
-**ZK-Proof account setup (task-types 1,2,4):**
+**Initialize with public IP (required for ZK-Proof mode):**
 ```bash
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
+```
+
+**ZK-Proof wallet and account setup (task-types 1,2,4):**
+```bash
+# Create wallet
+computing-provider wallet new
+
+# Deposit SwanETH to your wallet
+
+# Create account
 computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 1,2,4
 computing-provider collateral add --ecp --from <addr> <amount>
 computing-provider sequencer add --from <addr> <amount>
@@ -174,6 +215,11 @@ computing-provider sequencer add --from <addr> <amount>
 [UBI]
 EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
 AutoChainProof = false    # Fallback to chain when sequencer unavailable
+```
+
+**Start ZK-Proof provider:**
+```bash
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
 ## Inference Development Mode (Base Sepolia)
@@ -198,8 +244,8 @@ make clean && make testnet
 # Set environment for dev
 export INFERENCE_WS_URL=ws://localhost:8081
 
-# Run daemon (uses Node ID auth, skips on-chain account)
-./computing-provider ubi daemon
+# Run provider (uses Node ID auth, skips on-chain account)
+./computing-provider run
 ```
 
 **Authentication:**
