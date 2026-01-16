@@ -34,6 +34,7 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 - [Configuration Reference](#configuration-reference)
 - [ZK-Proof Mode (Linux Only)](#zk-proof-mode)
 - [CLI Reference](#cli-reference)
+- [Dashboard](#dashboard)
 - [Getting Help](#getting-help)
 
 ---
@@ -486,6 +487,24 @@ computing-provider ubi list --show-failed             # Include failed tasks
 computing-provider sequencer add --from <addr> <amt>  # Deposit to sequencer
 computing-provider sequencer withdraw --owner <addr> <amt>
 ```
+
+## Dashboard
+```bash
+# Start the web dashboard (default port 3005)
+computing-provider dashboard
+
+# Custom port and API target
+computing-provider dashboard --port 3005 --api http://localhost:8085
+```
+
+The dashboard provides a real-time web UI for monitoring and managing your inference provider:
+- **Metrics**: Request counts, success rates, latency (avg/p95/p99)
+- **GPU Status**: Utilization, memory, temperature per GPU
+- **Model Management**: Enable/disable models, force health checks, reload config
+- **Request Controls**: Adjust rate limits and concurrency settings
+- **Charts**: Live latency and throughput visualizations
+
+Access at `http://localhost:3005` after starting.
 
 ---
 

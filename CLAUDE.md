@@ -80,6 +80,10 @@ computing-provider ubi list           # ZK proof tasks
 computing-provider research hardware       # Display all hardware info
 computing-provider research gpu-info       # Display GPU information
 computing-provider research gpu-benchmark  # Run GPU benchmark tests
+
+# Dashboard (web UI for monitoring)
+computing-provider dashboard               # Start on port 3005
+computing-provider dashboard --port 8080   # Custom port
 ```
 
 ## Running Inference Mode (Default)
@@ -306,6 +310,9 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
   - `account/`: CP account registration contract
   - `ecp/`: Edge computing contracts (collateral, sequencer, tasks)
   - `token/`: SWAN token contract
+- `internal/dashboard/`: Web dashboard for inference monitoring
+  - `server.go`: Go server with embedded static files
+  - `ui/`: React + Vite + Tailwind frontend
 - `internal/models/`: Data models (jobs, resources, UBI tasks)
 - `internal/db/`: SQLite database via GORM
 - `conf/`: Configuration loading and validation
