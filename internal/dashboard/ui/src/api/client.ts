@@ -1,9 +1,8 @@
 import type {
   InferenceMetrics,
-  ModelStatus,
+  ModelsResponse,
   ConnectionStatus,
   RequestManagement,
-  HealthResponse,
 } from '../types';
 
 const API_BASE = '/api/v1/computing/inference';
@@ -34,8 +33,7 @@ export const api = {
   getStatus: () => fetchJson<ConnectionStatus>('/status'),
 
   // Models
-  getModels: () => fetchJson<ModelStatus[]>('/models'),
-  getHealth: () => fetchJson<HealthResponse>('/health'),
+  getModels: () => fetchJson<ModelsResponse>('/models'),
   enableModel: (id: string) => postJson<{ success: boolean }>(`/models/${id}/enable`),
   disableModel: (id: string) => postJson<{ success: boolean }>(`/models/${id}/disable`),
   reloadModels: () => postJson<{ success: boolean }>('/models/reload'),

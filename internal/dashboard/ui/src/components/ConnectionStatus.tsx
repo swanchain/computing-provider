@@ -1,4 +1,4 @@
-import { Wifi, WifiOff, RefreshCcw } from 'lucide-react';
+import { Wifi, WifiOff } from 'lucide-react';
 import type { ConnectionStatus as ConnectionStatusType } from '../types';
 
 interface ConnectionStatusProps {
@@ -34,16 +34,11 @@ export function ConnectionStatus({ status, loading }: ConnectionStatusProps) {
         )}
       </div>
 
-      {status.reconnect_attempts > 0 && !status.connected && (
-        <div className="flex items-center gap-1 text-xs text-yellow-400">
-          <RefreshCcw size={12} className="animate-spin" />
-          <span>Retry {status.reconnect_attempts}</span>
+      {status.active_models && status.active_models.length > 0 && (
+        <div className="text-xs text-slate-400 ml-auto">
+          {status.active_models.length} model{status.active_models.length > 1 ? 's' : ''}
         </div>
       )}
-
-      <div className="text-xs text-slate-500 ml-auto">
-        {status.node_id.substring(0, 8)}...
-      </div>
     </div>
   );
 }

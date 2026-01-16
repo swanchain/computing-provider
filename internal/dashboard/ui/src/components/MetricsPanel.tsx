@@ -1,4 +1,4 @@
-import { Activity, Clock, Zap, Users } from 'lucide-react';
+import { Activity, Clock, Zap, Wifi } from 'lucide-react';
 import { StatusCard } from './StatusCard';
 import type { InferenceMetrics } from '../types';
 
@@ -11,15 +11,6 @@ function formatNumber(n: number): string {
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return n.toFixed(0);
-}
-
-function formatUptime(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
 }
 
 export function MetricsPanel({ metrics, loading }: MetricsPanelProps) {
@@ -38,7 +29,9 @@ export function MetricsPanel({ metrics, loading }: MetricsPanelProps) {
 
   const successRate = metrics.total_requests > 0
     ? ((metrics.successful_requests / metrics.total_requests) * 100).toFixed(1)
-    : '0.0';
+    : '100.0';
+
+  const isConnected = metrics.connection_state === 'connected';
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -64,11 +57,11 @@ export function MetricsPanel({ metrics, loading }: MetricsPanelProps) {
         color={metrics.avg_latency_ms < 100 ? 'green' : metrics.avg_latency_ms < 500 ? 'yellow' : 'red'}
       />
       <StatusCard
-        title="Active Connections"
-        value={metrics.active_connections}
-        subtitle={`Uptime: ${formatUptime(metrics.uptime_seconds)}`}
-        icon={<Users size={20} />}
-        color="green"
+        title="Connection"
+        value={isConnected ? 'Connected' : 'Disconnected'}
+        subtitle={`${metrics.active_requests} active requests`}
+        icon={<Wifi size={20} />}
+        color={isConnected ? 'green' : 'red'}
       />
     </div>
   );

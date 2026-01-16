@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Gauge, Layers, ListOrdered, Settings } from 'lucide-react';
+import { Gauge, Layers, RotateCcw, Settings } from 'lucide-react';
 import { api } from '../api/client';
 import type { RequestManagement } from '../types';
 
@@ -95,7 +95,7 @@ export function RequestManagementPanel({ data, loading, onRefresh }: RequestMana
     );
   }
 
-  const { rate_limiter, concurrency, queue } = data;
+  const { rate_limiter, concurrency_limiter, retry_policy } = data;
 
   return (
     <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -135,8 +135,8 @@ export function RequestManagementPanel({ data, loading, onRefresh }: RequestMana
         <div className="text-center">
           <div className="flex justify-center mb-2">
             <ProgressRing
-              value={concurrency.active_requests}
-              max={concurrency.max_concurrent}
+              value={concurrency_limiter.global_active}
+              max={concurrency_limiter.global_max}
               color="text-green-500"
             />
           </div>
@@ -145,31 +145,31 @@ export function RequestManagementPanel({ data, loading, onRefresh }: RequestMana
             <span>Concurrency</span>
           </div>
           <div className="text-xs text-slate-500">
-            {concurrency.active_requests} / {concurrency.max_concurrent} active
+            {concurrency_limiter.global_active} / {concurrency_limiter.global_max} active
           </div>
           <div className="text-xs text-slate-500">
-            {concurrency.total_rejected} rejected
+            {concurrency_limiter.total_rejected} rejected
           </div>
         </div>
 
-        {/* Queue */}
+        {/* Retries */}
         <div className="text-center">
           <div className="flex justify-center mb-2">
             <ProgressRing
-              value={queue.current_size}
-              max={queue.max_size}
+              value={retry_policy.total_successes}
+              max={retry_policy.total_attempts || 1}
               color="text-yellow-500"
             />
           </div>
           <div className="flex items-center justify-center gap-1 text-sm text-slate-400 mb-1">
-            <ListOrdered size={14} />
-            <span>Queue</span>
+            <RotateCcw size={14} />
+            <span>Retries</span>
           </div>
           <div className="text-xs text-slate-500">
-            {queue.current_size} / {queue.max_size} queued
+            {retry_policy.total_retries} retries
           </div>
           <div className="text-xs text-slate-500">
-            {queue.total_dropped} dropped
+            {retry_policy.total_failures} failures
           </div>
         </div>
       </div>
@@ -201,7 +201,7 @@ export function RequestManagementPanel({ data, loading, onRefresh }: RequestMana
               type="number"
               value={concurrencyLimit}
               onChange={(e) => setConcurrencyLimit(e.target.value)}
-              placeholder={`${concurrency.max_concurrent}`}
+              placeholder={`${concurrency_limiter.global_max}`}
               className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200"
             />
             <button

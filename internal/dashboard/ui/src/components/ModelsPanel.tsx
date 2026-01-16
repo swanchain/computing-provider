@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import type { ModelStatus } from '../types';
 
 interface ModelsPanelProps {
-  models: ModelStatus[] | null;
+  models: ModelStatus[];
   loading: boolean;
   onRefresh: () => void;
 }
@@ -52,7 +52,7 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
     }
   };
 
-  if (loading || !models) {
+  if (loading) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
         <h3 className="text-lg font-semibold text-slate-200 mb-4">Models</h3>
@@ -64,6 +64,8 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
       </div>
     );
   }
+
+  const isHealthy = (model: ModelStatus) => model.health_string === 'healthy';
 
   return (
     <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -79,7 +81,7 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
         </button>
       </div>
 
-      {models.length === 0 ? (
+      {!models || models.length === 0 ? (
         <p className="text-slate-400">No models configured</p>
       ) : (
         <div className="space-y-3">
@@ -92,7 +94,7 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
                 <div className="flex-shrink-0">
                   {!model.enabled ? (
                     <AlertCircle size={20} className="text-slate-500" />
-                  ) : model.healthy ? (
+                  ) : isHealthy(model) ? (
                     <CheckCircle size={20} className="text-green-400" />
                   ) : (
                     <XCircle size={20} className="text-red-400" />
@@ -104,9 +106,9 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
                     {model.endpoint} • {model.category}
                     {model.gpu_memory > 0 && ` • ${(model.gpu_memory / 1024).toFixed(1)}GB VRAM`}
                   </div>
-                  {model.error_message && (
-                    <div className="text-xs text-red-400 mt-1">{model.error_message}</div>
-                  )}
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {model.state_string} • {model.health_string}
+                  </div>
                 </div>
               </div>
 
