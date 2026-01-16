@@ -24,9 +24,9 @@ The integration enables Computing Providers to:
           │ HTTP           │ WS (persistent)
           │                │
 ┌─────────┴────────────────┴──────────────────────────────────────────┐
-│                    Computing Provider (ECP2 Client)                  │
+│                    Computing Provider (Inference Client)             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
-│  │  ECP2       │  │   Model     │  │   Docker    │                  │
+│  │ Inference   │  │   Model     │  │   Docker    │                  │
 │  │  Service    │  │  Executor   │  │   Service   │                  │
 │  └─────────────┘  └─────────────┘  └─────────────┘                  │
 └─────────────────────────────────────────────────────────────────────┘
@@ -132,54 +132,53 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
 
 ### 1. New Components Required
 
-#### `internal/computing/ecp2_client.go`
+#### `internal/computing/inference_client.go`
 WebSocket client for Swan Inference communication:
 
 ```go
-type ECP2Client struct {
+type InferenceClient struct {
     conn            *websocket.Conn
     providerID      string
     workerAddr      string
     supportedModels []string
-    hub             *ECP2Hub
     send            chan []byte
     done            chan struct{}
 }
 
 // Connect establishes WebSocket connection to Swan Inference
-func (c *ECP2Client) Connect(wsURL string) error
+func (c *InferenceClient) Connect(wsURL string) error
 
 // Register sends registration message with signature
-func (c *ECP2Client) Register() error
+func (c *InferenceClient) Register() error
 
 // SendHeartbeat sends periodic heartbeat with metrics
-func (c *ECP2Client) SendHeartbeat(metrics map[string]float64) error
+func (c *InferenceClient) SendHeartbeat(metrics map[string]float64) error
 
 // HandleMessage processes incoming messages from Swan Inference
-func (c *ECP2Client) HandleMessage(msg Message)
+func (c *InferenceClient) HandleMessage(msg Message)
 ```
 
-#### `internal/computing/ecp2_executor.go`
+#### `internal/computing/inference_service.go`
 Handles inference execution using Docker containers:
 
 ```go
-type ECP2Executor struct {
+type InferenceService struct {
     dockerService *DockerService
     modelRegistry map[string]ModelConfig
 }
 
 // ExecuteInference runs inference request and returns response
-func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceResponse, error)
+func (e *InferenceService) ExecuteInference(req InferencePayload) (*InferenceResponse, error)
 
 // HandleVerification responds to model verification challenges
-func (e *ECP2Executor) HandleVerification(req VerifyPayload) error
+func (e *InferenceService) HandleVerification(req VerifyPayload) error
 ```
 
-#### `internal/models/ecp2.go`
-Data models for ECP2 integration:
+#### `internal/computing/inference_client.go`
+Data models for Inference integration:
 
 ```go
-// ECP2 WebSocket message types
+// Inference WebSocket message types
 type MessageType string
 
 const (
@@ -224,7 +223,7 @@ type InferenceResponse struct {
 Add to `conf/config.go`:
 
 ```go
-type ECP2Config struct {
+type Inference struct {
     Enabled       bool   `toml:"enabled"`
     ServiceURL    string `toml:"service_url"`     // HTTP API URL
     WebSocketURL  string `toml:"websocket_url"`   // WebSocket URL
@@ -237,52 +236,21 @@ type ECP2Config struct {
 Add to `config.toml`:
 
 ```toml
-[ECP2]
+[Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
 Models = ["llama-3.2-3b"]  # Models this provider serves
 ```
 
-> **Note:** ECP2 does NOT require a public IP. The provider connects outbound to Swan Inference via WebSocket.
+> **Note:** Inference mode does NOT require a public IP. The provider connects outbound to Swan Inference via WebSocket.
 
 ### 3. CLI Commands
 
-#### `computing-provider ecp2 register`
-Register as an ECP2 provider:
+The Inference mode is integrated into the main daemon. No separate CLI commands are needed.
 
 ```bash
-computing-provider ecp2 register \
-    --name "My Provider" \
-    --models "llama-3-70b,mistral-7b" \
-    --hardware '{"gpu": "RTX 4090", "vram": "24GB", "count": 4}'
-```
-
-#### `computing-provider ecp2 daemon`
-Start ECP2 daemon service:
-
-```bash
-computing-provider ecp2 daemon
-```
-
-#### `computing-provider ecp2 models`
-List/update supported models:
-
-```bash
-# List supported models
-computing-provider ecp2 models list
-
-# Add model support
-computing-provider ecp2 models add --model-id "llama-3-70b" --sku "gpu-4090-24gb"
-
-# Remove model support
-computing-provider ecp2 models remove --model-id "llama-3-70b"
-```
-
-#### `computing-provider ecp2 status`
-Show ECP2 connection status:
-
-```bash
-computing-provider ecp2 status
+# Start daemon (Inference mode is enabled by default)
+computing-provider ubi daemon
 ```
 
 ### 4. Integration Flow
@@ -382,21 +350,21 @@ ECP2 inference uses the same Docker-based execution as existing ECP inference ta
 
 **Execution Flow:**
 ```go
-func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceResponse, error) {
+func (s *InferenceService) ExecuteInference(req InferencePayload) (*InferenceResponse, error) {
     // 1. Look up model configuration
-    modelConfig := e.modelRegistry[req.ModelID]
+    modelConfig := s.modelRegistry[req.ModelID]
 
     // 2. Find or start model container
-    containerName := fmt.Sprintf("ecp2-model-%s", req.ModelID)
-    if !e.dockerService.IsExistContainer(containerName) {
-        if err := e.startModelContainer(modelConfig, containerName); err != nil {
+    containerName := fmt.Sprintf("inference-model-%s", req.ModelID)
+    if !s.dockerService.IsExistContainer(containerName) {
+        if err := s.startModelContainer(modelConfig, containerName); err != nil {
             return nil, err
         }
     }
 
     // 3. Forward request to model container
     start := time.Now()
-    resp, err := e.forwardToModel(containerName, req.Request)
+    resp, err := s.forwardToModel(containerName, req.Request)
     latency := time.Since(start).Milliseconds()
 
     // 4. Return response
@@ -408,17 +376,14 @@ func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceRespons
 }
 ```
 
-## Key Files to Create/Modify
+## Key Files
 
 | File | Type | Description |
 |------|------|-------------|
-| `internal/computing/ecp2_client.go` | Create | WebSocket client for ECP2 |
-| `internal/computing/ecp2_executor.go` | Create | Inference execution handler |
-| `internal/models/ecp2.go` | Create | ECP2 data models |
-| `cmd/computing-provider/ecp2.go` | Create | CLI commands for ECP2 |
-| `cmd/computing-provider/main.go` | Modify | Register ecp2 command |
-| `conf/config.go` | Modify | Add ECP2Config struct |
-| `config.toml.sample` | Modify | Add [ECP2] section |
+| `internal/computing/inference_client.go` | Created | WebSocket client for Swan Inference |
+| `internal/computing/inference_service.go` | Created | Inference execution handler |
+| `conf/config.go` | Modified | Added Inference config struct |
+| `config.toml.sample` | Modified | Added [Inference] section |
 
 ## Integration Considerations
 
@@ -446,27 +411,17 @@ func (e *ECP2Executor) ExecuteInference(req InferencePayload) (*InferenceRespons
 - Log all inference requests/responses
 - Report GPU utilization in heartbeats
 
-## Migration Path
+## Implementation Status
 
-### Phase 1: Registration & Connection
-1. Implement ECP2Config and config parsing
-2. Implement provider registration CLI
-3. Implement WebSocket client with heartbeat
+Inference mode has been implemented with the following components:
 
-### Phase 2: Inference Execution
-4. Implement inference message handling
-5. Integrate with existing Docker service
-6. Implement model container management
-
-### Phase 3: Production Features
-7. Add verification challenge handling
-8. Implement usage metrics reporting
-9. Add monitoring and alerting
+1. **Inference config and parsing** - Complete
+2. **WebSocket client with heartbeat** - Complete
+3. **Inference message handling** - Complete
+4. **Docker service integration** - Complete
+5. **Streaming support** - Complete
 
 ## References
 
 - Swan Inference Repository: `../swan-inference`
 - Swan Inference API Documentation: `../swan-inference/README.md`
-- WebSocket Protocol: `../ecp2-service/api/ws/protocol.go`
-- Provider Entity: `../ecp2-service/internal/module/repository/entity/provider.go`
-- Endpoint Entity: `../ecp2-service/internal/module/repository/entity/endpoint.go`

@@ -26,17 +26,17 @@ type ModelMapping struct {
 	Category  string `json:"category"`
 }
 
-// ECP2Service manages the ECP2 client and inference handling
-type ECP2Service struct {
-	client        *ECP2Client
+// InferenceService manages the Inference client and inference handling
+type InferenceService struct {
+	client        *InferenceClient
 	nodeID        string
 	cpPath        string
 	modelMappings map[string]ModelMapping
 }
 
-// NewECP2Service creates a new ECP2 service
-func NewECP2Service(nodeID, cpPath string) *ECP2Service {
-	s := &ECP2Service{
+// NewInferenceService creates a new Inference service
+func NewInferenceService(nodeID, cpPath string) *InferenceService {
+	s := &InferenceService{
 		nodeID:        nodeID,
 		cpPath:        cpPath,
 		modelMappings: make(map[string]ModelMapping),
@@ -46,7 +46,7 @@ func NewECP2Service(nodeID, cpPath string) *ECP2Service {
 }
 
 // loadModelMappings loads model-to-endpoint mappings from models.json
-func (s *ECP2Service) loadModelMappings() {
+func (s *InferenceService) loadModelMappings() {
 	modelsPath := filepath.Join(s.cpPath, "models.json")
 	data, err := os.ReadFile(modelsPath)
 	if err != nil {
@@ -65,11 +65,11 @@ func (s *ECP2Service) loadModelMappings() {
 	}
 }
 
-// Start initializes and starts the ECP2 client
-func (s *ECP2Service) Start() error {
+// Start initializes and starts the Inference client
+func (s *InferenceService) Start() error {
 	config := conf.GetConfig()
-	if !config.ECP2.Enable {
-		logs.GetLogger().Info("ECP2 marketplace integration is disabled")
+	if !config.Inference.Enable {
+		logs.GetLogger().Info("Inference mode is disabled")
 		return nil
 	}
 
@@ -82,20 +82,20 @@ func (s *ECP2Service) Start() error {
 		workerAddr = s.nodeID
 	}
 
-	s.client = NewECP2Client(s.nodeID, workerAddr, ownerAddr)
+	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 
 	if err := s.client.Start(); err != nil {
-		return fmt.Errorf("failed to start ECP2 client: %w", err)
+		return fmt.Errorf("failed to start Inference client: %w", err)
 	}
 
-	logs.GetLogger().Infof("ECP2 service started with provider ID: %s, owner: %s", s.nodeID, ownerAddr)
+	logs.GetLogger().Infof("Inference service started with provider ID: %s, owner: %s", s.nodeID, ownerAddr)
 	return nil
 }
 
 // getDefaultWalletAddress returns the first wallet address from keystore (for dev mode)
-func (s *ECP2Service) getDefaultWalletAddress() string {
+func (s *InferenceService) getDefaultWalletAddress() string {
 	localWallet, err := wallet.SetupWallet(wallet.WalletRepo)
 	if err != nil {
 		logs.GetLogger().Warnf("Failed to setup wallet: %v", err)
@@ -118,15 +118,15 @@ func (s *ECP2Service) getDefaultWalletAddress() string {
 	return addr
 }
 
-// Stop gracefully shuts down the ECP2 service
-func (s *ECP2Service) Stop() {
+// Stop gracefully shuts down the Inference service
+func (s *InferenceService) Stop() {
 	if s.client != nil {
 		s.client.Stop()
 	}
 }
 
-// handleInference processes inference requests from ECP2 service
-func (s *ECP2Service) handleInference(payload InferencePayload) (*InferenceResponse, error) {
+// handleInference processes inference requests from Inference service
+func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
 	// Check if we have a Docker model mapping
@@ -146,7 +146,7 @@ func (s *ECP2Service) handleInference(payload InferencePayload) (*InferenceRespo
 }
 
 // forwardToDockerModel forwards inference request to a Docker container endpoint
-func (s *ECP2Service) forwardToDockerModel(endpoint string, request json.RawMessage) (json.RawMessage, error) {
+func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage) (json.RawMessage, error) {
 	httpClient := NewHttpClient(endpoint, nil)
 
 	var response json.RawMessage
@@ -157,13 +157,13 @@ func (s *ECP2Service) forwardToDockerModel(endpoint string, request json.RawMess
 	return response, nil
 }
 
-// GetClient returns the ECP2 client
-func (s *ECP2Service) GetClient() *ECP2Client {
+// GetClient returns the Inference client
+func (s *InferenceService) GetClient() *InferenceClient {
 	return s.client
 }
 
-// IsConnected returns whether the ECP2 client is connected
-func (s *ECP2Service) IsConnected() bool {
+// IsConnected returns whether the Inference client is connected
+func (s *InferenceService) IsConnected() bool {
 	if s.client == nil {
 		return false
 	}
@@ -171,7 +171,7 @@ func (s *ECP2Service) IsConnected() bool {
 }
 
 // GetActiveModels returns the list of active model deployments
-func (s *ECP2Service) GetActiveModels() []string {
+func (s *InferenceService) GetActiveModels() []string {
 	var activeModels []string
 	for modelName := range s.modelMappings {
 		activeModels = append(activeModels, modelName)
@@ -180,7 +180,7 @@ func (s *ECP2Service) GetActiveModels() []string {
 }
 
 // RegisterModels updates the models this provider serves
-func (s *ECP2Service) RegisterModels(models []string) {
+func (s *InferenceService) RegisterModels(models []string) {
 	if s.client != nil {
 		s.client.models = models
 		// Re-register with new model list
@@ -191,7 +191,7 @@ func (s *ECP2Service) RegisterModels(models []string) {
 }
 
 // handleStreamingInference processes streaming inference requests
-func (s *ECP2Service) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+func (s *InferenceService) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
 	// Check if we have a Docker model mapping
@@ -205,7 +205,7 @@ func (s *ECP2Service) handleStreamingInference(requestID string, payload Inferen
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
-func (s *ECP2Service) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	result := &StreamResult{}
 
 	// Ensure stream is set to true in the request and request usage

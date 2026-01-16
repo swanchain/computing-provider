@@ -17,7 +17,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/conf"
 )
 
-// ECP2 WebSocket Protocol Types
+// Inference WebSocket Protocol Types
 type MessageType string
 
 const (
@@ -138,7 +138,7 @@ const (
 	reconnectDelay = 5 * time.Second
 )
 
-// InferenceHandler handles non-streaming inference requests from ECP2 service
+// InferenceHandler handles non-streaming inference requests from Inference service
 type InferenceHandler func(payload InferencePayload) (*InferenceResponse, error)
 
 // StreamResult contains the final result of a streaming inference including token usage
@@ -152,8 +152,8 @@ type StreamResult struct {
 // It receives a callback to send chunks back to Swan Inference and returns token usage
 type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
 
-// ECP2Client manages WebSocket connection to ECP2 service
-type ECP2Client struct {
+// InferenceClient manages WebSocket connection to Swan Inference service
+type InferenceClient struct {
 	providerID                string
 	workerAddr                string
 	ownerAddr                 string
@@ -169,22 +169,22 @@ type ECP2Client struct {
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 }
 
-// NewECP2Client creates a new ECP2 client
-func NewECP2Client(providerID, workerAddr, ownerAddr string) *ECP2Client {
+// NewInferenceClient creates a new Inference client
+func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClient {
 	config := conf.GetConfig()
 
 	// Allow env var override for dev mode
-	wsURL := config.ECP2.WebSocketURL
-	if envURL := os.Getenv("ECP2_WS_URL"); envURL != "" {
+	wsURL := config.Inference.WebSocketURL
+	if envURL := os.Getenv("INFERENCE_WS_URL"); envURL != "" {
 		wsURL = envURL
-		logs.GetLogger().Infof("Using ECP2_WS_URL env override: %s", wsURL)
+		logs.GetLogger().Infof("Using INFERENCE_WS_URL env override: %s", wsURL)
 	}
 
-	return &ECP2Client{
+	return &InferenceClient{
 		providerID: providerID,
 		workerAddr: workerAddr,
 		ownerAddr:  ownerAddr,
-		models:     config.ECP2.Models,
+		models:     config.Inference.Models,
 		wsURL:      wsURL,
 		send:       make(chan []byte, 256),
 		stopCh:     make(chan struct{}),
@@ -192,18 +192,18 @@ func NewECP2Client(providerID, workerAddr, ownerAddr string) *ECP2Client {
 }
 
 // SetInferenceHandler sets the handler for non-streaming inference requests
-func (c *ECP2Client) SetInferenceHandler(handler InferenceHandler) {
+func (c *InferenceClient) SetInferenceHandler(handler InferenceHandler) {
 	c.inferenceHandler = handler
 }
 
 // SetStreamingInferenceHandler sets the handler for streaming inference requests
-func (c *ECP2Client) SetStreamingInferenceHandler(handler StreamingInferenceHandler) {
+func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenceHandler) {
 	c.streamingInferenceHandler = handler
 }
 
-// Start connects to ECP2 service and starts the client
-func (c *ECP2Client) Start() error {
-	logs.GetLogger().Infof("Connecting to ECP2 service at %s", c.wsURL)
+// Start connects to Swan Inference and starts the client
+func (c *InferenceClient) Start() error {
+	logs.GetLogger().Infof("Connecting to Swan Inference at %s", c.wsURL)
 
 	if err := c.connect(); err != nil {
 		return err
@@ -223,14 +223,14 @@ func (c *ECP2Client) Start() error {
 }
 
 // Stop gracefully shuts down the client
-func (c *ECP2Client) Stop() {
+func (c *InferenceClient) Stop() {
 	close(c.stopCh)
 	if c.conn != nil {
 		c.conn.Close()
 	}
 }
 
-func (c *ECP2Client) connect() error {
+func (c *InferenceClient) connect() error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig: &tls.Config{
@@ -240,7 +240,7 @@ func (c *ECP2Client) connect() error {
 
 	conn, _, err := dialer.Dial(c.wsURL+"/ws", nil)
 	if err != nil {
-		return fmt.Errorf("failed to connect to ECP2 service: %w", err)
+		return fmt.Errorf("failed to connect to Swan Inference: %w", err)
 	}
 
 	c.mu.Lock()
@@ -248,17 +248,17 @@ func (c *ECP2Client) connect() error {
 	c.registered = false
 	c.mu.Unlock()
 
-	logs.GetLogger().Info("Connected to ECP2 service")
+	logs.GetLogger().Info("Connected to Swan Inference")
 	return nil
 }
 
-func (c *ECP2Client) reconnect() {
+func (c *InferenceClient) reconnect() {
 	for {
 		select {
 		case <-c.stopCh:
 			return
 		default:
-			logs.GetLogger().Info("Attempting to reconnect to ECP2 service...")
+			logs.GetLogger().Info("Attempting to reconnect to Swan Inference...")
 			if err := c.connect(); err != nil {
 				logs.GetLogger().Errorf("Reconnection failed: %v", err)
 				time.Sleep(reconnectDelay)
@@ -345,7 +345,7 @@ func detectGPUHardware() *HardwareInfo {
 	return hardware
 }
 
-func (c *ECP2Client) register() error {
+func (c *InferenceClient) register() error {
 	// Detect GPU hardware
 	hardware := detectGPUHardware()
 
@@ -379,7 +379,7 @@ func (c *ECP2Client) register() error {
 	return nil
 }
 
-func (c *ECP2Client) readPump() {
+func (c *InferenceClient) readPump() {
 	defer func() {
 		c.mu.Lock()
 		if c.conn != nil {
@@ -420,7 +420,7 @@ func (c *ECP2Client) readPump() {
 	}
 }
 
-func (c *ECP2Client) writePump() {
+func (c *InferenceClient) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer ticker.Stop()
 
@@ -466,7 +466,7 @@ func (c *ECP2Client) writePump() {
 	}
 }
 
-func (c *ECP2Client) heartbeatPump() {
+func (c *InferenceClient) heartbeatPump() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -488,7 +488,7 @@ func (c *ECP2Client) heartbeatPump() {
 	}
 }
 
-func (c *ECP2Client) sendHeartbeat() {
+func (c *InferenceClient) sendHeartbeat() {
 	payload := HeartbeatPayload{
 		ProviderID: c.providerID,
 		Timestamp:  time.Now().Unix(),
@@ -516,7 +516,7 @@ func (c *ECP2Client) sendHeartbeat() {
 	c.send <- msgBytes
 }
 
-func (c *ECP2Client) collectMetrics() map[string]float64 {
+func (c *InferenceClient) collectMetrics() map[string]float64 {
 	// Collect GPU/CPU metrics via Docker resource exporter
 	metrics := make(map[string]float64)
 
@@ -527,7 +527,7 @@ func (c *ECP2Client) collectMetrics() map[string]float64 {
 	return metrics
 }
 
-func (c *ECP2Client) handleMessage(msg Message) {
+func (c *InferenceClient) handleMessage(msg Message) {
 	switch msg.Type {
 	case MsgTypeAck:
 		var payload AckPayload
@@ -568,14 +568,14 @@ func (c *ECP2Client) handleMessage(msg Message) {
 			logs.GetLogger().Errorf("Failed to parse error payload: %v", err)
 			return
 		}
-		logs.GetLogger().Errorf("Received error from ECP2: [%d] %s", payload.Code, payload.Message)
+		logs.GetLogger().Errorf("Received error from Swan Inference: [%d] %s", payload.Code, payload.Message)
 
 	default:
 		logs.GetLogger().Warnf("Unknown message type: %s", msg.Type)
 	}
 }
 
-func (c *ECP2Client) handleInference(requestID string, payload InferencePayload) {
+func (c *InferenceClient) handleInference(requestID string, payload InferencePayload) {
 	startTime := time.Now()
 	logs.GetLogger().Infof("Processing inference request %s for model %s (stream=%v)", requestID, payload.ModelID, payload.Stream)
 
@@ -611,7 +611,7 @@ func (c *ECP2Client) handleInference(requestID string, payload InferencePayload)
 	c.sendInferenceResponse(response)
 }
 
-func (c *ECP2Client) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
+func (c *InferenceClient) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
 		c.sendError(requestID, 501, "streaming not supported")
@@ -640,7 +640,7 @@ func (c *ECP2Client) handleStreamingInference(requestID string, payload Inferenc
 }
 
 // sendStreamChunk sends a streaming chunk to Swan Inference
-func (c *ECP2Client) sendStreamChunk(requestID string, chunk []byte, done bool) error {
+func (c *InferenceClient) sendStreamChunk(requestID string, chunk []byte, done bool) error {
 	payload := StreamChunkPayload{
 		RequestID: requestID,
 		Chunk:     chunk,
@@ -672,7 +672,7 @@ func (c *ECP2Client) sendStreamChunk(requestID string, chunk []byte, done bool) 
 }
 
 // sendStreamEnd sends the end of stream message with token usage
-func (c *ECP2Client) sendStreamEnd(requestID string, latencyMs int64, tokensIn, tokensOut int64, err error) {
+func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, tokensIn, tokensOut int64, err error) {
 	payload := StreamEndPayload{
 		RequestID:    requestID,
 		Latency:      latencyMs,
@@ -694,7 +694,7 @@ func (c *ECP2Client) sendStreamEnd(requestID string, latencyMs int64, tokensIn, 
 	c.send <- msgBytes
 }
 
-func (c *ECP2Client) handleVerification(requestID string, payload VerifyPayload) {
+func (c *InferenceClient) handleVerification(requestID string, payload VerifyPayload) {
 	logs.GetLogger().Infof("Processing verification request %s for model %s", requestID, payload.ModelID)
 
 	// Verification implementation would go here
@@ -702,7 +702,7 @@ func (c *ECP2Client) handleVerification(requestID string, payload VerifyPayload)
 	c.sendAck(requestID, true, "verification completed")
 }
 
-func (c *ECP2Client) sendAck(requestID string, success bool, message string) {
+func (c *InferenceClient) sendAck(requestID string, success bool, message string) {
 	payload := AckPayload{
 		RequestID: requestID,
 		Success:   success,
@@ -720,7 +720,7 @@ func (c *ECP2Client) sendAck(requestID string, success bool, message string) {
 	c.send <- msgBytes
 }
 
-func (c *ECP2Client) sendError(requestID string, code int, message string) {
+func (c *InferenceClient) sendError(requestID string, code int, message string) {
 	payload := ErrorPayload{
 		RequestID: requestID,
 		Code:      code,
@@ -738,7 +738,7 @@ func (c *ECP2Client) sendError(requestID string, code int, message string) {
 	c.send <- msgBytes
 }
 
-func (c *ECP2Client) sendInferenceResponse(response *InferenceResponse) {
+func (c *InferenceClient) sendInferenceResponse(response *InferenceResponse) {
 	payloadBytes, err := json.Marshal(response)
 	if err != nil {
 		logs.GetLogger().Errorf("Failed to marshal inference response: %v", err)
@@ -756,13 +756,13 @@ func (c *ECP2Client) sendInferenceResponse(response *InferenceResponse) {
 }
 
 // IsConnected returns whether the client is connected and registered
-func (c *ECP2Client) IsConnected() bool {
+func (c *InferenceClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.conn != nil && c.registered
 }
 
 // GetProviderID returns the provider ID
-func (c *ECP2Client) GetProviderID() string {
+func (c *InferenceClient) GetProviderID() string {
 	return c.providerID
 }

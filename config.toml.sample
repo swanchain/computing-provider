@@ -42,9 +42,9 @@ Password = ""                                                             # The 
 [RPC]
 SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"                     # Swan chain RPC
 
-# ECP2 Configuration - Swan Inference Marketplace
-# ECP2 mode does NOT require a public IP - connects outbound via WebSocket
-[ECP2]
-Enable = false                                                            # Set to true to enable ECP2 inference mode
+# Inference Mode Configuration - Swan Inference Marketplace (DEFAULT)
+# Inference mode does NOT require a public IP - connects outbound via WebSocket
+[Inference]
+Enable = true                                                             # Inference mode is enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint
 Models = ["llama-3.2-3b"]                                                 # Models this provider serves (must match models.json)

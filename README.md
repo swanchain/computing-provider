@@ -6,34 +6,34 @@
 
 Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to provide computational resources (CPU, GPU, memory, storage) to the network and earn rewards.
 
-**ECP2 (Edge Computing Provider 2)** is the default and recommended mode for Computing Provider v2, allowing you to deploy and run AI inference containers with GPU support. ECP2 mode connects to **Swan Inference**, the decentralized inference marketplace.
+**Inference Mode** is the default mode for Computing Provider v2, allowing you to deploy and run AI inference containers with GPU support. It connects to **Swan Inference**, the decentralized inference marketplace.
 
 ## Provider Modes
 
 | Mode | Description | Requirements | Command |
 |------|-------------|--------------|---------|
-| **ECP2** (Default) | Deploy AI inference containers | Docker + NVIDIA Container Toolkit | `computing-provider ubi daemon` |
-| ECP (ZK-Proof) | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider ubi daemon` |
+| **Inference** (Default) | Deploy AI inference containers | Docker + NVIDIA Container Toolkit | `computing-provider ubi daemon` |
+| ZK-Proof | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider ubi daemon` |
 
 # Table of Contents
 
-- [Quick Start: ECP2 Mode](#quick-start-ecp2-mode)
+- [Quick Start: Inference Mode](#quick-start-inference-mode)
   - [Prerequisites](#prerequisites)
   - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
   - [Build Computing Provider](#build-computing-provider)
   - [Initialize and Configure](#initialize-and-configure)
   - [Setup Wallet and Account](#setup-wallet-and-account)
-  - [Start ECP2 Provider](#start-ecp2-provider)
+  - [Start Inference Provider](#start-inference-provider)
 - [Configuration Reference](#configuration-reference)
-- [ECP Mode (ZK-Proof)](#ecp-mode-zk-proof)
+- [ZK-Proof Mode](#zk-proof-mode)
 - [CLI Reference](#cli-reference)
 - [Getting Help](#getting-help)
 
 ---
 
-# Quick Start: ECP2 Mode
+# Quick Start: Inference Mode
 
-ECP2 (Edge Computing Provider 2) allows you to run AI inference containers on your GPU hardware and earn rewards from the Swan Chain network.
+Inference Mode allows you to run AI inference containers on your GPU hardware and earn rewards from the Swan Chain network.
 
 ## Prerequisites
 
@@ -41,7 +41,7 @@ ECP2 (Edge Computing Provider 2) allows you to run AI inference containers on yo
 - Docker installed ([install guide](https://docs.docker.com/engine/install/))
 - Go 1.22+ for building from source
 
-> **Note:** ECP2 mode does **NOT** require a public IP address. The provider connects outbound to Swan Inference via WebSocket, so it works behind NAT/firewalls.
+> **Note:** Inference mode does **NOT** require a public IP address. The provider connects outbound to Swan Inference via WebSocket, so it works behind NAT/firewalls.
 
 ```bash
 # Install Go if needed
@@ -93,18 +93,18 @@ computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --
 
 > **Note:** Default repo location is `~/.swan/computing`. Override with `export CP_PATH="<YOUR_CP_PATH>"`
 
-2. **Configure for ECP2** in `$CP_PATH/config.toml`:
+2. **Configure Inference mode** in `$CP_PATH/config.toml`:
 
 ```toml
 [API]
 Port = 8085                                    # Web server port
-MultiAddress = "/ip4/127.0.0.1/tcp/8085"       # Can be localhost for ECP2
+MultiAddress = "/ip4/127.0.0.1/tcp/8085"       # Can be localhost for Inference mode
 NodeName = "my-inference-node"                 # Your node name
 
 [RPC]
 SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"
 
-[ECP2]
+[Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
 Models = ["llama-3.2-3b"]                         # Models this provider serves
@@ -144,10 +144,10 @@ See [SGLang Deployment Guide](docs/sglang-deployment.md) for detailed setup and 
 
 **Environment variable overrides:**
 ```bash
-export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
+export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
 ```
 
-### How ECP2 Works (No Public IP Required)
+### How Inference Mode Works (No Public IP Required)
 
 ```
 Swan Inference (wss://inference-ws.swanchain.io)
@@ -156,10 +156,10 @@ Swan Inference (wss://inference-ws.swanchain.io)
          ▼
 ┌─────────────────────────────────────┐
 │  Computing Provider (behind NAT)    │
-│  ┌────────────┐    ┌─────────────┐  │
-│  │ ECP2Client │───►│ SGLang/vLLM │  │
-│  │            │    │ localhost   │  │
-│  └────────────┘    └─────────────┘  │
+│  ┌────────────────┐  ┌───────────┐  │
+│  │ InferenceClient│─►│SGLang/vLLM│  │
+│  │                │  │ localhost │  │
+│  └────────────────┘  └───────────┘  │
 └─────────────────────────────────────┘
 ```
 
@@ -182,7 +182,7 @@ computing-provider wallet import <YOUR_PRIVATE_KEY_FILE>
 
 2. **Deposit SwanETH** to your wallet address. See the [getting started guide](https://docs.swanchain.io/swan-mainnet/getting-started-guide).
 
-3. **Create CP account with ECP2 task type:**
+3. **Create CP account with Inference task type:**
 ```bash
 computing-provider account create \
     --ownerAddress <YOUR_OWNER_ADDRESS> \
@@ -191,14 +191,14 @@ computing-provider account create \
     --task-types 4
 ```
 
-> **Task Type 4** = ECP2 (Inference)
+> **Task Type 4** = Inference
 
 4. **Add collateral:**
 ```bash
 computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS> <AMOUNT>
 ```
 
-## Start ECP2 Provider
+## Start Inference Provider
 
 ```bash
 export CP_PATH=<YOUR_CP_PATH>
@@ -256,6 +256,11 @@ PortRange = ["40000-40050"]                    # Ports for multi-port containers
 [RPC]
 SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
 
+[Inference]
+Enable = true                                  # Enable inference mode (default)
+WebSocketURL = "wss://inference-ws.swanchain.io"
+Models = ["llama-3.2-3b"]
+
 [UBI]
 EnableSequencer = false                        # Enable sequencer for ZK proofs
 AutoChainProof = false                         # Fallback to chain when sequencer unavailable
@@ -268,11 +273,11 @@ Password = ""
 
 ---
 
-# ECP Mode (ZK-Proof)
+# ZK-Proof Mode
 
-ECP (Edge Computing Provider) generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). Requires additional v28 parameters (~200GB).
+ZK-Proof mode generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). Requires additional v28 parameters (~200GB).
 
-See [ECP/UBI Documentation](docs/ubi/README.md) for full setup.
+See [ZK-Proof Documentation](docs/ubi/README.md) for full setup.
 
 **Quick overview:**
 ```bash
@@ -308,7 +313,7 @@ nohup computing-provider ubi daemon >> cp.log 2>&1 &
 
 ## Task Management
 ```bash
-# List ECP2/ECP tasks
+# List Inference/ZK tasks
 computing-provider task list --ecp
 
 # Get task details

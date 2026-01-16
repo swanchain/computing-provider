@@ -206,11 +206,11 @@ var daemonCmd = &cli.Command{
 		computing.SyncCpAccountInfo()
 		computing.CronTaskForEcp()
 
-		// Start ECP2 marketplace integration if enabled
+		// Start Inference mode (Swan Inference marketplace) if enabled
 		nodeID := computing.GetNodeId(cpRepoPath)
-		ecp2Service := computing.NewECP2Service(nodeID, cpRepoPath)
-		if err := ecp2Service.Start(); err != nil {
-			logs.GetLogger().Errorf("Failed to start ECP2 service: %v", err)
+		inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
+		if err := inferenceService.Start(); err != nil {
+			logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
 		}
 
 		gin.SetMode(gin.ReleaseMode)

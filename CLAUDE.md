@@ -16,14 +16,14 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 - **NVIDIA GPU support** - Uses NVIDIA Container Toolkit for GPU access
 - **Cross-platform** - Supports Linux and macOS (including Apple Silicon)
 
-**ECP2 (Edge Computing Provider 2) is the default and primary mode** for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. ECP2 mode connects to **Swan Inference**, the decentralized inference marketplace.
+**Inference Mode is the default and primary mode** for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. It connects to **Swan Inference**, the decentralized inference marketplace.
 
 ### Provider Modes
 
 | Mode | Task Type | Description | Command |
 |------|-----------|-------------|---------|
-| **ECP2** (Default) | 4 | Deploy AI inference containers | `computing-provider ubi daemon` |
-| ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining proofs | `computing-provider ubi daemon` |
+| **Inference** (Default) | 4 | Deploy AI inference containers | `computing-provider ubi daemon` |
+| ZK-Proof | 1, 2 | FIL-C2 and mining proofs | `computing-provider ubi daemon` |
 
 ## Build Commands
 
@@ -62,12 +62,12 @@ computing-provider wallet new
 computing-provider wallet list
 computing-provider wallet import <private_key_file>
 
-# Account/collateral management (ECP2 mode - task-types 4)
+# Account/collateral management (Inference mode - task-types 4)
 computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
 computing-provider collateral add --ecp --from <addr> <amount>
 
 # Task management
-computing-provider task list          # List ECP tasks
+computing-provider task list          # List tasks
 computing-provider ubi list           # ZK proof tasks
 
 # Hardware research and benchmarking
@@ -76,15 +76,15 @@ computing-provider research gpu-info       # Display GPU information
 computing-provider research gpu-benchmark  # Run GPU benchmark tests
 ```
 
-## Running ECP2 Mode (Default)
+## Running Inference Mode (Default)
 
-ECP2 (Edge Computing Provider 2) runs AI inference containers via Docker. Does NOT require Kubernetes.
+Inference Mode runs AI inference containers via Docker. Does NOT require Kubernetes.
 
 **Prerequisites:**
 - Docker with NVIDIA Container Toolkit installed
 - Local inference server (SGLang or vLLM)
 
-> **Note:** ECP2 does NOT require a public IP address. The provider connects outbound to Swan Inference via WebSocket.
+> **Note:** Inference mode does NOT require a public IP address. The provider connects outbound to Swan Inference via WebSocket.
 
 **Install NVIDIA Container Toolkit (required for GPU access in Docker):**
 ```bash
@@ -97,15 +97,15 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-**ECP2 account setup (task-types 4):**
+**Inference account setup (task-types 4):**
 ```bash
 computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 4
 computing-provider collateral add --ecp --from <addr> <amount>
 ```
 
-**Configure ECP2 in `$CP_PATH/config.toml`:**
+**Configure Inference mode in `$CP_PATH/config.toml`:**
 ```toml
-[ECP2]
+[Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
 Models = ["llama-3.2-3b"]                         # Models this provider serves
@@ -135,23 +135,23 @@ docker run -d --gpus all -p 30000:30000 \
 
 **Environment variable overrides (for dev):**
 ```bash
-export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for local dev
+export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for local dev
 ```
 
-**Start ECP2 daemon:**
+**Start Inference daemon:**
 ```bash
 nohup ./computing-provider ubi daemon >> cp.log 2>&1 &
 ```
 
-**Common ECP2 issues:**
+**Common Inference mode issues:**
 - `permission denied...docker.sock`: Add user to docker group or use `sg docker -c "computing-provider ubi daemon"`
 - `could not select device driver "nvidia"`: Install NVIDIA Container Toolkit (see above)
 - `container name "/resource-exporter" is already in use`: Run `docker rm -f resource-exporter`
 - `CP Account is empty`: Create account with `computing-provider account create ...`
 
-## Running ECP Mode (ZK-Proof)
+## Running ZK-Proof Mode
 
-ECP (Edge Computing Provider) handles ZK-Snark proof generation (FIL-C2, Aleo, etc.). Requires v28 parameters (~200GB).
+ZK-Proof mode handles ZK-Snark proof generation (FIL-C2, Aleo, etc.). Requires v28 parameters (~200GB).
 
 **Additional prerequisites:**
 - Download v28 parameters (at least 200GB storage needed)
@@ -162,7 +162,7 @@ export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
 export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"  # e.g., "GeForce RTX 4090:16384"
 ```
 
-**ECP account setup (task-types 1,2,4):**
+**ZK-Proof account setup (task-types 1,2,4):**
 ```bash
 computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types 1,2,4
 computing-provider collateral add --ecp --from <addr> <amount>
@@ -176,9 +176,9 @@ EnableSequencer = true    # Submit proofs to Sequencer (reduces gas costs)
 AutoChainProof = false    # Fallback to chain when sequencer unavailable
 ```
 
-## ECP2 Development Mode (Base Sepolia)
+## Inference Development Mode (Base Sepolia)
 
-For development and testing, ECP2 uses Base Sepolia testnet for smart contracts.
+For development and testing, Inference mode uses Base Sepolia testnet for smart contracts.
 
 **Base Sepolia Contracts:**
 | Contract | Address |
@@ -196,7 +196,7 @@ For development and testing, ECP2 uses Base Sepolia testnet for smart contracts.
 make clean && make testnet
 
 # Set environment for dev
-export ECP2_WS_URL=ws://localhost:8081
+export INFERENCE_WS_URL=ws://localhost:8081
 
 # Run daemon (uses Node ID auth, skips on-chain account)
 ./computing-provider ubi daemon
@@ -209,22 +209,18 @@ export ECP2_WS_URL=ws://localhost:8081
   - Provider authenticates via signed messages
   - Suitable for local testing with Swan Inference
 
-**ECP2 Config Fields:**
-- `Enable`: Enable/disable ECP2 service
-- `ServiceURL`: HTTP API URL (unused currently)
+**Inference Config Fields:**
+- `Enable`: Enable/disable Inference service
 - `WebSocketURL`: WebSocket connection to Swan Inference
 - `Models`: List of models this provider serves
-- `ChainRPC`: Base Sepolia RPC endpoint
-- `CollateralContract`: Collateral contract address
-- `TaskContract`: Task contract address
 
 **Model Configuration:**
 Create `$CP_PATH/models.json` to map models to local endpoints:
 ```json
 {
   "llama-3.1-8b": {
-    "container": "vllm/vllm-openai:latest",
-    "endpoint": "http://localhost:8000",
+    "container": "lmsysorg/sglang:latest",
+    "endpoint": "http://localhost:30000",
     "gpu_memory": 16000,
     "category": "text-generation"
   }
@@ -236,7 +232,7 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
 ### Directory Structure
 
 - `cmd/computing-provider/`: CLI entry point and command definitions (main.go defines all subcommands)
-- `internal/computing/`: Core services (Docker, UBI tasks, ECP2 deployment)
+- `internal/computing/`: Core services (Docker, UBI tasks, Inference deployment)
 - `internal/contract/`: Swan Chain smart contract bindings (auto-generated + stub wrappers)
   - `account/`: CP account registration contract
   - `ecp/`: Edge computing contracts (collateral, sequencer, tasks)
@@ -253,8 +249,8 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
 - `docker_service.go`: Docker container management and operations
 - `cron_task.go`: Background scheduled tasks (health checks, cleanup, status updates)
 - `sequence_service.go`: Sequencer service for ZK proof submission
-- `ecp_image_service.go`: ECP2 container image deployment for inference tasks
-- `ecp2_service.go`: ECP2 service for Swan Inference marketplace
+- `inference_service.go`: Inference service for Swan Inference marketplace
+- `inference_client.go`: WebSocket client for Swan Inference connection
 - `provider.go`: Main provider service orchestration
 
 ### Configuration
@@ -262,7 +258,8 @@ Create `$CP_PATH/models.json` to map models to local endpoints:
 Config file: `$CP_PATH/config.toml` (see `config.toml.sample`)
 
 Key sections:
-- `[API]`: Server port, multi-address, domain, pricing settings, port ranges for ECP2
+- `[API]`: Server port, multi-address, domain, pricing settings
+- `[Inference]`: Inference mode settings (Enable, WebSocketURL, Models)
 - `[UBI]`: ZK engine settings, sequencer configuration (`EnableSequencer`, `AutoChainProof`)
 - `[RPC]`: Swan Chain RPC endpoint
 - `[Registry]`: Docker registry for container image storage
@@ -281,8 +278,8 @@ The project uses Google Wire for dependency injection. See `internal/computing/w
 
 - The `CP_PATH` environment variable controls the repo directory location (default: `~/.swan/computing`)
 - Contract stubs in `internal/contract/*/` wrap auto-generated Ethereum contract bindings
-- ECP2 and ECP tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
-- Task types: 1=FIL-C2, 2=Mining, 4=ECP2/Inference (default), 5=NodePort, 100=Exit
+- Inference and ZK-Proof tasks run as Docker containers with GPU resources via NVIDIA Container Toolkit
+- Task types: 1=FIL-C2, 2=Mining, 4=Inference (default), 5=NodePort, 100=Exit
 
 ## Contract Interaction
 
@@ -292,6 +289,6 @@ Smart contracts are accessed via stubs in `internal/contract/`. Each contract ha
 
 Key contracts:
 - Account contract: CP registration and management
-- Collateral contracts: ECP collateral deposits/withdrawals
+- Collateral contracts: Collateral deposits/withdrawals
 - Sequencer contract: Batch proof submission to reduce gas costs
 - Task contracts: Task registration and proof verification

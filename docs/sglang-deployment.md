@@ -1,10 +1,10 @@
-# SGLang Deployment Guide for ECP2 Providers
+# SGLang Deployment Guide for Inference Providers
 
-This guide covers deploying SGLang as the inference engine for ECP2 providers on Swan Chain.
+This guide covers deploying SGLang as the inference engine for Inference providers on Swan Chain.
 
 ## Overview
 
-SGLang is the recommended inference engine for ECP2 providers due to:
+SGLang is the recommended inference engine for Inference providers due to:
 - **29% higher throughput** than vLLM (16,215 vs 12,553 tok/s)
 - **Stable concurrency** handling (30-31 tok/s under load)
 - **RadixAttention** for 10% boost in multi-turn conversations
@@ -240,7 +240,7 @@ docker run -d \
 
 ### Architecture (No Public IP Required)
 
-ECP2 providers connect **outbound** to Swan Inference via WebSocket. This means:
+Inference providers connect **outbound** to Swan Inference via WebSocket. This means:
 - No public IP address required
 - Works behind NAT/firewalls
 - No port forwarding needed
@@ -252,7 +252,7 @@ Swan Inference (wss://inference-ws.swanchain.io)
          ▼
 ┌─────────────────────────────────────┐
 │  Provider (can be behind NAT)       │
-│  ECP2Client ──► SGLang (localhost)  │
+│  InferenceClient ──► SGLang (localhost)  │
 └─────────────────────────────────────┘
 ```
 
@@ -261,7 +261,7 @@ Swan Inference (wss://inference-ws.swanchain.io)
 Edit `~/.swan/computing/config.toml`:
 
 ```toml
-[ECP2]
+[Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
 Models = ["llama-3.1-8b", "qwen-2.5-7b"]
@@ -296,7 +296,7 @@ Create a mapping file `~/.swan/computing/models.json`:
 
 > **Note:** The `endpoint` URL points to your local SGLang server. The CP forwards inference requests to this endpoint.
 
-### Start ECP2 Daemon
+### Start Inference Daemon
 
 ```bash
 # Start SGLang containers first
