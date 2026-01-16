@@ -82,7 +82,9 @@ ECP2 (Edge Computing Provider 2) runs AI inference containers via Docker. Does N
 
 **Prerequisites:**
 - Docker with NVIDIA Container Toolkit installed
-- Map port to public network: `<Intranet_IP>:8085 <--> <Public_IP>:<PORT>`
+- Local inference server (SGLang or vLLM)
+
+> **Note:** ECP2 does NOT require a public IP address. The provider connects outbound to Swan Inference via WebSocket.
 
 **Install NVIDIA Container Toolkit (required for GPU access in Docker):**
 ```bash
@@ -103,22 +105,37 @@ computing-provider collateral add --ecp --from <addr> <amount>
 
 **Configure ECP2 in `$CP_PATH/config.toml`:**
 ```toml
-[API]
-Domain = "*.example.com"               # Domain for single-port services
-PortRange = ["40000-40050", "40060"]   # Ports for multi-port containers
-
 [ECP2]
 Enable = true
-WebSocketURL = "ws://localhost:8081"   # Swan Inference WebSocket
-Models = ["your-model-name"]           # Models this provider serves
-ChainRPC = "https://sepolia.base.org"  # Base Sepolia for dev
-CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
-TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
+Models = ["llama-3.2-3b"]                         # Models this provider serves
+```
+
+**Configure model mappings in `$CP_PATH/models.json`:**
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+```
+
+**Start SGLang inference server:**
+```bash
+docker run -d --gpus all -p 30000:30000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size 32g --ipc=host \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
 ```
 
 **Environment variable overrides (for dev):**
 ```bash
-export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL
+export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for local dev
 ```
 
 **Start ECP2 daemon:**

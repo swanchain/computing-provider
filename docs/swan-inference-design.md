@@ -238,13 +238,12 @@ Add to `config.toml`:
 
 ```toml
 [ECP2]
-Enabled = true
-ServiceURL = "https://ecp2.swanchain.io/api/v1"
-WebSocketURL = "wss://ecp2.swanchain.io/ws"
-ProviderID = ""           # Set after registration
-HeartbeatSec = 30
-ReconnectSec = 5
+Enable = true
+WebSocketURL = "wss://inference-ws.swanchain.io"
+Models = ["llama-3.2-3b"]  # Models this provider serves
 ```
+
+> **Note:** ECP2 does NOT require a public IP. The provider connects outbound to Swan Inference via WebSocket.
 
 ### 3. CLI Commands
 
@@ -307,7 +306,7 @@ computing-provider ecp2 status
 
 #### WebSocket Connection Flow
 ```
-1. CP connects to wss://ecp2.swanchain.io/ws
+1. CP connects to wss://inference-ws.swanchain.io/ws
 
 2. CP sends register message:
    {

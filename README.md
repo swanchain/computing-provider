@@ -37,10 +37,11 @@ ECP2 (Edge Computing Provider 2) allows you to run AI inference containers on yo
 
 ## Prerequisites
 
-- Linux server with NVIDIA GPU
+- Linux server with NVIDIA GPU (or macOS with Apple Silicon)
 - Docker installed ([install guide](https://docs.docker.com/engine/install/))
-- Public IP address
 - Go 1.22+ for building from source
+
+> **Note:** ECP2 mode does **NOT** require a public IP address. The provider connects outbound to Swan Inference via WebSocket, so it works behind NAT/firewalls.
 
 ```bash
 # Install Go if needed
@@ -97,55 +98,76 @@ computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --
 ```toml
 [API]
 Port = 8085                                    # Web server port
-MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Your public address
-Domain = "*.example.com"                       # Domain for single-port services (optional)
+MultiAddress = "/ip4/127.0.0.1/tcp/8085"       # Can be localhost for ECP2
 NodeName = "my-inference-node"                 # Your node name
-PortRange = ["40000-40050", "40060"]           # Ports for multi-port containers
 
 [RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
+SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"
 
 [ECP2]
 Enable = true
-WebSocketURL = "wss://inference.swanchain.io/ws"  # Swan Inference WebSocket
-Models = ["your-model-name"]                       # Models this provider serves
-
-# For development/testnet (Base Sepolia)
-# ChainRPC = "https://sepolia.base.org"
-# CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
-# TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
+Models = ["llama-3.2-3b"]                         # Models this provider serves
 ```
+
+3. **Configure model mappings** in `$CP_PATH/models.json`:
+
+```json
+{
+  "llama-3.2-3b": {
+    "container": "lmsysorg/sglang:latest",
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+```
+
+4. **Start your inference server** (SGLang recommended):
+
+```bash
+# Using Docker
+docker run -d --gpus all -p 30000:30000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size 32g --ipc=host \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --host 0.0.0.0 --port 30000 \
+    --served-model-name llama-3.2-3b
+
+# Verify it's running
+curl http://localhost:30000/v1/models
+```
+
+See [SGLang Deployment Guide](docs/sglang-deployment.md) for detailed setup and optimization.
 
 **Environment variable overrides:**
 ```bash
 export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
 ```
 
-### Development Mode (Base Sepolia)
+### How ECP2 Works (No Public IP Required)
 
-For local development, ECP2 supports Node ID based authentication without on-chain registration:
-
-| Property | Value |
-|----------|-------|
-| Network | Base Sepolia (chainId: 84532) |
-| RPC | https://sepolia.base.org |
-| Collateral Contract | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
-| Task Contract | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
-
-```bash
-# Quick start for dev (no on-chain account required)
-make clean && make testnet
-ECP2_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+```
+Swan Inference (wss://inference-ws.swanchain.io)
+         │
+         │ Outbound WebSocket (provider initiates)
+         ▼
+┌─────────────────────────────────────┐
+│  Computing Provider (behind NAT)    │
+│  ┌────────────┐    ┌─────────────┐  │
+│  │ ECP2Client │───►│ SGLang/vLLM │  │
+│  │            │    │ localhost   │  │
+│  └────────────┘    └─────────────┘  │
+└─────────────────────────────────────┘
 ```
 
-The provider authenticates via wallet signature using the Node ID. This is suitable for:
-- Local development and testing
-- Integration testing with Swan Inference
-- Rapid iteration without gas costs
-
-**Port Configuration:**
-- Single-port containers: Use `traefik` with domain resolution (port 9000)
-- Multi-port containers: Use `PortRange` with direct IP + port mapping
+1. Provider connects **outbound** to Swan Inference WebSocket
+2. Registers with model list (e.g., `["llama-3.2-3b"]`)
+3. Receives inference requests via WebSocket
+4. Forwards to local model server, returns response
+5. No inbound ports or public IP needed
 
 ## Setup Wallet and Account
 
