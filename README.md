@@ -17,21 +17,28 @@ Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing n
 
 # Table of Contents
 
-- [Quick Start: Inference Mode](#quick-start-inference-mode)
+**Choose your platform:**
+
+| Platform | GPU | Guide |
+|----------|-----|-------|
+| **Linux** | NVIDIA GPU | [Linux Setup (NVIDIA)](#linux-setup-nvidia) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | [macOS Setup (Apple Silicon)](#macos-setup-apple-silicon) |
+
+- [Linux Setup (NVIDIA)](#linux-setup-nvidia)
   - [Prerequisites](#prerequisites)
   - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
   - [Build Computing Provider](#build-computing-provider)
   - [Initialize and Configure](#initialize-and-configure)
   - [Start Inference Provider](#start-inference-provider)
-- [macOS Quick Start](#macos-quick-start)
+- [macOS Setup (Apple Silicon)](#macos-setup-apple-silicon)
 - [Configuration Reference](#configuration-reference)
-- [ZK-Proof Mode](#zk-proof-mode)
+- [ZK-Proof Mode (Linux Only)](#zk-proof-mode)
 - [CLI Reference](#cli-reference)
 - [Getting Help](#getting-help)
 
 ---
 
-# Quick Start: Inference Mode
+# Linux Setup (NVIDIA)
 
 Inference Mode is the simplest way to get started. **No wallet, no blockchain registration, no public IP required.**
 
@@ -213,9 +220,9 @@ TASK UUID                               TASK NAME       IMAGE NAME              
 
 ---
 
-# macOS Quick Start
+# macOS Setup (Apple Silicon)
 
-For Apple Silicon Macs (M1/M2/M3/M4), use Ollama for native Metal GPU acceleration.
+For Apple Silicon Macs (M1/M2/M3/M4), use Ollama for native Metal GPU acceleration. **No wallet, no blockchain registration, no public IP required.**
 
 ```bash
 # 1. Install Ollama
@@ -310,6 +317,8 @@ Password = ""
 ---
 
 # ZK-Proof Mode
+
+> **Linux Only** - ZK-Proof mode requires NVIDIA GPU and is not supported on macOS.
 
 ZK-Proof mode generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). **Requires wallet setup and blockchain registration.**
 
