@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,26 @@ import (
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/wallet"
 )
+
+// streamingHttpClient is a shared HTTP client for streaming inference requests
+// with connection pooling to avoid creating new connections for each request
+var streamingHttpClient = &http.Client{
+	Timeout: 5 * time.Minute,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Disable compression to reduce latency for streaming
+		DisableCompression: true,
+	},
+}
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
@@ -371,15 +392,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 		return result
 	}
 
-	// Create HTTP client with longer timeout for streaming
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	// Make streaming request to model
+	// Make streaming request to model using shared HTTP client with connection pooling
 	url := endpoint + "/v1/chat/completions"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(modifiedRequest))
 	if err != nil {
@@ -389,7 +402,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
-	resp, err := client.Do(req)
+	resp, err := streamingHttpClient.Do(req)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to send request: %w", err)
 		return result
