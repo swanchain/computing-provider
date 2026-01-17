@@ -3,6 +3,7 @@ package computing
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -347,6 +348,12 @@ func (ct *ConcurrencyToken) Release() {
 
 // gpuAwarenessLoop adjusts limits based on GPU memory
 func (cl *ConcurrencyLimiter) gpuAwarenessLoop() {
+	defer func() {
+		if err := recover(); err != nil {
+			logs.GetLogger().Errorf("[concurrency_limiter:gpuAwarenessLoop] panic recovered: %v\n%s", err, debug.Stack())
+		}
+	}()
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 

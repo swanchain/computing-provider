@@ -2,6 +2,7 @@ package computing
 
 import (
 	"errors"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -233,6 +234,12 @@ func (rl *RateLimiter) RemoveModelLimit(modelID string) {
 
 // adaptiveLoop adjusts rate based on GPU utilization
 func (rl *RateLimiter) adaptiveLoop() {
+	defer func() {
+		if err := recover(); err != nil {
+			logs.GetLogger().Errorf("[rate_limiter:adaptiveLoop] panic recovered: %v\n%s", err, debug.Stack())
+		}
+	}()
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 

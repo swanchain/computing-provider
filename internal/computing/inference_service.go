@@ -221,6 +221,19 @@ func (s *InferenceService) Stop() {
 	}
 }
 
+// Name returns the service name for the supervisor
+func (s *InferenceService) Name() string {
+	return "inference-service"
+}
+
+// IsHealthy returns whether the service is healthy (connected to Swan Inference)
+func (s *InferenceService) IsHealthy() bool {
+	if s.client == nil {
+		return false
+	}
+	return s.client.IsConnected()
+}
+
 // handleInference processes inference requests from Inference service
 func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)

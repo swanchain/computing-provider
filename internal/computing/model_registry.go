@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -192,7 +193,14 @@ func (r *ModelRegistry) loadConfig() error {
 
 				logs.GetLogger().Infof("Updated model configuration: %s", modelID)
 				if r.onModelUpdated != nil {
-					go r.onModelUpdated(existingModel)
+					go func(m *RegisteredModel) {
+						defer func() {
+							if err := recover(); err != nil {
+								logs.GetLogger().Errorf("[model_registry:onModelUpdated] panic recovered: %v", err)
+							}
+						}()
+						r.onModelUpdated(m)
+					}(existingModel)
 				}
 			}
 		} else {
@@ -220,7 +228,14 @@ func (r *ModelRegistry) loadConfig() error {
 
 			logs.GetLogger().Infof("Registered new model: %s -> %s", modelID, mapping.Endpoint)
 			if r.onModelAdded != nil {
-				go r.onModelAdded(model)
+				go func(m *RegisteredModel) {
+					defer func() {
+						if err := recover(); err != nil {
+							logs.GetLogger().Errorf("[model_registry:onModelAdded] panic recovered: %v", err)
+						}
+					}()
+					r.onModelAdded(m)
+				}(model)
 			}
 		}
 	}
@@ -233,7 +248,14 @@ func (r *ModelRegistry) loadConfig() error {
 		delete(r.models, modelID)
 		logs.GetLogger().Infof("Removed model: %s", modelID)
 		if r.onModelRemoved != nil {
-			go r.onModelRemoved(modelID)
+			go func(id string) {
+				defer func() {
+					if err := recover(); err != nil {
+						logs.GetLogger().Errorf("[model_registry:onModelRemoved] panic recovered: %v", err)
+					}
+				}()
+				r.onModelRemoved(id)
+			}(modelID)
 		}
 	}
 
@@ -257,6 +279,12 @@ func (r *ModelRegistry) startWatcher() error {
 	}
 
 	go func() {
+		defer func() {
+			if err := recover(); err != nil {
+				logs.GetLogger().Errorf("[model_registry:file_watcher] panic recovered: %v\n%s", err, debug.Stack())
+			}
+		}()
+
 		debounceTimer := time.NewTimer(0)
 		if !debounceTimer.Stop() {
 			<-debounceTimer.C
@@ -325,7 +353,14 @@ func (r *ModelRegistry) onHealthStatusChange(modelID string, oldHealth, newHealt
 
 	if r.onModelUpdated != nil {
 		modelCopy := *model
-		go r.onModelUpdated(&modelCopy)
+		go func(m *RegisteredModel) {
+			defer func() {
+				if err := recover(); err != nil {
+					logs.GetLogger().Errorf("[model_registry:onModelUpdated] panic recovered: %v", err)
+				}
+			}()
+			r.onModelUpdated(m)
+		}(&modelCopy)
 	}
 }
 
