@@ -2,55 +2,114 @@
 
 [![Discord](https://img.shields.io/discord/770382203782692945?label=Discord&logo=Discord)](https://discord.gg/Jd2BFSVCKw)
 [![Twitter Follow](https://img.shields.io/twitter/follow/swan_chain)](https://twitter.com/swan_chain)
-[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg)](https://github.com/RichardLitt/standard-readme)
 
-Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to provide computational resources (CPU, GPU, memory, storage) to the network and earn rewards.
+Turn your GPU into an AI inference endpoint and join the Swan Chain decentralized computing network.
 
-**ECP2 (Edge Computing Provider 2)** is the default and recommended mode for Computing Provider v2, allowing you to deploy and run AI inference containers with GPU support. ECP2 mode connects to **Swan Inference**, the decentralized inference marketplace.
+## Quick Start (5 minutes)
 
-## Provider Modes
+**No wallet needed. No blockchain registration. No public IP required.**
 
-| Mode | Description | Requirements | Command |
-|------|-------------|--------------|---------|
-| **ECP2** (Default) | Deploy AI inference containers | Docker + NVIDIA Container Toolkit | `computing-provider ubi daemon` |
-| ECP (ZK-Proof) | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider ubi daemon` |
+### Linux (NVIDIA GPU)
 
-# Table of Contents
+```bash
+# 1. Install
+git clone https://github.com/swanchain/go-computing-provider.git
+cd go-computing-provider && git checkout releases
+make clean && make mainnet && sudo make install
 
-- [Quick Start: ECP2 Mode](#quick-start-ecp2-mode)
-  - [Prerequisites](#prerequisites)
-  - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
-  - [Build Computing Provider](#build-computing-provider)
-  - [Initialize and Configure](#initialize-and-configure)
-  - [Setup Wallet and Account](#setup-wallet-and-account)
-  - [Start ECP2 Provider](#start-ecp2-provider)
-- [Configuration Reference](#configuration-reference)
-- [ECP Mode (ZK-Proof)](#ecp-mode-zk-proof)
-- [CLI Reference](#cli-reference)
-- [Getting Help](#getting-help)
+# 2. Initialize
+computing-provider init --node-name=my-provider
+
+# 3. Start an inference server (example: Llama 3.2 with SGLang)
+docker run -d --gpus all -p 30000:30000 --name sglang \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size 32g --ipc=host \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
+
+# 4. Configure your model
+cat > ~/.swan/computing/models.json << 'EOF'
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+EOF
+
+# 5. Run the provider
+computing-provider run
+```
+
+That's it! Your provider connects to Swan Inference and starts receiving requests.
+
+### macOS (Apple Silicon)
+
+```bash
+# 1. Install Ollama
+brew install ollama
+ollama serve &
+ollama pull llama3.2:3b
+
+# 2. Install Computing Provider
+brew install go
+git clone https://github.com/swanchain/go-computing-provider.git
+cd go-computing-provider && git checkout releases
+make clean && make mainnet && sudo make install
+
+# 3. Initialize and configure
+computing-provider init --node-name=my-mac-provider
+cat > ~/.swan/computing/models.json << 'EOF'
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation"
+  }
+}
+EOF
+
+# 4. Run
+computing-provider run
+```
 
 ---
 
-# Quick Start: ECP2 Mode
+## How It Works
 
-ECP2 (Edge Computing Provider 2) allows you to run AI inference containers on your GPU hardware and earn rewards from the Swan Chain network.
+```
+Swan Inference (Cloud)
+        │
+        │ WebSocket (outbound connection - works behind NAT)
+        ▼
+┌───────────────────────┐
+│  Computing Provider   │
+│  ┌─────────────────┐  │
+│  │ Your GPU Server │  │
+│  │ (SGLang/Ollama) │  │
+│  └─────────────────┘  │
+└───────────────────────┘
+```
+
+1. Provider connects **outbound** to Swan Inference (no inbound ports needed)
+2. Registers available models
+3. Receives inference requests via WebSocket
+4. Forwards to local model server, returns response
+5. **Earn rewards** for completed requests (optional wallet setup)
+
+---
 
 ## Prerequisites
 
-- Linux server with NVIDIA GPU
-- Docker installed ([install guide](https://docs.docker.com/engine/install/))
-- Public IP address
-- Go 1.22+ for building from source
+| Platform | Requirements |
+|----------|-------------|
+| **Linux** | Docker, NVIDIA GPU, [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
+| **macOS** | [Ollama](https://ollama.ai), Apple Silicon (M1/M2/M3/M4) |
 
-```bash
-# Install Go if needed
-wget -c https://golang.org/dl/go1.22.7.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
-echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
-```
-
-## Install NVIDIA Container Toolkit
-
-Required for GPU access in Docker containers:
+### Install NVIDIA Container Toolkit (Linux only)
 
 ```bash
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
@@ -60,280 +119,193 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
 sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
-```
 
-Verify installation:
-```bash
+# Verify
 docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 ```
 
-## Build Computing Provider
+---
 
-```bash
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider
-git checkout releases
+## Configuration
 
-# Build for mainnet
-make clean && make mainnet
-make install
+### Model Configuration (`models.json`)
 
-# Or for testnet
-# make clean && make testnet
-# make install
+Map model names to your local inference endpoints:
+
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  },
+  "mistral-7b": {
+    "endpoint": "http://localhost:30001",
+    "gpu_memory": 16000,
+    "category": "text-generation"
+  }
+}
 ```
 
-## Initialize and Configure
+| Field | Description |
+|-------|-------------|
+| `endpoint` | URL of your local inference server |
+| `gpu_memory` | GPU memory required (MB) |
+| `category` | Model category (`text-generation`, `image-generation`, etc.) |
 
-1. **Initialize the repository:**
-```bash
-computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
-```
+### Provider Configuration (`config.toml`)
 
-> **Note:** Default repo location is `~/.swan/computing`. Override with `export CP_PATH="<YOUR_CP_PATH>"`
-
-2. **Configure for ECP2** in `$CP_PATH/config.toml`:
+Located at `~/.swan/computing/config.toml`:
 
 ```toml
 [API]
-Port = 8085                                    # Web server port
-MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Your public address
-Domain = "*.example.com"                       # Domain for single-port services (optional)
-NodeName = "my-inference-node"                 # Your node name
-PortRange = ["40000-40050", "40060"]           # Ports for multi-port containers
+Port = 8085
+NodeName = "my-provider"
 
-[RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
-
-[ECP2]
+[Inference]
 Enable = true
-WebSocketURL = "wss://inference.swanchain.io/ws"  # Swan Inference WebSocket
-Models = ["your-model-name"]                       # Models this provider serves
-
-# For development/testnet (Base Sepolia)
-# ChainRPC = "https://sepolia.base.org"
-# CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
-# TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+WebSocketURL = "wss://inference-ws.swanchain.io"
+Models = ["llama-3.2-3b"]
 ```
 
-**Environment variable overrides:**
+---
+
+## Monitoring
+
+### Web Dashboard
+
 ```bash
-export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
+computing-provider dashboard
+# Open http://localhost:3005
 ```
 
-### Development Mode (Base Sepolia)
+Features: Real-time metrics, GPU status, model management, request controls.
 
-For local development, ECP2 supports Node ID based authentication without on-chain registration:
-
-| Property | Value |
-|----------|-------|
-| Network | Base Sepolia (chainId: 84532) |
-| RPC | https://sepolia.base.org |
-| Collateral Contract | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
-| Task Contract | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
+### REST API
 
 ```bash
-# Quick start for dev (no on-chain account required)
-make clean && make testnet
-ECP2_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+# View metrics
+curl http://localhost:8085/api/v1/computing/inference/metrics
+
+# List models
+curl http://localhost:8085/api/v1/computing/inference/models
+
+# Check health
+curl http://localhost:8085/api/v1/computing/inference/health
 ```
 
-The provider authenticates via wallet signature using the Node ID. This is suitable for:
-- Local development and testing
-- Integration testing with Swan Inference
-- Rapid iteration without gas costs
+### Useful Endpoints
 
-**Port Configuration:**
-- Single-port containers: Use `traefik` with domain resolution (port 9000)
-- Multi-port containers: Use `PortRange` with direct IP + port mapping
+| Endpoint | Description |
+|----------|-------------|
+| `GET /inference/metrics` | Request counts, latency, GPU stats |
+| `GET /inference/metrics/prometheus` | Prometheus format for Grafana |
+| `GET /inference/models` | List all models with status |
+| `POST /inference/models/:id/enable` | Enable a model |
+| `POST /inference/models/:id/disable` | Disable a model |
+| `POST /inference/models/reload` | Hot-reload models.json |
 
-## Setup Wallet and Account
+---
 
-1. **Create or import wallet:**
+## Earning Rewards (Optional)
+
+To receive SWAN token rewards for completed inference requests, set up a wallet:
+
 ```bash
-# Create new wallet
+# 1. Create a wallet
 computing-provider wallet new
 
-# Or import existing wallet
-computing-provider wallet import <YOUR_PRIVATE_KEY_FILE>
-```
+# 2. Note your wallet address
+computing-provider wallet list
 
-2. **Deposit SwanETH** to your wallet address. See the [getting started guide](https://docs.swanchain.io/swan-mainnet/getting-started-guide).
-
-3. **Create CP account with ECP2 task type:**
-```bash
+# 3. Register on Swan Chain (requires small amount of SwanETH for gas)
 computing-provider account create \
-    --ownerAddress <YOUR_OWNER_ADDRESS> \
-    --workerAddress <YOUR_WORKER_ADDRESS> \
-    --beneficiaryAddress <YOUR_BENEFICIARY_ADDRESS> \
-    --task-types 4
+  --ownerAddress <your-wallet> \
+  --workerAddress <your-wallet> \
+  --beneficiaryAddress <your-wallet> \
+  --task-types 4
+
+# 4. Add collateral (determines your reward tier)
+computing-provider collateral add --ecp --from <your-wallet> <amount>
 ```
 
-> **Task Type 4** = ECP2 (Inference)
+Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
 
-4. **Add collateral:**
+> **Note:** You can run the provider without a wallet - it will still serve inference requests, but you won't receive on-chain rewards.
+
+---
+
+## CLI Reference
+
+### Basic Commands
+
 ```bash
-computing-provider collateral add --ecp --from <YOUR_WALLET_ADDRESS> <AMOUNT>
+computing-provider init --node-name=<name>  # Initialize
+computing-provider run                       # Start provider
+computing-provider task list --ecp           # List tasks
+computing-provider dashboard                 # Web UI
 ```
 
-## Start ECP2 Provider
+### Wallet Commands (for rewards)
 
 ```bash
-export CP_PATH=<YOUR_CP_PATH>
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+computing-provider wallet new                # Create wallet
+computing-provider wallet list               # List wallets
+computing-provider wallet import <file>      # Import private key
 ```
 
-**Check running tasks:**
+### Hardware Info
+
 ```bash
-computing-provider task list --ecp
-```
-
-**Example output:**
-```
-TASK UUID                               TASK NAME       IMAGE NAME                              CONTAINER STATUS   REWARD    CREATE TIME
-75f9df4e-b6a5-40b0-b7ac-02fb1840dafa    inference-01    mymodel/inference:latest                running            1.2500    2024-11-24 10:23:32
+computing-provider research hardware         # All hardware info
+computing-provider research gpu-info         # GPU details
+computing-provider research gpu-benchmark    # Run benchmark
 ```
 
 ---
 
-# Configuration Reference
+## Troubleshooting
 
-## Resource Pricing
+| Error | Solution |
+|-------|----------|
+| `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
+| `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
+| `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
+| Provider not receiving requests | Check `models.json` matches your inference server |
 
-Configure pricing in `$CP_PATH/price.toml`:
+### Check Logs
 
 ```bash
-# Generate default pricing config
-computing-provider price generate
+# Provider logs
+tail -f cp.log
 
-# View current prices
-computing-provider price view
-```
-
-Example `price.toml`:
-```toml
-TARGET_CPU="0.2"            # SWAN/thread-hour
-TARGET_MEMORY="0.1"         # SWAN/GB-hour
-TARGET_HD_EPHEMERAL="0.005" # SWAN/GB-hour
-TARGET_GPU_DEFAULT="1.6"    # SWAN/GPU-hour
-TARGET_GPU_3080="2.0"       # SWAN/3080 GPU-hour
-```
-
-## Full config.toml Reference
-
-```toml
-[API]
-Port = 8085                                    # Web server port
-MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Public multiaddress
-Domain = ""                                    # Domain for traefik routing
-NodeName = ""                                  # Display name
-Pricing = "true"                               # Accept smart pricing orders
-AutoDeleteImage = false                        # Auto-delete unused images
-PortRange = ["40000-40050"]                    # Ports for multi-port containers
-
-[RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
-
-[UBI]
-EnableSequencer = false                        # Enable sequencer for ZK proofs
-AutoChainProof = false                         # Fallback to chain when sequencer unavailable
-
-[Registry]
-ServerAddress = ""                             # Docker registry (optional)
-UserName = ""
-Password = ""
+# Inference server logs
+docker logs sglang
 ```
 
 ---
 
-# ECP Mode (ZK-Proof)
+## Advanced: ZK-Proof Mode
 
-ECP (Edge Computing Provider) generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). Requires additional v28 parameters (~200GB).
+For generating ZK-Snark proofs (Filecoin, Aleo). Requires additional setup.
 
-See [ECP/UBI Documentation](docs/ubi/README.md) for full setup.
+See [ZK-Proof Documentation](docs/ubi/README.md).
 
-**Quick overview:**
 ```bash
-# Download v28 parameters
-export PARENT_PATH="<V28_PARAMS_PATH>"
-curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+# Initialize with public IP (required for ZK mode)
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<name>
 
-# Set environment
-export FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
-export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
-
-# Create account with ZK task types
-computing-provider account create \
-    --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> \
-    --task-types 1,2,4
-
-# Enable sequencer (reduces gas costs)
-# In config.toml:
-# [UBI]
-# EnableSequencer = true
-# AutoChainProof = false
-
-# Deposit to sequencer
-computing-provider sequencer add --from <addr> <amount>
-
-# Start daemon
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+# Requires: wallet, account registration, v28 parameters (~200GB)
 ```
 
 ---
 
-# CLI Reference
+## Getting Help
 
-## Task Management
-```bash
-# List ECP2/ECP tasks
-computing-provider task list --ecp
-
-# Get task details
-computing-provider task get --ecp <task_uuid>
-
-# Delete task
-computing-provider task delete --ecp <task_uuid>
-```
-
-## Wallet Commands
-```bash
-computing-provider wallet new              # Create new wallet
-computing-provider wallet list             # List wallets
-computing-provider wallet import <file>    # Import from private key file
-computing-provider wallet send --from <addr> <to_addr> <amount>
-```
-
-## Account Commands
-```bash
-computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types <types>
-computing-provider account changeTaskTypes --ownerAddress <addr> <new_types>
-computing-provider account changeMultiAddress --ownerAddress <addr> /ip4/<ip>/tcp/<port>
-```
-
-## Collateral Commands
-```bash
-# Add collateral
-computing-provider collateral add --ecp --from <addr> <amount>
-
-# Withdraw collateral
-computing-provider collateral withdraw --ecp --owner <addr> --account <cp_account> <amount>
-```
-
-## ZK/Sequencer Commands
-```bash
-computing-provider ubi list                           # List ZK tasks
-computing-provider ubi list --show-failed             # Include failed tasks
-computing-provider sequencer add --from <addr> <amt>  # Deposit to sequencer
-computing-provider sequencer withdraw --owner <addr> <amt>
-```
-
----
-
-# Getting Help
-
-For usage questions or issues reach out to the Swan team either in the [Discord channel](https://discord.gg/3uQUWzaS7U) or open a new issue here on GitHub.
+- [Discord](https://discord.gg/3uQUWzaS7U) - Community support
+- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues) - Bug reports
+- [Documentation](https://docs.swanchain.io) - Full docs
 
 ## License
 
-Apache
+Apache 2.0

@@ -41,3 +41,42 @@ Password = ""                                                             # The 
 
 [RPC]
 SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"                     # Swan chain RPC
+
+# Inference Mode Configuration - Swan Inference Marketplace (DEFAULT)
+# Inference mode does NOT require a public IP - connects outbound via WebSocket
+#
+# API Endpoints (automatically enabled when Inference mode is on):
+#   Metrics:
+#     GET /api/v1/computing/inference/metrics           - JSON metrics
+#     GET /api/v1/computing/inference/metrics/prometheus - Prometheus format
+#     GET /api/v1/computing/inference/status            - Connection status
+#   Model Management:
+#     GET  /api/v1/computing/inference/models           - List all models with status
+#     GET  /api/v1/computing/inference/models/:id       - Get specific model status
+#     GET  /api/v1/computing/inference/models/:id/health - Get model health details
+#     GET  /api/v1/computing/inference/health           - Health status of all models
+#     POST /api/v1/computing/inference/models/:id/enable  - Enable a model
+#     POST /api/v1/computing/inference/models/:id/disable - Disable a model
+#     POST /api/v1/computing/inference/models/:id/healthcheck - Force health check
+#     POST /api/v1/computing/inference/models/reload    - Reload models.json config
+#   Request Management:
+#     GET  /api/v1/computing/inference/ratelimit        - Rate limiter metrics
+#     GET  /api/v1/computing/inference/concurrency      - Concurrency limiter metrics
+#     GET  /api/v1/computing/inference/retries          - Retry policy metrics
+#     GET  /api/v1/computing/inference/request-management - Combined status
+#     POST /api/v1/computing/inference/ratelimit/global - Set global rate limit
+#     POST /api/v1/computing/inference/ratelimit/model/:id - Set model rate limit
+#     POST /api/v1/computing/inference/concurrency/global - Set global concurrency
+#     POST /api/v1/computing/inference/concurrency/model/:id - Set model concurrency
+#
+# Features:
+#   - Automatic health checking of model endpoints (30s interval)
+#   - Hot-reload: models.json changes are automatically detected
+#   - Circuit breaker: unhealthy models are temporarily excluded from routing
+#   - Rate limiting: GPU-aware adaptive token bucket rate limiting
+#   - Concurrency control: Per-model concurrent request limits
+#   - Retry policy: Exponential backoff with jitter for transient failures
+[Inference]
+Enable = true                                                             # Inference mode is enabled by default
+WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint
+Models = ["llama-3.2-3b"]                                                 # Models this provider serves (must match models.json)

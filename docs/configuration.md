@@ -55,24 +55,18 @@ UserName = ""
 Password = ""
 ```
 
-### ECP2 Configuration (Inference)
+### Inference Mode Configuration
 
 ```toml
-[ECP2]
-Enable = false                  # Enable ECP2/Swan Inference mode
-ServiceURL = "http://localhost:8080"      # HTTP API (not used currently)
-WebSocketURL = "ws://localhost:8081"      # WebSocket connection to Swan Inference
-Models = []                               # Models this provider serves
-
-# Base Sepolia contracts (for development/testing)
-ChainRPC = "https://sepolia.base.org"
-CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
-TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+[Inference]
+Enable = true                   # Inference mode is enabled by default
+WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
+Models = []                               # Models this provider serves (e.g., ["llama-3.2-3b"])
 ```
 
 **Environment variable override:**
 ```bash
-export ECP2_WS_URL=ws://localhost:8081  # Override WebSocket URL
+export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
 ```
 
 ## Environment Variables
@@ -115,14 +109,14 @@ computing-provider wallet list
 ### Create Account
 
 ```bash
-# For ECP2 (inference) - task type 4
+# For Inference mode - task type 4
 computing-provider account create \
   --ownerAddress <OWNER_ADDRESS> \
   --workerAddress <WORKER_ADDRESS> \
   --beneficiaryAddress <BENEFICIARY_ADDRESS> \
   --task-types 4
 
-# For ECP (ZK proofs) - task types 1,2,4
+# For ZK proofs - task types 1,2,4
 computing-provider account create \
   --ownerAddress <OWNER_ADDRESS> \
   --workerAddress <WORKER_ADDRESS> \
@@ -133,7 +127,7 @@ computing-provider account create \
 ### Add Collateral
 
 ```bash
-# Add collateral for ECP/ECP2
+# Add collateral for Inference/ZK-Proof modes
 computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
 ```
 
@@ -167,50 +161,31 @@ gpu_per_hour = "0.50"           # Price per GPU per hour
 storage_per_hour = "0.001"      # Price per GB storage per hour
 ```
 
-## ECP2 Mode Configuration
+## Inference Mode Configuration
 
 For AI inference with Swan Inference:
 
 ```toml
 [API]
-Domain = "*.example.com"        # Wildcard domain for services
+Domain = "*.example.com"        # Wildcard domain for services (optional for Inference mode)
 PortRange = ["40000-40050", "40060"]
 
-[ECP2]
-Enable = true
-WebSocketURL = "wss://inference.swanchain.io/ws"  # Production
-Models = ["your-model-name"]
-
-# For development (Base Sepolia testnet)
-# WebSocketURL = "ws://localhost:8081"
-# ChainRPC = "https://sepolia.base.org"
-# CollateralContract = "0x5EBc65E856ad97532354565560ccC6FAB51b255a"
-# TaskContract = "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2"
+[Inference]
+Enable = true                   # Enabled by default
+WebSocketURL = "wss://inference-ws.swanchain.io"  # Production
+Models = ["llama-3.2-3b"]       # Models this provider serves
 ```
 
-### Base Sepolia Development
+### Development Mode (Local Testing)
 
-For testing ECP2 with Swan Inference on Base Sepolia:
-
-| Contract | Address |
-|----------|---------|
-| Collateral | `0x5EBc65E856ad97532354565560ccC6FAB51b255a` |
-| Task | `0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2` |
-
-**Network:** Base Sepolia (chainId: 84532)
-**RPC:** `https://sepolia.base.org`
-**Explorer:** https://sepolia.basescan.org
-
-### Development Mode (No On-Chain Registration)
-
-For local development, ECP2 supports Node ID based authentication without requiring on-chain account registration:
+For local development, Inference mode supports Node ID based authentication without requiring on-chain account registration:
 
 ```bash
 # Build for testnet
 make clean && make testnet
 
 # Start with local Swan Inference
-ECP2_WS_URL=ws://localhost:8081 ./computing-provider ubi daemon
+INFERENCE_WS_URL=ws://localhost:8081 ./computing-provider run
 ```
 
 **Authentication Flow:**

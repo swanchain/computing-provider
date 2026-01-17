@@ -16,13 +16,13 @@ The Go Computing Provider is a command-line tool that enables individuals and or
 
 | Mode | Task Type | Description |
 |------|-----------|-------------|
-| **ECP2** (Default) | 4 | Deploy AI inference containers via Docker |
-| ECP (ZK-Proof) | 1, 2 | FIL-C2 and mining ZK-SNARK proofs |
+| **Inference** (Default) | 4 | Deploy AI inference containers via Docker |
+| ZK-Proof | 1, 2 | FIL-C2 and mining ZK-SNARK proofs |
 
-### ECP2 - Edge Computing Provider 2 (Default)
-The primary mode for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. ECP2 connects to **Swan Inference**, the decentralized inference marketplace.
+### Inference Mode (Default)
+The primary mode for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. Inference mode connects to **Swan Inference**, the decentralized inference marketplace.
 
-### ECP - Edge Computing Provider (ZK-Proof)
+### ZK-Proof Mode
 Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU acceleration. Ideal for real-time proof generation applications.
 
 ## Quick Start
@@ -39,7 +39,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 - [Configuration](configuration.md) - Configuration files and settings
 
 ### Provider Modes
-- [Edge Computing Provider (ECP)](ecp/README.md) - ECP/ECP2 setup and operation
+- [Edge Computing Provider](ecp/README.md) - Inference and ZK-Proof mode setup
 - [UBI Tasks](ubi/README.md) - ZK proof task management
 
 ### Operations

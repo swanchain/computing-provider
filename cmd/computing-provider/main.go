@@ -32,6 +32,7 @@ func main() {
 			FlagRepo,
 		},
 		Commands: []*cli.Command{
+			runCmd,
 			initCmd,
 			infoCmd,
 			stateCmd,
@@ -45,11 +46,15 @@ func main() {
 			priceCmd,
 			ubiZeroCmd,
 			researchCmd,
+			dashboardCmd,
 		},
 		Before: func(c *cli.Context) error {
-			// Skip repo initialization for research command (hardware detection only)
-			if c.Args().Present() && strings.EqualFold(c.Args().First(), researchCmd.Name) {
-				return nil
+			// Skip repo initialization for research and dashboard commands
+			if c.Args().Present() {
+				firstArg := c.Args().First()
+				if strings.EqualFold(firstArg, researchCmd.Name) || strings.EqualFold(firstArg, dashboardCmd.Name) {
+					return nil
+				}
 			}
 
 			cpRepoPath, err := homedir.Expand(c.String(FlagRepo.Name))

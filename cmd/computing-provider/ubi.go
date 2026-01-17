@@ -23,10 +23,17 @@ import (
 
 var ubiTaskCmd = &cli.Command{
 	Name:  "ubi",
-	Usage: "Manage ubi tasks",
+	Usage: "Manage ZK proof tasks",
 	Subcommands: []*cli.Command{
 		listCmd,
-		daemonCmd,
+	},
+}
+
+var runCmd = &cli.Command{
+	Name:  "run",
+	Usage: "Start the computing provider",
+	Action: func(cctx *cli.Context) error {
+		return runDaemon()
 	},
 }
 
@@ -159,101 +166,275 @@ var listCmd = &cli.Command{
 	},
 }
 
-var daemonCmd = &cli.Command{
-	Name:  "daemon",
-	Usage: "Start a cp process",
+// runDaemon starts the computing provider daemon
+func runDaemon() error {
+	logs.GetLogger().Info("Starting computing provider...")
+	cpRepoPath, _ := os.LookupEnv("CP_PATH")
 
-	Action: func(cctx *cli.Context) error {
-		logs.GetLogger().Info("Starting a computing-provider client.")
-		cpRepoPath, _ := os.LookupEnv("CP_PATH")
+	computing.NewDockerService().CleanResourceForDocker(true)
 
-		computing.NewDockerService().CleanResourceForDocker(true)
+	resourceExporterContainerName := "resource-exporter"
+	rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
+	if err != nil {
+		return fmt.Errorf("check %s container failed, error: %v", resourceExporterContainerName, err)
+	}
 
-		resourceExporterContainerName := "resource-exporter"
-		rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
-		if err != nil {
-			return fmt.Errorf("check %s container failed, error: %v", resourceExporterContainerName, err)
+	if version != "" {
+		if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
+			logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
 		}
+	}
 
-		if version != "" {
-			if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
-				logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
-			}
+	if !rsExist {
+		if err = computing.RestartResourceExporter(); err != nil {
+			logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
 		}
+	}
 
-		if !rsExist {
-			if err = computing.RestartResourceExporter(); err != nil {
-				logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
-			}
+	traefikServiceContainerName := "traefik-service"
+	tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
+	if err != nil {
+		return fmt.Errorf("check %s container failed, error: %v", traefikServiceContainerName, err)
+	}
+	if !tsExist {
+		if err = computing.RestartTraefikService(); err != nil {
+			logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
 		}
+	}
 
-		traefikServiceContainerName := "traefik-service"
-		tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
-		if err != nil {
-			return fmt.Errorf("check %s container failed, error: %v", traefikServiceContainerName, err)
+	if err := conf.InitConfig(cpRepoPath, true); err != nil {
+		logs.GetLogger().Fatal(err)
+	}
+	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
+
+	computing.SyncCpAccountInfo()
+	computing.CronTaskForEcp()
+
+	// Start Inference mode (Swan Inference marketplace) if enabled
+	nodeID := computing.GetNodeId(cpRepoPath)
+	inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
+	if err := inferenceService.Start(); err != nil {
+		logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
+	}
+
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.Default()
+	r.Use(cors.Middleware(cors.Config{
+		Origins:         "*",
+		Methods:         "GET, PUT, POST, DELETE",
+		RequestHeaders:  "Origin, Authorization, Content-Type",
+		ExposedHeaders:  "",
+		MaxAge:          50 * time.Second,
+		ValidateHeaders: false,
+	}))
+	pprof.Register(r)
+
+	router := r.Group("/api/v1/computing")
+	router.GET("/cp", computing.GetCpResource)
+	router.GET("/cp/metrics", computing.GetUbiResourceExporterMetrics)
+	router.POST("/cp/ubi", computing.DoUbiTaskForDocker)
+	router.POST("/cp/docker/receive/ubi", computing.ReceiveUbiProof)
+
+	ecpImageService := computing.NewImageJobService()
+	router.POST("/cp/deploy/check", ecpImageService.CheckJobCondition)
+	router.GET("/cp/price", computing.GetPrice)
+	router.POST("/cp/deploy", ecpImageService.DeployJob)
+	router.GET("/cp/job/status", ecpImageService.GetJobStatus)
+	router.GET("/cp/job/log", ecpImageService.DockerLogsHandler)
+	router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
+	router.POST("/cp/zk_task", computing.DoZkTask)
+
+	// Inference metrics endpoints
+	router.GET("/inference/metrics", func(c *gin.Context) {
+		metrics := inferenceService.GetMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Inference service not running"})
+			return
 		}
-		if !tsExist {
-			if err = computing.RestartTraefikService(); err != nil {
-				logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
-			}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/metrics/prometheus", func(c *gin.Context) {
+		prometheusMetrics := inferenceService.GetMetricsPrometheus()
+		if prometheusMetrics == "" {
+			c.String(503, "# Inference service not running\n")
+			return
 		}
+		c.Header("Content-Type", "text/plain; charset=utf-8")
+		c.String(200, prometheusMetrics)
+	})
+	router.GET("/inference/status", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"connected":     inferenceService.IsConnected(),
+			"active_models": inferenceService.GetActiveModels(),
+		})
+	})
 
-		if err := conf.InitConfig(cpRepoPath, true); err != nil {
-			logs.GetLogger().Fatal(err)
+	// Model management endpoints
+	router.GET("/inference/models", func(c *gin.Context) {
+		models := inferenceService.GetAllModels()
+		summary := inferenceService.GetModelsSummary()
+		c.JSON(200, gin.H{
+			"models":  models,
+			"summary": summary,
+		})
+	})
+	router.GET("/inference/models/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		model, ok := inferenceService.GetModelStatus(modelID)
+		if !ok {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
 		}
-		logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
-
-		computing.SyncCpAccountInfo()
-		computing.CronTaskForEcp()
-
-		// Start ECP2 marketplace integration if enabled
-		nodeID := computing.GetNodeId(cpRepoPath)
-		ecp2Service := computing.NewECP2Service(nodeID, cpRepoPath)
-		if err := ecp2Service.Start(); err != nil {
-			logs.GetLogger().Errorf("Failed to start ECP2 service: %v", err)
+		c.JSON(200, model)
+	})
+	router.GET("/inference/models/:model_id/health", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		health, ok := inferenceService.GetModelHealth(modelID)
+		if !ok {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
 		}
-
-		gin.SetMode(gin.ReleaseMode)
-		r := gin.Default()
-		r.Use(cors.Middleware(cors.Config{
-			Origins:         "*",
-			Methods:         "GET, PUT, POST, DELETE",
-			RequestHeaders:  "Origin, Authorization, Content-Type",
-			ExposedHeaders:  "",
-			MaxAge:          50 * time.Second,
-			ValidateHeaders: false,
-		}))
-		pprof.Register(r)
-
-		router := r.Group("/api/v1/computing")
-		router.GET("/cp", computing.GetCpResource)
-		router.GET("/cp/metrics", computing.GetUbiResourceExporterMetrics)
-		router.POST("/cp/ubi", computing.DoUbiTaskForDocker)
-		router.POST("/cp/docker/receive/ubi", computing.ReceiveUbiProof)
-
-		ecpImageService := computing.NewImageJobService()
-		router.POST("/cp/deploy/check", ecpImageService.CheckJobCondition)
-		router.GET("/cp/price", computing.GetPrice)
-		router.POST("/cp/deploy", ecpImageService.DeployJob)
-		router.GET("/cp/job/status", ecpImageService.GetJobStatus)
-		router.GET("/cp/job/log", ecpImageService.DockerLogsHandler)
-		router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
-		router.POST("/cp/zk_task", computing.DoZkTask)
-
-		shutdownChan := make(chan struct{})
-		httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
-		if err != nil {
-			logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
+		c.JSON(200, health)
+	})
+	router.GET("/inference/health", func(c *gin.Context) {
+		health := inferenceService.GetAllModelHealth()
+		c.JSON(200, health)
+	})
+	router.POST("/inference/models/:model_id/enable", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		if err := inferenceService.EnableModel(modelID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
 		}
-		logs.GetLogger().Infof("CP service started successfully, listening on port: %d", conf.GetConfig().API.Port)
+		c.JSON(200, gin.H{"status": "enabled", "model_id": modelID})
+	})
+	router.POST("/inference/models/:model_id/disable", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		if err := inferenceService.DisableModel(modelID); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "disabled", "model_id": modelID})
+	})
+	router.POST("/inference/models/:model_id/healthcheck", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		inferenceService.ForceHealthCheck(modelID)
+		c.JSON(200, gin.H{"status": "health check triggered", "model_id": modelID})
+	})
+	router.POST("/inference/models/reload", func(c *gin.Context) {
+		if err := inferenceService.ReloadModels(); err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "models reloaded"})
+	})
 
-		finishCh := util.MonitorShutdown(shutdownChan,
-			util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
-		)
-		<-finishCh
+	// Request management endpoints
+	router.GET("/inference/ratelimit", func(c *gin.Context) {
+		metrics := inferenceService.GetRateLimiterMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Rate limiter not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/concurrency", func(c *gin.Context) {
+		metrics := inferenceService.GetConcurrencyMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Concurrency limiter not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/retries", func(c *gin.Context) {
+		metrics := inferenceService.GetRetryMetrics()
+		if metrics == nil {
+			c.JSON(503, gin.H{"error": "Retry policy not available"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+	router.GET("/inference/request-management", func(c *gin.Context) {
+		status := inferenceService.GetRequestManagementStatus()
+		c.JSON(200, status)
+	})
+	router.POST("/inference/ratelimit/global", func(c *gin.Context) {
+		var req struct {
+			Rate float64 `json:"rate"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Rate <= 0 {
+			c.JSON(400, gin.H{"error": "rate must be positive"})
+			return
+		}
+		inferenceService.SetGlobalRateLimit(req.Rate)
+		c.JSON(200, gin.H{"status": "rate limit updated", "rate": req.Rate})
+	})
+	router.POST("/inference/ratelimit/model/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		var req struct {
+			Rate  float64 `json:"rate"`
+			Burst int     `json:"burst"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Rate <= 0 || req.Burst <= 0 {
+			c.JSON(400, gin.H{"error": "rate and burst must be positive"})
+			return
+		}
+		inferenceService.SetModelRateLimit(modelID, req.Rate, req.Burst)
+		c.JSON(200, gin.H{"status": "model rate limit updated", "model_id": modelID, "rate": req.Rate, "burst": req.Burst})
+	})
+	router.POST("/inference/concurrency/global", func(c *gin.Context) {
+		var req struct {
+			Max int `json:"max"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Max <= 0 {
+			c.JSON(400, gin.H{"error": "max must be positive"})
+			return
+		}
+		inferenceService.SetGlobalConcurrencyLimit(req.Max)
+		c.JSON(200, gin.H{"status": "concurrency limit updated", "max": req.Max})
+	})
+	router.POST("/inference/concurrency/model/:model_id", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		var req struct {
+			Max int `json:"max"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		if req.Max <= 0 {
+			c.JSON(400, gin.H{"error": "max must be positive"})
+			return
+		}
+		inferenceService.SetModelConcurrencyLimit(modelID, req.Max)
+		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
+	})
 
-		return nil
-	},
+	shutdownChan := make(chan struct{})
+	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
+	if err != nil {
+		logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
+	}
+	logs.GetLogger().Infof("Computing provider started successfully, listening on port: %d", conf.GetConfig().API.Port)
+
+	finishCh := util.MonitorShutdown(shutdownChan,
+		util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
+	)
+	<-finishCh
+
+	return nil
 }
 
 func getStatusColor(taskStatus int) []tablewriter.Colors {

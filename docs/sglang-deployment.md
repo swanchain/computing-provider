@@ -1,10 +1,10 @@
-# SGLang Deployment Guide for ECP2 Providers
+# SGLang Deployment Guide for Inference Providers
 
-This guide covers deploying SGLang as the inference engine for ECP2 providers on Swan Chain.
+This guide covers deploying SGLang as the inference engine for Inference providers on Swan Chain.
 
 ## Overview
 
-SGLang is the recommended inference engine for ECP2 providers due to:
+SGLang is the recommended inference engine for Inference providers due to:
 - **29% higher throughput** than vLLM (16,215 vs 12,553 tok/s)
 - **Stable concurrency** handling (30-31 tok/s under load)
 - **RadixAttention** for 10% boost in multi-turn conversations
@@ -104,14 +104,14 @@ docker run -d \
   --gpus all \
   --shm-size 32g \
   --ipc=host \
-  -p 8000:8000 \
+  -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 30000 \
     --served-model-name llama-3.1-8b
 ```
 
@@ -119,10 +119,13 @@ docker run -d \
 
 ```bash
 # Health check
-curl http://localhost:8000/health
+curl http://localhost:30000/health
+
+# List models
+curl http://localhost:30000/v1/models
 
 # Test inference
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "llama-3.1-8b",
@@ -141,15 +144,35 @@ docker run -d \
   --gpus all \
   --shm-size 32g \
   --ipc=host \
-  -p 8000:8000 \
+  -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.1-8B-Instruct \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 30000 \
     --served-model-name llama-3.1-8b \
+    --mem-fraction-static 0.9
+```
+
+### Llama 3.2 3B (8GB VRAM)
+
+```bash
+docker run -d \
+  --name sglang-llama-3b \
+  --gpus all \
+  --shm-size 16g \
+  --ipc=host \
+  -p 30000:30000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=${HF_TOKEN} \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --host 0.0.0.0 \
+    --port 30000 \
+    --served-model-name llama-3.2-3b \
     --mem-fraction-static 0.9
 ```
 
@@ -161,13 +184,13 @@ docker run -d \
   --gpus all \
   --shm-size 32g \
   --ipc=host \
-  -p 8001:8000 \
+  -p 30001:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path Qwen/Qwen2.5-7B-Instruct \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 30000 \
     --served-model-name qwen-2.5-7b \
     --mem-fraction-static 0.85
 ```
@@ -180,14 +203,14 @@ docker run -d \
   --gpus all \
   --shm-size 64g \
   --ipc=host \
-  -p 8002:8000 \
+  -p 30002:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.1-70B-Instruct \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 30000 \
     --served-model-name llama-3.1-70b \
     --tp 4 \
     --mem-fraction-static 0.9
@@ -201,13 +224,13 @@ docker run -d \
   --gpus all \
   --shm-size 64g \
   --ipc=host \
-  -p 8003:8000 \
+  -p 30003:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path deepseek-ai/DeepSeek-V3 \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 30000 \
     --served-model-name deepseek-v3 \
     --tp 8 \
     --quantization fp8
@@ -215,15 +238,32 @@ docker run -d \
 
 ## Swan Inference Integration
 
+### Architecture (No Public IP Required)
+
+Inference providers connect **outbound** to Swan Inference via WebSocket. This means:
+- No public IP address required
+- Works behind NAT/firewalls
+- No port forwarding needed
+
+```
+Swan Inference (wss://inference-ws.swanchain.io)
+         │
+         │ Outbound WebSocket
+         ▼
+┌─────────────────────────────────────┐
+│  Provider (can be behind NAT)       │
+│  InferenceClient ──► SGLang (localhost)  │
+└─────────────────────────────────────┘
+```
+
 ### Configure Computing Provider
 
 Edit `~/.swan/computing/config.toml`:
 
 ```toml
-[ECP2]
+[Inference]
 Enable = true
-ServiceURL = "http://inference.swanchain.io"
-WebSocketURL = "wss://inference.swanchain.io"
+WebSocketURL = "wss://inference-ws.swanchain.io"
 Models = ["llama-3.1-8b", "qwen-2.5-7b"]
 ```
 
@@ -234,24 +274,29 @@ Create a mapping file `~/.swan/computing/models.json`:
 ```json
 {
   "llama-3.1-8b": {
-    "container": "sglang-llama-8b",
-    "endpoint": "http://localhost:8000",
-    "gpu_memory": 24
+    "container": "lmsysorg/sglang:latest",
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 24000,
+    "category": "text-generation"
   },
   "qwen-2.5-7b": {
-    "container": "sglang-qwen",
-    "endpoint": "http://localhost:8001",
-    "gpu_memory": 16
+    "container": "lmsysorg/sglang:latest",
+    "endpoint": "http://localhost:30001",
+    "gpu_memory": 16000,
+    "category": "text-generation"
   },
   "llama-3.1-70b": {
-    "container": "sglang-llama-70b",
-    "endpoint": "http://localhost:8002",
-    "gpu_memory": 160
+    "container": "lmsysorg/sglang:latest",
+    "endpoint": "http://localhost:30002",
+    "gpu_memory": 160000,
+    "category": "text-generation"
   }
 }
 ```
 
-### Start ECP2 Daemon
+> **Note:** The `endpoint` URL points to your local SGLang server. The CP forwards inference requests to this endpoint.
+
+### Start Inference Daemon
 
 ```bash
 # Start SGLang containers first
@@ -259,7 +304,7 @@ docker start sglang-llama-8b sglang-qwen
 
 # Then start computing provider
 export CP_PATH=~/.swan/computing
-computing-provider ubi daemon
+computing-provider run
 ```
 
 ## Performance Tuning

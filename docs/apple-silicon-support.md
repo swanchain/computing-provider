@@ -4,7 +4,15 @@ This document outlines how to run Swan Chain Computing Provider on Apple Silicon
 
 ## Overview
 
-Apple Silicon Macs (M1, M2, M3, M4) can serve as **ECP (Edge Computing Provider)** nodes for Swan Chain. Due to Docker's limitations with GPU passthrough on macOS, the recommended approach is native inference using llama.cpp with Metal acceleration.
+Apple Silicon Macs (M1, M2, M3, M4) can serve as **Inference Provider** nodes for Swan Chain. Due to Docker's limitations with GPU passthrough on macOS, the recommended approach is native inference using **Ollama** with Metal acceleration.
+
+## Recommended Setup: Ollama
+
+[Ollama](https://ollama.com) is the recommended inference backend for macOS. It provides:
+- Native Metal GPU acceleration
+- Easy model management
+- OpenAI-compatible API
+- Simple installation via Homebrew
 
 ## Current Limitations
 
@@ -15,12 +23,12 @@ Docker Desktop on macOS does **not** expose the Apple GPU to containers. Contain
 | Approach | GPU Access | Performance | Recommended |
 |----------|-----------|-------------|-------------|
 | Docker Desktop | No | CPU only (~5-10 tok/s) | No |
-| Podman + Vulkan | Partial | ~60% of native | Complex setup |
-| Native llama.cpp | Full Metal | 100% (~50-150 tok/s) | **Yes** |
+| **Ollama** | Full Metal | 100% (~50-150 tok/s) | **Yes** |
+| Native llama.cpp | Full Metal | 100% (~50-150 tok/s) | Yes |
 
 ### Why Native is Better
 
-- **Native Metal**: 50-150 tokens/second on M3/M4
+- **Ollama/Native Metal**: 50-150 tokens/second on M3/M4
 - **Docker CPU**: 5-10 tokens/second
 - **Performance gap**: 10-15x faster with native execution
 
@@ -40,9 +48,32 @@ Docker Desktop on macOS does **not** expose the Apple GPU to containers. Contain
 - 50GB+ free storage
 - macOS 14.0 (Sonoma) or later
 
-## Installation
+## Quick Start (Ollama)
 
-### Step 1: Install Dependencies
+### Step 1: Install Ollama
+
+```bash
+# Install via Homebrew
+brew install ollama
+
+# Or download from https://ollama.com/download
+```
+
+### Step 2: Start Ollama and Pull Models
+
+```bash
+# Start Ollama service
+ollama serve &
+
+# Pull a model (example: Llama 3.2 3B)
+ollama pull llama3.2:3b
+
+# Or pull larger models based on your hardware
+ollama pull llama3.1:8b    # Requires 8GB+ RAM
+ollama pull llama3.3:70b   # Requires 48GB+ RAM
+```
+
+### Step 3: Install Computing Provider
 
 ```bash
 # Install Homebrew (if not installed)
@@ -51,7 +82,80 @@ Docker Desktop on macOS does **not** expose the Apple GPU to containers. Contain
 # Install Go
 brew install go
 
-# Install llama.cpp
+# Clone repository
+git clone https://github.com/swanchain/computing-provider-v2.git
+cd computing-provider-v2
+
+# Build for Apple Silicon
+make clean && make mainnet
+sudo make install
+```
+
+### Step 4: Initialize Configuration
+
+```bash
+# Set config path
+export CP_PATH=~/.swan/computing
+
+# Initialize (no public IP required for Inference mode)
+computing-provider init --node-name=my-mac-provider
+
+# Verify initialization
+ls -la $CP_PATH/
+```
+
+### Step 5: Configure Model Mappings
+
+Create `$CP_PATH/models.json` to map model names to Ollama:
+
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation"
+  },
+  "llama-3.1-8b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+```
+
+### Step 6: Start the Provider
+
+```bash
+# Set environment variable
+export CP_PATH=~/.swan/computing
+
+# Start the computing provider
+computing-provider run
+
+# Or run in background
+nohup computing-provider run >> cp.log 2>&1 &
+```
+
+### Step 7: Verify It's Working
+
+```bash
+# Test Ollama endpoint directly
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama-3.2-3b", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}'
+
+# Check provider logs
+tail -f cp.log
+```
+
+## Alternative: llama.cpp
+
+If you prefer llama.cpp over Ollama:
+
+### Install llama.cpp
+
+```bash
+# Install via Homebrew
 brew install llama.cpp
 
 # Or build from source for latest features
@@ -60,41 +164,13 @@ cd llama.cpp
 make GGML_METAL=1
 ```
 
-### Step 2: Build Computing Provider
-
-```bash
-# Clone repository
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider
-
-# Build for Apple Silicon
-make darwin-arm64
-
-# Or build directly
-GOOS=darwin GOARCH=arm64 go build -o computing-provider ./cmd/computing-provider
-```
-
-### Step 3: Initialize Configuration
-
-```bash
-# Set config path
-export CP_PATH=~/.swan/computing
-
-# Initialize
-./computing-provider init
-
-# Edit configuration
-vim $CP_PATH/config.toml
-```
-
-### Step 4: Download Models
+### Download Models
 
 ```bash
 # Create models directory
 mkdir -p $CP_PATH/models
 
 # Download a model (example: Llama 3.1 8B)
-# Use Hugging Face CLI or direct download
 huggingface-cli download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf \
     --local-dir $CP_PATH/models
 ```
@@ -105,42 +181,46 @@ huggingface-cli download TheBloke/Llama-2-7B-GGUF llama-2-7b.Q4_K_M.gguf \
 
 ```toml
 [API]
-Port = 8085
-MultiAddress = "/ip4/0.0.0.0/tcp/8085"
-Domain = ""
-NodeName = "my-m1-provider"
-
-[ECP2]
-Enable = true
-ServiceURL = "https://ecp2.swanchain.io"
-WebSocketURL = "wss://ecp2.swanchain.io/ws"
-Models = ["llama-3.1-8b", "mistral-7b"]
+Port = 9085
+MultiAddress = "/ip4/127.0.0.1/tcp/9085"
+NodeName = "my-mac-provider"
 
 [Inference]
-# Native inference settings for Apple Silicon
-Engine = "llama.cpp"
-ModelsPath = "~/.swan/computing/models"
-MetalEnabled = true
-ContextSize = 4096
-GPULayers = 99
+Enable = true
+WebSocketURL = "wss://inference-ws.swanchain.io"
 
 [RPC]
-ChainRPC = "https://mainnet-rpc.swanchain.io"
+SwanChainRPC = "https://mainnet-rpc.swanchain.io"
+```
+
+### models.json for Ollama
+
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation"
+  }
+}
 ```
 
 ## Running the Provider
 
-### Option 1: ECP Daemon with Native Inference
+### Option 1: Ollama (Recommended)
 
 ```bash
-# Start the ECP daemon
-./computing-provider ubi daemon
+# Terminal 1: Ensure Ollama is running
+ollama serve
+
+# Terminal 2: Start the computing provider
+export CP_PATH=~/.swan/computing
+computing-provider run
 
 # The provider will:
-# 1. Start llama-server with Metal acceleration
-# 2. Connect to ECP2 service via WebSocket
-# 3. Register available models
-# 4. Handle inference requests
+# 1. Connect to Swan Inference via WebSocket
+# 2. Register available models from models.json
+# 3. Forward inference requests to Ollama
 ```
 
 ### Option 2: Manual llama-server + Provider
@@ -153,8 +233,9 @@ llama-server \
     -ngl 99 \
     -c 4096
 
-# Terminal 2: Start provider (connects to local llama-server)
-./computing-provider ubi daemon --inference-url http://localhost:8080
+# Terminal 2: Update models.json to point to llama-server
+# Then start provider
+computing-provider run
 ```
 
 ## Performance Tuning
@@ -221,40 +302,61 @@ curl http://localhost:8080/v1/completions \
 
 ## Troubleshooting
 
+### Ollama Not Running
+
+```bash
+# Check if Ollama is running
+pgrep -l ollama
+
+# Start Ollama service
+ollama serve
+
+# Or restart via brew services
+brew services restart ollama
+```
+
+### Model Not Found
+
+```bash
+# List available models
+ollama list
+
+# Pull the required model
+ollama pull llama3.2:3b
+
+# Create an alias if model name doesn't match
+ollama cp llama3.1:latest llama-3.2-3b
+```
+
 ### Metal Not Detected
 
 ```bash
 # Verify Metal support
 system_profiler SPDisplaysDataType | grep Metal
 
-# Check llama.cpp was built with Metal
-llama-server --version
-# Should show: Metal support: true
+# Check Ollama is using Metal (check GPU usage in Activity Monitor)
 ```
 
 ### Out of Memory
 
 ```bash
-# Reduce context size
-llama-server -m model.gguf -ngl 99 -c 2048
+# Use a smaller model
+ollama pull llama3.2:1b
 
-# Or reduce GPU layers
-llama-server -m model.gguf -ngl 40 -c 4096
-
-# Use smaller quantization
-# Switch from Q8 to Q4_K_M
+# Or use quantized versions
+ollama pull llama3.1:8b-q4_0
 ```
 
 ### Slow Performance
 
-1. Verify Metal is enabled: `-ngl 99`
-2. Check Activity Monitor for GPU usage
-3. Close other GPU-intensive apps
+1. Verify Ollama is using Metal (check Activity Monitor > GPU)
+2. Close other GPU-intensive apps
+3. Use smaller quantized models
 4. Ensure using ARM64 binary (not Rosetta)
 
 ```bash
 # Verify binary architecture
-file ./computing-provider
+file $(which computing-provider)
 # Should show: Mach-O 64-bit executable arm64
 ```
 
@@ -262,10 +364,25 @@ file ./computing-provider
 
 ```bash
 # Test WebSocket connection
-websocat wss://ecp2.swanchain.io/ws
+curl -I https://inference-ws.swanchain.io
 
-# Check network
-curl -I https://ecp2.swanchain.io/health
+# Check provider logs
+tail -f cp.log | grep -E "error|warning"
+```
+
+### Provider Not Receiving Requests
+
+```bash
+# Verify models.json is correctly configured
+cat $CP_PATH/models.json
+
+# Test Ollama endpoint directly
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama-3.2-3b", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# Check provider registration
+tail -f cp.log | grep -E "Registration|connected"
 ```
 
 ## Docker Alternative (CPU-Only)
@@ -318,8 +435,9 @@ Apple Silicon is competitive with mid-range NVIDIA GPUs when using native Metal 
 
 ## References
 
+- [Ollama](https://ollama.com) - Recommended inference backend for macOS
+- [Ollama GitHub](https://github.com/ollama/ollama)
+- [Ollama Model Library](https://ollama.com/library)
 - [llama.cpp GitHub](https://github.com/ggml-org/llama.cpp)
 - [llama.cpp Performance on Apple Silicon](https://github.com/ggml-org/llama.cpp/discussions/4167)
-- [Apple Silicon vs NVIDIA CUDA 2025](https://scalastic.io/en/apple-silicon-vs-nvidia-cuda-ai-2025/)
-- [GPU-Accelerated Containers for M-series Macs](https://medium.com/@andreask_75652/gpu-accelerated-containers-for-m1-m2-m3-macs-237556e5fe0b)
-- [LLM Performance: Native vs Docker on Mac](https://www.vchalyi.com/blog/2025/ollama-performance-benchmark-macos/)
+- [Apple Silicon vs NVIDIA CUDA](https://scalastic.io/en/apple-silicon-vs-nvidia-cuda-ai-2025/)

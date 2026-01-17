@@ -278,13 +278,13 @@ See [bellperson](https://github.com/filecoin-project/bellperson) for more GPU op
 
 ```bash
 # Start ECP service (foreground)
-computing-provider ubi daemon
+computing-provider run
 
 # Or run in background
-nohup computing-provider ubi daemon >> cp.log 2>&1 &
+nohup computing-provider run >> cp.log 2>&1 &
 ```
 
-**Important:** Use `computing-provider ubi daemon` to start ECP/ECP2.
+**Important:** Use `computing-provider run` to start the provider.
 
 ### Monitor ECP
 
@@ -343,7 +343,7 @@ TASK ID  TASK CONTRACT                                 TASK TYPE  ZK TYPE  STATU
    # Log out and back in for group changes to take effect
 
    # Or use sg to run with docker group (temporary fix)
-   sg docker -c "computing-provider ubi daemon"
+   sg docker -c "computing-provider run"
    ```
 
 2. **NVIDIA Container Toolkit Not Installed**

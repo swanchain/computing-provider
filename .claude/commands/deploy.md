@@ -94,14 +94,14 @@ Contracts are deployed on Base Sepolia (chainId: 84532).
 export CP_PATH=~/.swan/computing
 
 # Optional: Override WebSocket URL for dev (takes precedence over config.toml)
-export ECP2_WS_URL=ws://localhost:8081
+export INFERENCE_WS_URL=ws://localhost:8081
 ```
 
 ### Step 4: Start Computing Provider in Dev Mode
 
 ```bash
 # Start the UBI daemon connecting to local swan-inference
-computing-provider ubi daemon
+computing-provider run
 ```
 
 ---
@@ -147,7 +147,7 @@ lsof -i :8080
 ### Docker Permission Issues
 ```bash
 # Run with docker group
-sg docker -c "computing-provider ubi daemon"
+sg docker -c "computing-provider run"
 ```
 
 ---
@@ -167,5 +167,5 @@ computing-provider init --multi-address=/ip4/127.0.0.1/tcp/8085 --node-name=dev-
 #   Enable = true
 
 # 4. Start daemon with dev WebSocket URL override
-ECP2_WS_URL=ws://localhost:8081 computing-provider ubi daemon
+INFERENCE_WS_URL=ws://localhost:8081 computing-provider run
 ```

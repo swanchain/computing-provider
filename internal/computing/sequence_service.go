@@ -5,6 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/swanchain/computing-provider-v2/conf"
@@ -12,11 +19,6 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/contract/account"
 	"github.com/swanchain/computing-provider-v2/wallet"
 	"golang.org/x/xerrors"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 type Sequencer struct {
@@ -28,7 +30,22 @@ const (
 	task  = "/v1/tasks"
 )
 
-var tokenCache string
+var (
+	tokenCache string
+	tokenMu    sync.RWMutex
+)
+
+func getTokenCache() string {
+	tokenMu.RLock()
+	defer tokenMu.RUnlock()
+	return tokenCache
+}
+
+func setTokenCache(token string) {
+	tokenMu.Lock()
+	defer tokenMu.Unlock()
+	tokenCache = token
+}
 
 func NewSequencer() *Sequencer {
 	return &Sequencer{
@@ -40,20 +57,22 @@ func GetToken() (string, error) {
 	cpPath, _ := os.LookupEnv("CP_PATH")
 	tokenFileName := filepath.Join(cpPath, "token")
 
-	if tokenCache != "" {
-		if err := os.WriteFile(tokenFileName, []byte(tokenCache), 0666); err != nil {
+	cachedToken := getTokenCache()
+	if cachedToken != "" {
+		if err := os.WriteFile(tokenFileName, []byte(cachedToken), 0666); err != nil {
 			return "", fmt.Errorf("failed to write sequencer token to file, error: %v", err)
 		}
 	} else {
 		if err := NewSequencer().GetToken(); err != nil {
 			return "", fmt.Errorf("failed to get token, error: %v", err)
 		}
-		if err := os.WriteFile(tokenFileName, []byte(tokenCache), 0666); err != nil {
+		cachedToken = getTokenCache()
+		if err := os.WriteFile(tokenFileName, []byte(cachedToken), 0666); err != nil {
 			return "", fmt.Errorf("failed to write sequencer token to file, error: %v", err)
 		}
-		return tokenCache, nil
+		return cachedToken, nil
 	}
-	return tokenCache, nil
+	return cachedToken, nil
 }
 
 func (s *Sequencer) GetToken() error {
@@ -70,7 +89,7 @@ func (s *Sequencer) GetToken() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial rpc connect, error: %v", err)
 	}
-	client.Close()
+	defer client.Close()
 
 	blockNumber, err := client.BlockNumber(context.Background())
 	if err != nil {
@@ -93,7 +112,7 @@ func (s *Sequencer) GetToken() error {
 
 	var header = make(http.Header)
 	header.Set("Content-Type", "application/json")
-	header.Set("Authorization", tokenCache)
+	header.Set("Authorization", getTokenCache())
 
 	var tokenResp TokenResp
 	err = NewHttpClient(s.url, header).PostJSON(token, data, &tokenResp)
@@ -102,7 +121,7 @@ func (s *Sequencer) GetToken() error {
 	}
 
 	if tokenResp.Code == 0 {
-		tokenCache = tokenResp.Data.Token
+		setTokenCache(tokenResp.Data.Token)
 	} else {
 		return fmt.Errorf(tokenResp.Msg)
 	}
@@ -110,7 +129,7 @@ func (s *Sequencer) GetToken() error {
 }
 
 func (s *Sequencer) SendTaskProof(data []byte) (SendProofResp, error) {
-	if tokenCache == "" {
+	if getTokenCache() == "" {
 		if err := s.GetToken(); err != nil {
 			return SendProofResp{}, fmt.Errorf("failed to get token, error: %v", err)
 		}
@@ -122,16 +141,15 @@ func (s *Sequencer) SendTaskProof(data []byte) (SendProofResp, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", tokenCache)
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	req.Header.Set("Authorization", getTokenCache())
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return SendProofResp{}, fmt.Errorf("failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 	newToken := resp.Header.Get("new-token")
 	if newToken != "" {
-		tokenCache = newToken
+		setTokenCache(newToken)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -158,7 +176,7 @@ func (s *Sequencer) SendTaskProof(data []byte) (SendProofResp, error) {
 }
 
 func (s *Sequencer) QueryTask(taskType int, taskIds []int64, uuids []string) (TaskListResp, error) {
-	if tokenCache == "" {
+	if getTokenCache() == "" {
 		if err := s.GetToken(); err != nil {
 			return TaskListResp{}, fmt.Errorf("failed to get token, error: %v", err)
 		}
@@ -181,9 +199,8 @@ func (s *Sequencer) QueryTask(taskType int, taskIds []int64, uuids []string) (Ta
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", tokenCache)
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	req.Header.Set("Authorization", getTokenCache())
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return TaskListResp{}, fmt.Errorf("failed to sending request: %v", err)
 	}
@@ -191,7 +208,7 @@ func (s *Sequencer) QueryTask(taskType int, taskIds []int64, uuids []string) (Ta
 
 	newToken := resp.Header.Get("new-token")
 	if newToken != "" {
-		tokenCache = newToken
+		setTokenCache(newToken)
 	}
 
 	body, err := io.ReadAll(resp.Body)

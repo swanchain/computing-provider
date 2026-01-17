@@ -14,9 +14,9 @@ func ProjectInit(cpRepoPath string) {
 
 	computing.NewCronTask(nodeID).RunTask()
 
-	// Start ECP2 marketplace integration if enabled
-	ecp2Service := computing.NewECP2Service(nodeID, cpRepoPath)
-	if err := ecp2Service.Start(); err != nil {
-		logs.GetLogger().Errorf("Failed to start ECP2 service: %v", err)
+	// Start Inference mode (Swan Inference marketplace) if enabled
+	inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
+	if err := inferenceService.Start(); err != nil {
+		logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
 	}
 }

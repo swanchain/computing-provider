@@ -383,7 +383,7 @@ var initCmd = &cli.Command{
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "multi-address",
-			Usage: "The multiAddress for libp2p(example: /ip4/<PUBLIC_IP>/tcp/<PORT>)",
+			Usage: "The multiAddress for libp2p (optional for Inference mode, defaults to localhost)",
 		},
 		&cli.StringFlag{
 			Name:  "node-name",
@@ -398,8 +398,9 @@ var initCmd = &cli.Command{
 	Action: func(cctx *cli.Context) error {
 		multiAddr := cctx.String("multi-address")
 		port := cctx.Int("port")
+		// Multi-address is optional for Inference mode - default to localhost
 		if strings.TrimSpace(multiAddr) == "" {
-			return fmt.Errorf("the multi-address field required")
+			multiAddr = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port)
 		}
 		nodeName := cctx.String("node-name")
 

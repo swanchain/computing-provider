@@ -35,20 +35,20 @@ func (p *Pricing) UnmarshalTOML(data interface{}) error {
 
 // ComputeNode is a compute node config
 type ComputeNode struct {
-	API      API
-	UBI      UBI
-	LOG      LOG
-	Registry Registry
-	RPC      RPC
-	CONTRACT CONTRACT `toml:"CONTRACT,omitempty"`
-	ECP2     ECP2     `toml:"ECP2,omitempty"`
+	API       API
+	UBI       UBI
+	LOG       LOG
+	Registry  Registry
+	RPC       RPC
+	CONTRACT  CONTRACT  `toml:"CONTRACT,omitempty"`
+	Inference Inference `toml:"Inference,omitempty"`
 }
 
-// ECP2 is the ECP2 marketplace configuration
-type ECP2 struct {
+// Inference is the Swan Inference marketplace configuration (default mode)
+type Inference struct {
 	Enable             bool     `toml:"Enable"`
 	ServiceURL         string   `toml:"ServiceURL"`         // HTTP API URL (e.g., http://localhost:8080)
-	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., ws://localhost:8081)
+	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
 	Models             []string `toml:"Models"`             // Models this provider serves
 	ChainRPC           string   `toml:"ChainRPC"`           // Base Sepolia RPC for Swan Inference
 	CollateralContract string   `toml:"CollateralContract"` // Collateral contract address
@@ -139,9 +139,12 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 		config.API.GpuUtilizationRejectThreshold = 1.0
 	}
 
-	multiAddressSplit := strings.Split(config.API.MultiAddress, "/")
-	if len(multiAddressSplit) < 4 {
-		log.Fatalf("MultiAddress %s is invalid\n", multiAddressSplit[2])
+	// Validate MultiAddress format if provided (optional for Inference mode)
+	if config.API.MultiAddress != "" {
+		multiAddressSplit := strings.Split(config.API.MultiAddress, "/")
+		if len(multiAddressSplit) < 5 {
+			log.Printf("Warning: MultiAddress %s may be invalid. Expected format: /ip4/<IP>/tcp/<PORT>\n", config.API.MultiAddress)
+		}
 	}
 
 	if standalone {
@@ -426,14 +429,14 @@ func generateDefaultConfig() ComputeNode {
 			EdgeTaskPayment:        "",
 			EdgeTaskPaymentCreated: 0,
 		},
-		ECP2: ECP2{
-			Enable:             false,
-			ServiceURL:         "http://localhost:8080",
-			WebSocketURL:       "ws://localhost:8081",
+		Inference: Inference{
+			Enable:             true, // Inference mode is enabled by default
+			ServiceURL:         "",
+			WebSocketURL:       "wss://inference-ws.swanchain.io",
 			Models:             []string{},
-			ChainRPC:           "https://sepolia.base.org",
-			CollateralContract: "0x5EBc65E856ad97532354565560ccC6FAB51b255a",
-			TaskContract:       "0x6c1f6ad2b4Cb8A7ba4027b348D7f20A14706d3C2",
+			ChainRPC:           "",
+			CollateralContract: "",
+			TaskContract:       "",
 		},
 	}
 }
