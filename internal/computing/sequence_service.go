@@ -70,7 +70,7 @@ func (s *Sequencer) GetToken() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial rpc connect, error: %v", err)
 	}
-	client.Close()
+	defer client.Close()
 
 	blockNumber, err := client.BlockNumber(context.Background())
 	if err != nil {
