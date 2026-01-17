@@ -2,329 +2,67 @@
 
 [![Discord](https://img.shields.io/discord/770382203782692945?label=Discord&logo=Discord)](https://discord.gg/Jd2BFSVCKw)
 [![Twitter Follow](https://img.shields.io/twitter/follow/swan_chain)](https://twitter.com/swan_chain)
-[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg)](https://github.com/RichardLitt/standard-readme)
 
-Computing Provider v2 is a CLI tool for the Swan Chain decentralized computing network. It enables operators to provide computational resources (CPU, GPU, memory, storage) to the network and earn rewards.
+Turn your GPU into an AI inference endpoint and join the Swan Chain decentralized computing network.
 
-**Inference Mode** is the default mode for Computing Provider v2, allowing you to deploy and run AI inference containers with GPU support. It connects to **Swan Inference**, the decentralized inference marketplace.
+## Quick Start (5 minutes)
 
-## Provider Modes
+**No wallet needed. No blockchain registration. No public IP required.**
 
-| Mode | Description | Requirements | Command |
-|------|-------------|--------------|---------|
-| **Inference** (Default) | Deploy AI inference containers | Docker + NVIDIA (or Ollama on macOS) | `computing-provider run` |
-| ZK-Proof | Generate ZK-Snark proofs (FIL-C2, Aleo) | Docker + NVIDIA + v28 params | `computing-provider run` |
-
-# Table of Contents
-
-**Choose your platform:**
-
-| Platform | GPU | Guide |
-|----------|-----|-------|
-| **Linux** | NVIDIA GPU | [Linux Setup (NVIDIA)](#linux-setup-nvidia) |
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | [macOS Setup (Apple Silicon)](#macos-setup-apple-silicon) |
-
-- [Linux Setup (NVIDIA)](#linux-setup-nvidia)
-  - [Prerequisites](#prerequisites)
-  - [Install NVIDIA Container Toolkit](#install-nvidia-container-toolkit)
-  - [Build Computing Provider](#build-computing-provider)
-  - [Initialize and Configure](#initialize-and-configure)
-  - [Start Inference Provider](#start-inference-provider)
-- [macOS Setup (Apple Silicon)](#macos-setup-apple-silicon)
-- [Configuration Reference](#configuration-reference)
-- [ZK-Proof Mode (Linux Only)](#zk-proof-mode)
-- [CLI Reference](#cli-reference)
-- [Dashboard](#dashboard)
-- [Getting Help](#getting-help)
-
----
-
-# Linux Setup (NVIDIA)
-
-Inference Mode is the simplest way to get started. **No wallet, no blockchain registration, no public IP required.**
+### Linux (NVIDIA GPU)
 
 ```bash
-# 1. Build and install
+# 1. Install
 git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider && git checkout releases
 make clean && make mainnet && sudo make install
 
 # 2. Initialize
-export CP_PATH=~/.swan/computing
 computing-provider init --node-name=my-provider
 
-# 3. Configure models.json (see below)
-
-# 4. Start your inference server (SGLang, vLLM, or Ollama)
-
-# 5. Run the provider
-computing-provider run
-```
-
-That's it! Your provider will connect to Swan Inference and start receiving requests.
-
-## Prerequisites
-
-- Linux server with NVIDIA GPU (or macOS with Apple Silicon)
-- Docker installed ([install guide](https://docs.docker.com/engine/install/))
-- Go 1.22+ for building from source
-
-> **Note:** Inference mode does **NOT** require a public IP address. The provider connects outbound to Swan Inference via WebSocket, so it works behind NAT/firewalls.
-
-```bash
-# Install Go if needed
-wget -c https://golang.org/dl/go1.22.7.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
-echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc && source ~/.bashrc
-```
-
-## Install NVIDIA Container Toolkit
-
-Required for GPU access in Docker containers:
-
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-Verify installation:
-```bash
-docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
-```
-
-## Build Computing Provider
-
-```bash
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider
-git checkout releases
-
-# Build for mainnet
-make clean && make mainnet
-make install
-
-# Or for testnet
-# make clean && make testnet
-# make install
-```
-
-## Initialize and Configure
-
-1. **Initialize the repository:**
-```bash
-# For Inference mode (no public IP needed)
-computing-provider init --node-name=<YOUR_NODE_NAME>
-
-# For ZK-Proof mode (requires public IP)
-computing-provider init --multi-address=/ip4/<YOUR_PUBLIC_IP>/tcp/<YOUR_PORT> --node-name=<YOUR_NODE_NAME>
-```
-
-> **Note:** Default repo location is `~/.swan/computing`. Override with `export CP_PATH="<YOUR_CP_PATH>"`
-
-2. **Configure Inference mode** in `$CP_PATH/config.toml`:
-
-```toml
-[API]
-Port = 8085                                    # Web server port
-MultiAddress = "/ip4/127.0.0.1/tcp/8085"       # Can be localhost for Inference mode
-NodeName = "my-inference-node"                 # Your node name
-
-[RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"
-
-[Inference]
-Enable = true
-WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
-Models = ["llama-3.2-3b"]                         # Models this provider serves
-```
-
-3. **Configure model mappings** in `$CP_PATH/models.json`:
-
-```json
-{
-  "llama-3.2-3b": {
-    "container": "lmsysorg/sglang:latest",
-    "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  }
-}
-```
-
-4. **Start your inference server** (SGLang recommended):
-
-```bash
-# Using Docker
-docker run -d --gpus all -p 30000:30000 \
+# 3. Start an inference server (example: Llama 3.2 with SGLang)
+docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.2-3B-Instruct \
-    --host 0.0.0.0 --port 30000 \
-    --served-model-name llama-3.2-3b
+    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
 
-# Verify it's running
-curl http://localhost:30000/v1/models
+# 4. Configure your model
+cat > ~/.swan/computing/models.json << 'EOF'
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+EOF
+
+# 5. Run the provider
+computing-provider run
 ```
 
-See [SGLang Deployment Guide](docs/sglang-deployment.md) for detailed setup and optimization.
+That's it! Your provider connects to Swan Inference and starts receiving requests.
 
-**Environment variable overrides:**
-```bash
-export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
-```
-
-### How Inference Mode Works (No Public IP Required)
-
-```
-Swan Inference (wss://inference-ws.swanchain.io)
-         │
-         │ Outbound WebSocket (provider initiates)
-         ▼
-┌─────────────────────────────────────┐
-│  Computing Provider (behind NAT)    │
-│  ┌────────────────┐  ┌───────────┐  │
-│  │ InferenceClient│─►│SGLang/vLLM│  │
-│  │                │  │ localhost │  │
-│  └────────────────┘  └───────────┘  │
-└─────────────────────────────────────┘
-```
-
-1. Provider connects **outbound** to Swan Inference WebSocket
-2. Registers with model list (e.g., `["llama-3.2-3b"]`)
-3. Receives inference requests via WebSocket
-4. Forwards to local model server, returns response
-5. No inbound ports or public IP needed
-
-## Start Inference Provider
-
-```bash
-export CP_PATH=<YOUR_CP_PATH>
-nohup computing-provider run >> cp.log 2>&1 &
-```
-
-**Check running tasks:**
-```bash
-computing-provider task list --ecp
-```
-
-**Example output:**
-```
-TASK UUID                               TASK NAME       IMAGE NAME                              CONTAINER STATUS   REWARD    CREATE TIME
-75f9df4e-b6a5-40b0-b7ac-02fb1840dafa    inference-01    mymodel/inference:latest                running            1.2500    2024-11-24 10:23:32
-```
-
-## Monitoring & Management
-
-The Inference provider exposes REST APIs for monitoring and management at `http://localhost:8085/api/v1/computing/inference/`.
-
-### Metrics Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /inference/metrics` | JSON metrics (requests, latency, tokens, GPU) |
-| `GET /inference/metrics/prometheus` | Prometheus-format metrics |
-| `GET /inference/status` | Connection status and active models |
-
-**Example:**
-```bash
-# Get inference metrics
-curl http://localhost:8085/api/v1/computing/inference/metrics
-
-# Prometheus metrics for Grafana
-curl http://localhost:8085/api/v1/computing/inference/metrics/prometheus
-```
-
-### Model Management
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /inference/models` | List all models with status |
-| `GET /inference/models/:id` | Get specific model details |
-| `GET /inference/health` | Health status of all models |
-| `POST /inference/models/:id/enable` | Enable a model |
-| `POST /inference/models/:id/disable` | Disable a model |
-| `POST /inference/models/reload` | Hot-reload models.json |
-
-**Features:**
-- **Health Checking**: Automatic health probes every 30 seconds
-- **Hot-Reload**: Edit `models.json` and changes apply automatically
-- **Circuit Breaker**: Unhealthy models are temporarily excluded
-
-**Example:**
-```bash
-# List all models
-curl http://localhost:8085/api/v1/computing/inference/models
-
-# Disable a model
-curl -X POST http://localhost:8085/api/v1/computing/inference/models/llama-3.2-3b/disable
-
-# Reload configuration
-curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
-```
-
-### Request Management
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /inference/ratelimit` | Rate limiter metrics |
-| `GET /inference/concurrency` | Concurrency limiter metrics |
-| `GET /inference/request-management` | Combined status |
-| `POST /inference/ratelimit/global` | Set global rate limit |
-| `POST /inference/concurrency/global` | Set global concurrency |
-
-**Features:**
-- **Rate Limiting**: GPU-aware adaptive token bucket limiting
-- **Concurrency Control**: Per-model concurrent request limits
-- **Retry Policy**: Exponential backoff with jitter for transient failures
-
-**Example:**
-```bash
-# View rate limiter status
-curl http://localhost:8085/api/v1/computing/inference/ratelimit
-
-# Set global rate limit to 50 req/s
-curl -X POST http://localhost:8085/api/v1/computing/inference/ratelimit/global \
-  -H "Content-Type: application/json" \
-  -d '{"rate": 50}'
-
-# Set model concurrency limit
-curl -X POST http://localhost:8085/api/v1/computing/inference/concurrency/model/llama-3.2-3b \
-  -H "Content-Type: application/json" \
-  -d '{"max": 5}'
-```
-
----
-
-# macOS Setup (Apple Silicon)
-
-For Apple Silicon Macs (M1/M2/M3/M4), use Ollama for native Metal GPU acceleration. **No wallet, no blockchain registration, no public IP required.**
+### macOS (Apple Silicon)
 
 ```bash
 # 1. Install Ollama
 brew install ollama
-
-# 2. Pull and serve a model
 ollama serve &
 ollama pull llama3.2:3b
 
-# 3. Install computing provider
+# 2. Install Computing Provider
 brew install go
 git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider && git checkout releases
 make clean && make mainnet && sudo make install
 
-# 4. Initialize
-export CP_PATH=~/.swan/computing
+# 3. Initialize and configure
 computing-provider init --node-name=my-mac-provider
-
-# 5. Configure models.json
-cat > $CP_PATH/models.json << 'EOF'
+cat > ~/.swan/computing/models.json << 'EOF'
 {
   "llama-3.2-3b": {
     "endpoint": "http://localhost:11434",
@@ -334,184 +72,240 @@ cat > $CP_PATH/models.json << 'EOF'
 }
 EOF
 
-# 6. Run
+# 4. Run
 computing-provider run
 ```
 
-See [Apple Silicon Support](docs/apple-silicon-support.md) for detailed instructions.
+---
+
+## How It Works
+
+```
+Swan Inference (Cloud)
+        │
+        │ WebSocket (outbound connection - works behind NAT)
+        ▼
+┌───────────────────────┐
+│  Computing Provider   │
+│  ┌─────────────────┐  │
+│  │ Your GPU Server │  │
+│  │ (SGLang/Ollama) │  │
+│  └─────────────────┘  │
+└───────────────────────┘
+```
+
+1. Provider connects **outbound** to Swan Inference (no inbound ports needed)
+2. Registers available models
+3. Receives inference requests via WebSocket
+4. Forwards to local model server, returns response
+5. **Earn rewards** for completed requests (optional wallet setup)
 
 ---
 
-# Configuration Reference
+## Prerequisites
 
-## Resource Pricing
+| Platform | Requirements |
+|----------|-------------|
+| **Linux** | Docker, NVIDIA GPU, [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
+| **macOS** | [Ollama](https://ollama.ai), Apple Silicon (M1/M2/M3/M4) |
 
-Configure pricing in `$CP_PATH/price.toml`:
+### Install NVIDIA Container Toolkit (Linux only)
 
 ```bash
-# Generate default pricing config
-computing-provider price generate
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 
-# View current prices
-computing-provider price view
+# Verify
+docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 ```
 
-Example `price.toml`:
-```toml
-TARGET_CPU="0.2"            # SWAN/thread-hour
-TARGET_MEMORY="0.1"         # SWAN/GB-hour
-TARGET_HD_EPHEMERAL="0.005" # SWAN/GB-hour
-TARGET_GPU_DEFAULT="1.6"    # SWAN/GPU-hour
-TARGET_GPU_3080="2.0"       # SWAN/3080 GPU-hour
+---
+
+## Configuration
+
+### Model Configuration (`models.json`)
+
+Map model names to your local inference endpoints:
+
+```json
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  },
+  "mistral-7b": {
+    "endpoint": "http://localhost:30001",
+    "gpu_memory": 16000,
+    "category": "text-generation"
+  }
+}
 ```
 
-## Full config.toml Reference
+| Field | Description |
+|-------|-------------|
+| `endpoint` | URL of your local inference server |
+| `gpu_memory` | GPU memory required (MB) |
+| `category` | Model category (`text-generation`, `image-generation`, etc.) |
+
+### Provider Configuration (`config.toml`)
+
+Located at `~/.swan/computing/config.toml`:
 
 ```toml
 [API]
-Port = 8085                                    # Web server port
-MultiAddress = "/ip4/<public_ip>/tcp/<port>"   # Public multiaddress
-Domain = ""                                    # Domain for traefik routing
-NodeName = ""                                  # Display name
-Pricing = "true"                               # Accept smart pricing orders
-AutoDeleteImage = false                        # Auto-delete unused images
-PortRange = ["40000-40050"]                    # Ports for multi-port containers
-
-[RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc-01.swanchain.org"
+Port = 8085
+NodeName = "my-provider"
 
 [Inference]
-Enable = true                                  # Enable inference mode (default)
+Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
 Models = ["llama-3.2-3b"]
-
-[UBI]
-EnableSequencer = false                        # Enable sequencer for ZK proofs
-AutoChainProof = false                         # Fallback to chain when sequencer unavailable
-
-[Registry]
-ServerAddress = ""                             # Docker registry (optional)
-UserName = ""
-Password = ""
 ```
 
 ---
 
-# ZK-Proof Mode
+## Monitoring
 
-> **Linux Only** - ZK-Proof mode requires NVIDIA GPU and is not supported on macOS.
+### Web Dashboard
 
-ZK-Proof mode generates ZK-Snark proofs (Filecoin FIL-C2, Aleo, etc.). **Requires wallet setup and blockchain registration.**
-
-See [ZK-Proof Documentation](docs/ubi/README.md) for full setup.
-
-**Quick overview:**
 ```bash
-# 1. Download v28 parameters (~200GB)
-export PARENT_PATH="<V28_PARAMS_PATH>"
-curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+computing-provider dashboard
+# Open http://localhost:3005
+```
 
-# 2. Set environment
-export FIL_PROOFS_PARAMETER_CACHE=$PARENT_PATH
-export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
+Features: Real-time metrics, GPU status, model management, request controls.
 
-# 3. Create wallet
+### REST API
+
+```bash
+# View metrics
+curl http://localhost:8085/api/v1/computing/inference/metrics
+
+# List models
+curl http://localhost:8085/api/v1/computing/inference/models
+
+# Check health
+curl http://localhost:8085/api/v1/computing/inference/health
+```
+
+### Useful Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /inference/metrics` | Request counts, latency, GPU stats |
+| `GET /inference/metrics/prometheus` | Prometheus format for Grafana |
+| `GET /inference/models` | List all models with status |
+| `POST /inference/models/:id/enable` | Enable a model |
+| `POST /inference/models/:id/disable` | Disable a model |
+| `POST /inference/models/reload` | Hot-reload models.json |
+
+---
+
+## Earning Rewards (Optional)
+
+To receive SWAN token rewards for completed inference requests, set up a wallet:
+
+```bash
+# 1. Create a wallet
 computing-provider wallet new
 
-# 4. Deposit SwanETH to your wallet (see https://docs.swanchain.io)
+# 2. Note your wallet address
+computing-provider wallet list
 
-# 5. Create account with ZK task types
+# 3. Register on Swan Chain (requires small amount of SwanETH for gas)
 computing-provider account create \
-    --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> \
-    --task-types 1,2,4
+  --ownerAddress <your-wallet> \
+  --workerAddress <your-wallet> \
+  --beneficiaryAddress <your-wallet> \
+  --task-types 4
 
-# 6. Add collateral
-computing-provider collateral add --ecp --from <addr> <amount>
+# 4. Add collateral (determines your reward tier)
+computing-provider collateral add --ecp --from <your-wallet> <amount>
+```
 
-# 7. Enable sequencer (reduces gas costs) in config.toml:
-# [UBI]
-# EnableSequencer = true
-# AutoChainProof = false
+Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
 
-# 8. Deposit to sequencer
-computing-provider sequencer add --from <addr> <amount>
+> **Note:** You can run the provider without a wallet - it will still serve inference requests, but you won't receive on-chain rewards.
 
-# 9. Start provider
-nohup computing-provider run >> cp.log 2>&1 &
+---
+
+## CLI Reference
+
+### Basic Commands
+
+```bash
+computing-provider init --node-name=<name>  # Initialize
+computing-provider run                       # Start provider
+computing-provider task list --ecp           # List tasks
+computing-provider dashboard                 # Web UI
+```
+
+### Wallet Commands (for rewards)
+
+```bash
+computing-provider wallet new                # Create wallet
+computing-provider wallet list               # List wallets
+computing-provider wallet import <file>      # Import private key
+```
+
+### Hardware Info
+
+```bash
+computing-provider research hardware         # All hardware info
+computing-provider research gpu-info         # GPU details
+computing-provider research gpu-benchmark    # Run benchmark
 ```
 
 ---
 
-# CLI Reference
+## Troubleshooting
 
-## Task Management
+| Error | Solution |
+|-------|----------|
+| `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
+| `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
+| `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
+| Provider not receiving requests | Check `models.json` matches your inference server |
+
+### Check Logs
+
 ```bash
-# List Inference/ZK tasks
-computing-provider task list --ecp
+# Provider logs
+tail -f cp.log
 
-# Get task details
-computing-provider task get --ecp <task_uuid>
-
-# Delete task
-computing-provider task delete --ecp <task_uuid>
+# Inference server logs
+docker logs sglang
 ```
-
-## Wallet Commands
-```bash
-computing-provider wallet new              # Create new wallet
-computing-provider wallet list             # List wallets
-computing-provider wallet import <file>    # Import from private key file
-computing-provider wallet send --from <addr> <to_addr> <amount>
-```
-
-## Account Commands
-```bash
-computing-provider account create --ownerAddress <addr> --workerAddress <addr> --beneficiaryAddress <addr> --task-types <types>
-computing-provider account changeTaskTypes --ownerAddress <addr> <new_types>
-computing-provider account changeMultiAddress --ownerAddress <addr> /ip4/<ip>/tcp/<port>
-```
-
-## Collateral Commands
-```bash
-# Add collateral
-computing-provider collateral add --ecp --from <addr> <amount>
-
-# Withdraw collateral
-computing-provider collateral withdraw --ecp --owner <addr> --account <cp_account> <amount>
-```
-
-## ZK/Sequencer Commands
-```bash
-computing-provider ubi list                           # List ZK tasks
-computing-provider ubi list --show-failed             # Include failed tasks
-computing-provider sequencer add --from <addr> <amt>  # Deposit to sequencer
-computing-provider sequencer withdraw --owner <addr> <amt>
-```
-
-## Dashboard
-```bash
-# Start the web dashboard (default port 3005)
-computing-provider dashboard
-
-# Custom port and API target
-computing-provider dashboard --port 3005 --api http://localhost:8085
-```
-
-The dashboard provides a real-time web UI for monitoring and managing your inference provider:
-- **Metrics**: Request counts, success rates, latency (avg/p95/p99)
-- **GPU Status**: Utilization, memory, temperature per GPU
-- **Model Management**: Enable/disable models, force health checks, reload config
-- **Request Controls**: Adjust rate limits and concurrency settings
-- **Charts**: Live latency and throughput visualizations
-
-Access at `http://localhost:3005` after starting.
 
 ---
 
-# Getting Help
+## Advanced: ZK-Proof Mode
 
-For usage questions or issues reach out to the Swan team either in the [Discord channel](https://discord.gg/3uQUWzaS7U) or open a new issue here on GitHub.
+For generating ZK-Snark proofs (Filecoin, Aleo). Requires additional setup.
+
+See [ZK-Proof Documentation](docs/ubi/README.md).
+
+```bash
+# Initialize with public IP (required for ZK mode)
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<name>
+
+# Requires: wallet, account registration, v28 parameters (~200GB)
+```
+
+---
+
+## Getting Help
+
+- [Discord](https://discord.gg/3uQUWzaS7U) - Community support
+- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues) - Bug reports
+- [Documentation](https://docs.swanchain.io) - Full docs
 
 ## License
 
-Apache
+Apache 2.0
