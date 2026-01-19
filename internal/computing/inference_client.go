@@ -54,7 +54,8 @@ type RegisterPayload struct {
 	ProviderID   string        `json:"provider_id"`
 	WorkerAddr   string        `json:"worker_addr"`
 	OwnerAddr    string        `json:"owner_addr"`
-	Signature    string        `json:"signature"`
+	Token        string        `json:"token,omitempty"`    // API key for authentication (sk-prov-*)
+	Signature    string        `json:"signature,omitempty"`
 	Models       []string      `json:"models"`
 	Capabilities []string      `json:"capabilities"`
 	Hardware     *HardwareInfo `json:"hardware,omitempty"`
@@ -157,6 +158,7 @@ type InferenceClient struct {
 	providerID                string
 	workerAddr                string
 	ownerAddr                 string
+	apiKey                    string // Provider API key for authentication (sk-prov-*)
 	models                    []string
 	wsURL                     string
 	conn                      *websocket.Conn
@@ -184,10 +186,18 @@ func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClie
 		logs.GetLogger().Infof("Using INFERENCE_WS_URL env override: %s", wsURL)
 	}
 
+	// Allow env var override for API key
+	apiKey := config.Inference.ApiKey
+	if envKey := os.Getenv("INFERENCE_API_KEY"); envKey != "" {
+		apiKey = envKey
+		logs.GetLogger().Infof("Using INFERENCE_API_KEY env override")
+	}
+
 	return &InferenceClient{
 		providerID:   providerID,
 		workerAddr:   workerAddr,
 		ownerAddr:    ownerAddr,
+		apiKey:       apiKey,
 		models:       config.Inference.Models,
 		wsURL:        wsURL,
 		send:         make(chan []byte, 256),
@@ -366,6 +376,7 @@ func (c *InferenceClient) register() error {
 		ProviderID:   c.providerID,
 		WorkerAddr:   c.workerAddr,
 		OwnerAddr:    c.ownerAddr,
+		Token:        c.apiKey, // API key for authentication
 		Models:       c.models,
 		Capabilities: []string{"inference", "verification"},
 		Hardware:     hardware,
