@@ -66,9 +66,14 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
   "payload": {
     "provider_id": "uuid",
     "worker_addr": "0x...",
-    "signature": "signed_message",
+    "token": "sk-prov-xxx",
     "models": ["model_id_1", "model_id_2"],
-    "capabilities": ["llm", "embedding"]
+    "capabilities": ["llm", "embedding"],
+    "hardware": {
+      "gpu_type": "rtx_4090",
+      "vram_gb": 24,
+      "gpu_count": 1
+    }
   }
 }
 ```
@@ -197,11 +202,13 @@ type Message struct {
 }
 
 type RegisterPayload struct {
-    ProviderID   string   `json:"provider_id"`
-    WorkerAddr   string   `json:"worker_addr"`
-    Signature    string   `json:"signature"`
-    Models       []string `json:"models"`
-    Capabilities []string `json:"capabilities"`
+    ProviderID   string        `json:"provider_id"`
+    WorkerAddr   string        `json:"worker_addr"`
+    Token        string        `json:"token,omitempty"`     // API key for authentication (sk-prov-*)
+    Signature    string        `json:"signature,omitempty"` // Alternative: wallet signature auth
+    Models       []string      `json:"models"`
+    Capabilities []string      `json:"capabilities"`
+    Hardware     *HardwareInfo `json:"hardware,omitempty"`
 }
 
 type InferencePayload struct {
@@ -224,12 +231,14 @@ Add to `conf/config.go`:
 
 ```go
 type Inference struct {
-    Enabled       bool   `toml:"enabled"`
-    ServiceURL    string `toml:"service_url"`     // HTTP API URL
-    WebSocketURL  string `toml:"websocket_url"`   // WebSocket URL
-    ProviderID    string `toml:"provider_id"`     // From registration
-    HeartbeatSec  int    `toml:"heartbeat_sec"`   // Heartbeat interval
-    ReconnectSec  int    `toml:"reconnect_sec"`   // Reconnect interval on disconnect
+    Enable             bool     `toml:"Enable"`
+    ServiceURL         string   `toml:"ServiceURL"`         // HTTP API URL
+    WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL
+    ApiKey             string   `toml:"ApiKey"`             // Provider API key (sk-prov-*)
+    Models             []string `toml:"Models"`             // Models this provider serves
+    ChainRPC           string   `toml:"ChainRPC"`           // RPC for Swan Inference chain
+    CollateralContract string   `toml:"CollateralContract"` // Collateral contract address
+    TaskContract       string   `toml:"TaskContract"`       // Task contract address
 }
 ```
 
@@ -238,8 +247,29 @@ Add to `config.toml`:
 ```toml
 [Inference]
 Enable = true
-WebSocketURL = "wss://inference-ws.swanchain.io"
+WebSocketURL = "wss://inference.swanchain.io/ws"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # From provider signup
 Models = ["llama-3.2-3b"]  # Models this provider serves
+```
+
+**Getting an API Key:**
+
+Register as a provider via the signup endpoint:
+```bash
+curl -X POST https://inference.swanchain.io/api/v1/provider/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My GPU Provider",
+    "owner_address": "0x...",
+    "worker_address": "0x..."
+  }'
+```
+
+The response includes your API key (`sk-prov-*`). Save it - it won't be shown again.
+
+**Environment Variable Override:**
+```bash
+export INFERENCE_API_KEY="sk-prov-xxxxxxxxxxxxxxxxxxxx"
 ```
 
 > **Note:** Inference mode does NOT require a public IP. The provider connects outbound to Swan Inference via WebSocket.
@@ -274,25 +304,30 @@ computing-provider run
 
 #### WebSocket Connection Flow
 ```
-1. CP connects to wss://inference-ws.swanchain.io/ws
+1. CP connects to wss://inference.swanchain.io/ws
 
-2. CP sends register message:
+2. CP sends register message with API key:
    {
      "type": "register",
      "payload": {
        "provider_id": "uuid",
        "worker_addr": "0x...",
-       "signature": "signed(provider_id + timestamp)",
-       "models": ["llama-3-70b", "mistral-7b"]
+       "token": "sk-prov-xxxxxxxxxxxx",
+       "models": ["llama-3-70b", "mistral-7b"],
+       "hardware": {
+         "gpu_type": "rtx_4090",
+         "vram_gb": 24,
+         "gpu_count": 1
+       }
      }
    }
 
-3. Swan Inference verifies signature, registers client in Hub
+3. Swan Inference validates API key, registers client in Hub
 
 4. Swan Inference responds with ack:
    {
      "type": "ack",
-     "payload": {"success": true, "message": "registered"}
+     "payload": {"success": true, "message": "registered successfully"}
    }
 
 5. CP starts heartbeat loop (every 30s)
@@ -388,10 +423,12 @@ func (s *InferenceService) ExecuteInference(req InferencePayload) (*InferenceRes
 ## Integration Considerations
 
 ### Security
-- All WebSocket messages must be signed with worker key
+- Provider authentication via API key (`sk-prov-*`) or wallet signature
+- API keys are hashed in database (bcrypt) - original key shown only once at creation
 - TLS required for production (wss://)
 - Verify Swan Inference service identity before connecting
 - Rate limit inference requests to prevent abuse
+- API keys can be rotated/revoked via provider portal
 
 ### Performance
 - Keep WebSocket connection alive with heartbeats
@@ -420,6 +457,7 @@ Inference mode has been implemented with the following components:
 3. **Inference message handling** - Complete
 4. **Docker service integration** - Complete
 5. **Streaming support** - Complete
+6. **API key authentication** - Complete (supports `sk-prov-*` tokens and env var override)
 
 ## References
 
