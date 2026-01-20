@@ -52,6 +52,7 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
 **Message Types:**
 - `register` - Provider announces availability with signed worker address
 - `inference` - Service routes inference requests to providers
+- `warmup` - Pre-load model into GPU memory (reduces cold start latency)
 - `verify` - Model verification challenges (fingerprint, logprob, timing)
 - `heartbeat` - Liveness checks with optional metrics
 - `ack` - Acknowledgment responses
@@ -114,6 +115,32 @@ Swan Inference uses JSON messages over WebSocket for real-time communication:
     "request_id": "uuid",
     "latency_ms": 1234,
     "error": ""  // Empty if successful
+  }
+}
+```
+
+**Warmup Payload (Swan Inference → Provider):**
+```json
+{
+  "type": "warmup",
+  "request_id": "uuid",
+  "payload": {
+    "model_id": "llama-3.2-3b",
+    "warmup_type": "load"
+  }
+}
+```
+
+**Warmup Response (Provider → Swan Inference):**
+```json
+{
+  "type": "ack",
+  "request_id": "uuid",
+  "payload": {
+    "request_id": "uuid",
+    "model_id": "llama-3.2-3b",
+    "success": true,
+    "load_time_ms": 1500
   }
 }
 ```
@@ -187,12 +214,15 @@ Data models for Inference integration:
 type MessageType string
 
 const (
-    MsgTypeRegister  MessageType = "register"
-    MsgTypeInference MessageType = "inference"
-    MsgTypeVerify    MessageType = "verify"
-    MsgTypeHeartbeat MessageType = "heartbeat"
-    MsgTypeAck       MessageType = "ack"
-    MsgTypeError     MessageType = "error"
+    MsgTypeRegister    MessageType = "register"
+    MsgTypeInference   MessageType = "inference"
+    MsgTypeWarmup      MessageType = "warmup"
+    MsgTypeVerify      MessageType = "verify"
+    MsgTypeHeartbeat   MessageType = "heartbeat"
+    MsgTypeAck         MessageType = "ack"
+    MsgTypeError       MessageType = "error"
+    MsgTypeStreamChunk MessageType = "stream_chunk"
+    MsgTypeStreamEnd   MessageType = "stream_end"
 )
 
 type Message struct {
@@ -458,6 +488,7 @@ Inference mode has been implemented with the following components:
 4. **Docker service integration** - Complete
 5. **Streaming support** - Complete
 6. **API key authentication** - Complete (supports `sk-prov-*` tokens and env var override)
+7. **Model warmup support** - Complete (handles `warmup` messages to pre-load models)
 
 ## References
 

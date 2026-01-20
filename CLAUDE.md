@@ -123,11 +123,35 @@ internal/computing/         # Core services
   inference_service.go      # Inference WebSocket client
   inference_client.go       # Swan Inference connection
   model_registry.go         # Model management
+  model_health_checker.go   # Model health monitoring
   docker_service.go         # Container management
 internal/contract/          # Smart contract bindings
 internal/db/                # SQLite database
 conf/                       # Configuration
 ```
+
+## WebSocket Message Types
+
+The provider communicates with Swan Inference via WebSocket using these message types:
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| `register` | Provider → Server | Register with model list and auth |
+| `inference` | Server → Provider | Inference request |
+| `stream_chunk` | Provider → Server | Streaming response chunk |
+| `stream_end` | Provider → Server | End of streaming response |
+| `warmup` | Server → Provider | Pre-load model into GPU memory |
+| `heartbeat` | Provider → Server | Liveness check with metrics |
+| `ack` | Both | Acknowledgment/response |
+
+## Model Warmup
+
+When Swan Inference sends a `warmup` message, the provider:
+1. Looks up the model endpoint from `models.json`
+2. Sends a minimal inference request (`max_tokens: 1`) to load the model
+3. Returns success/failure with load time
+
+This reduces cold start latency for first requests.
 
 ## Configuration
 
