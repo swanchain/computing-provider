@@ -29,6 +29,7 @@ const (
 	MsgTypeError       MessageType = "error"
 	MsgTypeStreamChunk MessageType = "stream_chunk" // Streaming chunk to Swan Inference
 	MsgTypeStreamEnd   MessageType = "stream_end"   // End of stream marker
+	MsgTypeWarmup      MessageType = "warmup"       // Model warmup request
 )
 
 // Message is the base WebSocket message structure
@@ -122,6 +123,22 @@ type StreamEndPayload struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// WarmupPayload is sent from Swan Inference to pre-load a model
+type WarmupPayload struct {
+	ModelID    string `json:"model_id"`
+	WarmupType string `json:"warmup_type"` // "load" or "inference"
+}
+
+// WarmupResponse is returned by provider after warmup
+type WarmupResponse struct {
+	RequestID  string `json:"request_id"`
+	ModelID    string `json:"model_id"`
+	Success    bool   `json:"success"`
+	LoadTimeMs int64  `json:"load_time_ms,omitempty"`
+	MemoryMB   int64  `json:"memory_mb,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 const (
 	// Time allowed to write a message to the peer
 	writeWait = 10 * time.Second
@@ -153,6 +170,9 @@ type StreamResult struct {
 // It receives a callback to send chunks back to Swan Inference and returns token usage
 type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
 
+// WarmupHandler handles model warmup requests
+type WarmupHandler func(payload WarmupPayload) (*WarmupResponse, error)
+
 // InferenceClient manages WebSocket connection to Swan Inference service
 type InferenceClient struct {
 	providerID                string
@@ -167,6 +187,7 @@ type InferenceClient struct {
 	registered                bool
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
+	warmupHandler             WarmupHandler
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -215,6 +236,11 @@ func (c *InferenceClient) SetInferenceHandler(handler InferenceHandler) {
 // SetStreamingInferenceHandler sets the handler for streaming inference requests
 func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenceHandler) {
 	c.streamingInferenceHandler = handler
+}
+
+// SetWarmupHandler sets the handler for model warmup requests
+func (c *InferenceClient) SetWarmupHandler(handler WarmupHandler) {
+	c.warmupHandler = handler
 }
 
 // Start connects to Swan Inference and starts the client
@@ -626,6 +652,15 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		}
 		logs.GetLogger().Errorf("Received error from Swan Inference: [%d] %s", payload.Code, payload.Message)
 
+	case MsgTypeWarmup:
+		var payload WarmupPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse warmup payload: %v", err)
+			c.sendError(msg.RequestID, 400, "invalid warmup payload")
+			return
+		}
+		go c.handleWarmup(msg.RequestID, payload)
+
 	default:
 		logs.GetLogger().Warnf("Unknown message type: %s", msg.Type)
 	}
@@ -775,6 +810,56 @@ func (c *InferenceClient) handleVerification(requestID string, payload VerifyPay
 	// Verification implementation would go here
 	// For now, just acknowledge
 	c.sendAck(requestID, true, "verification completed")
+}
+
+func (c *InferenceClient) handleWarmup(requestID string, payload WarmupPayload) {
+	startTime := time.Now()
+	logs.GetLogger().Infof("Processing warmup request %s for model %s (type: %s)", requestID, payload.ModelID, payload.WarmupType)
+
+	var response *WarmupResponse
+	var err error
+
+	if c.warmupHandler != nil {
+		response, err = c.warmupHandler(payload)
+	} else {
+		err = fmt.Errorf("no warmup handler configured")
+	}
+
+	loadTime := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		logs.GetLogger().Warnf("Warmup failed for model %s: %v", payload.ModelID, err)
+		response = &WarmupResponse{
+			RequestID:  requestID,
+			ModelID:    payload.ModelID,
+			Success:    false,
+			Error:      err.Error(),
+			LoadTimeMs: loadTime,
+		}
+	} else {
+		response.RequestID = requestID
+		response.LoadTimeMs = loadTime
+		logs.GetLogger().Infof("Warmup successful for model %s in %dms", payload.ModelID, loadTime)
+	}
+
+	c.sendWarmupResponse(response)
+}
+
+func (c *InferenceClient) sendWarmupResponse(response *WarmupResponse) {
+	payloadBytes, err := json.Marshal(response)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal warmup response: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeAck,
+		RequestID: response.RequestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
 }
 
 func (c *InferenceClient) sendAck(requestID string, success bool, message string) {

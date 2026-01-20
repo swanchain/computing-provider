@@ -190,6 +190,7 @@ func (s *InferenceService) Start() error {
 	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
+	s.client.SetWarmupHandler(s.handleWarmup)
 
 	if err := s.client.Start(); err != nil {
 		return fmt.Errorf("failed to start Inference client: %w", err)
@@ -369,6 +370,52 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s", payload.ModelID, endpoint)
 	return s.streamFromDockerModel(endpoint, payload.Request, sendChunk)
+}
+
+// handleWarmup processes model warmup requests from Swan Inference
+func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse, error) {
+	logs.GetLogger().Infof("Handling warmup for model: %s (type: %s)", payload.ModelID, payload.WarmupType)
+
+	// Try to get endpoint from registry first (preferred)
+	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
+	if !ok {
+		// Fall back to direct mapping lookup for backward compatibility
+		mapping, mapOk := s.modelMappings[payload.ModelID]
+		if !mapOk {
+			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+		}
+		endpoint = mapping.Endpoint
+	}
+
+	logs.GetLogger().Infof("Warming up model %s at endpoint %s", payload.ModelID, endpoint)
+
+	// Send a simple warmup request to load the model into memory
+	warmupRequest := map[string]interface{}{
+		"model": payload.ModelID,
+		"messages": []map[string]string{
+			{"role": "user", "content": "Hi"},
+		},
+		"max_tokens": 1, // Minimal response to save resources
+	}
+
+	reqBytes, err := json.Marshal(warmupRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create warmup request: %w", err)
+	}
+
+	// Forward to model endpoint
+	httpClient := NewHttpClient(endpoint, nil)
+	var response json.RawMessage
+	if err := httpClient.PostJSON("/v1/chat/completions", reqBytes, &response); err != nil {
+		return nil, fmt.Errorf("warmup request failed: %w", err)
+	}
+
+	logs.GetLogger().Infof("Model %s warmed up successfully", payload.ModelID)
+
+	return &WarmupResponse{
+		ModelID: payload.ModelID,
+		Success: true,
+	}, nil
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
