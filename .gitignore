@@ -27,4 +27,4 @@ config.toml
 logs/
 
 # Dashboard UI
-internal/dashboard/ui/node_modules/
+internal/dashboard/ui/node_modules/cp.log

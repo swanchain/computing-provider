@@ -38,6 +38,22 @@ computing-provider run
 
 **Prerequisites:** Docker + NVIDIA Container Toolkit (Linux) or Ollama (macOS)
 
+**Getting a Provider API Key:**
+1. Sign up at https://inference.swanchain.io or via API:
+   ```bash
+   # Create user account
+   curl -X POST https://inference.swanchain.io/api/v1/user/signup \
+     -H "Content-Type: application/json" \
+     -d '{"email":"you@example.com","password":"YourPassword123","display_name":"My Provider"}'
+
+   # Upgrade to provider (use token from signup response)
+   curl -X POST https://inference.swanchain.io/api/v1/user/upgrade-to-provider \
+     -H "Authorization: Bearer <your-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"My GPU Provider","wallet_address":"0x..."}'
+   ```
+2. Save the returned `provider_api_key` (starts with `sk-prov-`)
+
 **Config files:**
 - `$CP_PATH/config.toml` - Provider settings
 - `$CP_PATH/models.json` - Model endpoints mapping
@@ -163,14 +179,16 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "wss://inference-ws.swanchain.io"
+WebSocketURL = "wss://inference.swanchain.io/ws"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Your provider API key
 Models = ["llama-3.2-3b"]
 ```
 
 **Environment overrides:**
 ```bash
-export CP_PATH=~/.swan/computing          # Config directory
-export INFERENCE_WS_URL=ws://localhost:8081  # Dev WebSocket
+export CP_PATH=~/.swan/computing              # Config directory
+export INFERENCE_API_KEY=sk-prov-xxx          # Provider API key (overrides config)
+export INFERENCE_WS_URL=ws://localhost:8081   # Dev WebSocket URL
 ```
 
 ## Common Issues
@@ -180,3 +198,6 @@ export INFERENCE_WS_URL=ws://localhost:8081  # Dev WebSocket
 | `permission denied...docker.sock` | `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install NVIDIA Container Toolkit |
 | `container "/resource-exporter" already in use` | `docker rm -f resource-exporter` |
+| `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
+| `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
+| `WebSocket connection failed` | Check WebSocketURL and network connectivity |
