@@ -192,6 +192,21 @@ func (s *InferenceService) Start() error {
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 	s.client.SetWarmupHandler(s.handleWarmup)
 
+	// Set up model health provider for heartbeats (backup for health update messages)
+	s.client.SetModelHealthProvider(func() map[string]string {
+		if s.registry != nil {
+			return s.registry.GetAllModelHealthMap()
+		}
+		return nil
+	})
+
+	// Set up health update callback to notify Swan Inference when model health changes
+	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
+		if s.client != nil && s.client.IsConnected() {
+			s.client.SendModelHealthUpdate(modelHealth)
+		}
+	})
+
 	if err := s.client.Start(); err != nil {
 		return fmt.Errorf("failed to start Inference client: %w", err)
 	}

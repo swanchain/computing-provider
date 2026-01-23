@@ -21,15 +21,16 @@ import (
 type MessageType string
 
 const (
-	MsgTypeRegister    MessageType = "register"
-	MsgTypeInference   MessageType = "inference"
-	MsgTypeVerify      MessageType = "verify"
-	MsgTypeHeartbeat   MessageType = "heartbeat"
-	MsgTypeAck         MessageType = "ack"
-	MsgTypeError       MessageType = "error"
-	MsgTypeStreamChunk MessageType = "stream_chunk" // Streaming chunk to Swan Inference
-	MsgTypeStreamEnd   MessageType = "stream_end"   // End of stream marker
-	MsgTypeWarmup      MessageType = "warmup"       // Model warmup request
+	MsgTypeRegister          MessageType = "register"
+	MsgTypeInference         MessageType = "inference"
+	MsgTypeVerify            MessageType = "verify"
+	MsgTypeHeartbeat         MessageType = "heartbeat"
+	MsgTypeAck               MessageType = "ack"
+	MsgTypeError             MessageType = "error"
+	MsgTypeStreamChunk       MessageType = "stream_chunk"        // Streaming chunk to Swan Inference
+	MsgTypeStreamEnd         MessageType = "stream_end"          // End of stream marker
+	MsgTypeWarmup            MessageType = "warmup"              // Model warmup request
+	MsgTypeModelHealthUpdate MessageType = "model_health_update" // Model health status update
 )
 
 // Message is the base WebSocket message structure
@@ -88,9 +89,10 @@ type VerifyPayload struct {
 
 // HeartbeatPayload for liveness checks
 type HeartbeatPayload struct {
-	ProviderID string             `json:"provider_id"`
-	Timestamp  int64              `json:"timestamp"`
-	Metrics    map[string]float64 `json:"metrics,omitempty"`
+	ProviderID  string             `json:"provider_id"`
+	Timestamp   int64              `json:"timestamp"`
+	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 }
 
 // AckPayload for acknowledgments
@@ -137,6 +139,13 @@ type WarmupResponse struct {
 	LoadTimeMs int64  `json:"load_time_ms,omitempty"`
 	MemoryMB   int64  `json:"memory_mb,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// ModelHealthUpdatePayload is sent to Swan Inference when model health changes
+type ModelHealthUpdatePayload struct {
+	ProviderID  string            `json:"provider_id"`
+	ModelHealth map[string]string `json:"model_health"` // modelID -> health status ("healthy", "degraded", "unhealthy")
+	Timestamp   int64             `json:"timestamp"`
 }
 
 const (
@@ -188,6 +197,7 @@ type InferenceClient struct {
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
 	warmupHandler             WarmupHandler
+	modelHealthProvider       func() map[string]string // Returns current model health for heartbeat
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -241,6 +251,11 @@ func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenc
 // SetWarmupHandler sets the handler for model warmup requests
 func (c *InferenceClient) SetWarmupHandler(handler WarmupHandler) {
 	c.warmupHandler = handler
+}
+
+// SetModelHealthProvider sets the function that provides current model health for heartbeats
+func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]string) {
+	c.modelHealthProvider = provider
 }
 
 // Start connects to Swan Inference and starts the client
@@ -545,6 +560,11 @@ func (c *InferenceClient) sendHeartbeat() {
 		Metrics:    c.collectMetrics(),
 	}
 
+	// Include model health in heartbeat as backup for health update messages
+	if c.modelHealthProvider != nil {
+		payload.ModelHealth = c.modelHealthProvider()
+	}
+
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		logs.GetLogger().Errorf("Failed to marshal heartbeat: %v", err)
@@ -564,6 +584,54 @@ func (c *InferenceClient) sendHeartbeat() {
 	}
 
 	c.send <- msgBytes
+}
+
+// SendModelHealthUpdate sends a model health update to Swan Inference
+// This is called when model health status changes (healthy/degraded/unhealthy)
+func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
+	c.mu.RLock()
+	registered := c.registered
+	c.mu.RUnlock()
+
+	if !registered {
+		logs.GetLogger().Debug("Not sending health update: not registered")
+		return
+	}
+
+	if len(modelHealth) == 0 {
+		return
+	}
+
+	payload := ModelHealthUpdatePayload{
+		ProviderID:  c.providerID,
+		ModelHealth: modelHealth,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal health update: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeModelHealthUpdate,
+		RequestID: uuid.New().String(),
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal message: %v", err)
+		return
+	}
+
+	select {
+	case c.send <- msgBytes:
+		logs.GetLogger().Infof("Sent model health update: %v", modelHealth)
+	default:
+		logs.GetLogger().Warn("Send buffer full, dropping health update")
+	}
 }
 
 func (c *InferenceClient) collectMetrics() map[string]float64 {
