@@ -20,7 +20,12 @@ make clean && make mainnet && sudo make install
 # 2. Initialize
 computing-provider init --node-name=my-provider
 
-# 3. Start an inference server (example: Llama 3.2 with SGLang)
+# 3. Get your Provider API Key
+#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
+#    Add it to ~/.swan/computing/config.toml under [Inference]:
+#    ApiKey = "sk-prov-your-key-here"
+
+# 4. Start an inference server (example: Llama 3.2 with SGLang)
 docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
@@ -29,7 +34,7 @@ docker run -d --gpus all -p 30000:30000 --name sglang \
     --model-path meta-llama/Llama-3.2-3B-Instruct \
     --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
 
-# 4. Configure your model
+# 5. Configure your model
 cat > ~/.swan/computing/models.json << 'EOF'
 {
   "llama-3.2-3b": {
@@ -40,7 +45,7 @@ cat > ~/.swan/computing/models.json << 'EOF'
 }
 EOF
 
-# 5. Run the provider
+# 6. Run the provider
 computing-provider run
 ```
 
@@ -60,8 +65,15 @@ git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider && git checkout releases
 make clean && make mainnet && sudo make install
 
-# 3. Initialize and configure
+# 3. Initialize
 computing-provider init --node-name=my-mac-provider
+
+# 4. Get your Provider API Key
+#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
+#    Add it to ~/.swan/computing/config.toml under [Inference]:
+#    ApiKey = "sk-prov-your-key-here"
+
+# 5. Configure your model
 cat > ~/.swan/computing/models.json << 'EOF'
 {
   "llama-3.2-3b": {
@@ -72,7 +84,7 @@ cat > ~/.swan/computing/models.json << 'EOF'
 }
 EOF
 
-# 4. Run
+# 6. Run
 computing-provider run
 ```
 
@@ -165,6 +177,7 @@ NodeName = "my-provider"
 [Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
 Models = ["llama-3.2-3b"]
 ```
 
@@ -271,6 +284,9 @@ computing-provider research gpu-benchmark    # Run benchmark
 | `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
 | `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
+| `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
+| `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
+| `WebSocket connection failed` | Check WebSocketURL and network connectivity |
 | Provider not receiving requests | Check `models.json` matches your inference server |
 
 ### Check Logs

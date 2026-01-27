@@ -79,4 +79,5 @@ SWAN_CHAIN_RPC = "https://mainnet-rpc01.swanchain.io"                     # Swan
 [Inference]
 Enable = true                                                             # Inference mode is enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint
+ApiKey = ""                                                               # Required: Provider API key from https://inference.swanchain.io (starts with sk-prov-)
 Models = ["llama-3.2-3b"]                                                 # Models this provider serves (must match models.json)
