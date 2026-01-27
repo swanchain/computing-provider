@@ -211,7 +211,7 @@ func (s *InferenceService) Start() error {
 		return fmt.Errorf("failed to start Inference client: %w", err)
 	}
 
-	logs.GetLogger().Infof("Inference service started with provider ID: %s, owner: %s", s.nodeID, ownerAddr)
+	logs.GetLogger().Infof("Inference service started with node ID: %s, owner: %s", s.nodeID, ownerAddr)
 	return nil
 }
 

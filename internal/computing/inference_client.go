@@ -53,10 +53,11 @@ type HardwareInfo struct {
 
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
-	ProviderID   string        `json:"provider_id"`
+	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID   string        `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	WorkerAddr   string        `json:"worker_addr"`
 	OwnerAddr    string        `json:"owner_addr"`
-	Token        string        `json:"token,omitempty"`    // API key for authentication (sk-prov-*)
+	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
 	Signature    string        `json:"signature,omitempty"`
 	Models       []string      `json:"models"`
 	Capabilities []string      `json:"capabilities"`
@@ -89,7 +90,8 @@ type VerifyPayload struct {
 
 // HeartbeatPayload for liveness checks
 type HeartbeatPayload struct {
-	ProviderID  string             `json:"provider_id"`
+	NodeID      string             `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID  string             `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
@@ -143,7 +145,8 @@ type WarmupResponse struct {
 
 // ModelHealthUpdatePayload is sent to Swan Inference when model health changes
 type ModelHealthUpdatePayload struct {
-	ProviderID  string            `json:"provider_id"`
+	NodeID      string            `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID  string            `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	ModelHealth map[string]string `json:"model_health"` // modelID -> health status ("healthy", "degraded", "unhealthy")
 	Timestamp   int64             `json:"timestamp"`
 }
@@ -184,7 +187,7 @@ type WarmupHandler func(payload WarmupPayload) (*WarmupResponse, error)
 
 // InferenceClient manages WebSocket connection to Swan Inference service
 type InferenceClient struct {
-	providerID                string
+	nodeID                    string // Local node ID (not the DB provider ID which is resolved via API key)
 	workerAddr                string
 	ownerAddr                 string
 	apiKey                    string // Provider API key for authentication (sk-prov-*)
@@ -207,7 +210,7 @@ type InferenceClient struct {
 }
 
 // NewInferenceClient creates a new Inference client
-func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClient {
+func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 	config := conf.GetConfig()
 
 	// Allow env var override for dev mode
@@ -225,7 +228,7 @@ func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClie
 	}
 
 	return &InferenceClient{
-		providerID:   providerID,
+		nodeID:       nodeID,
 		workerAddr:   workerAddr,
 		ownerAddr:    ownerAddr,
 		apiKey:       apiKey,
@@ -414,10 +417,11 @@ func (c *InferenceClient) register() error {
 	hardware := detectGPUHardware()
 
 	payload := RegisterPayload{
-		ProviderID:   c.providerID,
+		NodeID:       c.nodeID,   // Local node ID for routing
+		ProviderID:   c.nodeID,   // Deprecated: kept for backward compatibility
 		WorkerAddr:   c.workerAddr,
 		OwnerAddr:    c.ownerAddr,
-		Token:        c.apiKey, // API key for authentication
+		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
 		Models:       c.models,
 		Capabilities: []string{"inference", "verification"},
 		Hardware:     hardware,
@@ -440,7 +444,7 @@ func (c *InferenceClient) register() error {
 	}
 
 	c.send <- msgBytes
-	logs.GetLogger().Infof("Sent registration for provider %s (owner: %s) with models: %v", c.providerID, c.ownerAddr, c.models)
+	logs.GetLogger().Infof("Sent registration for node %s (owner: %s) with models: %v", c.nodeID, c.ownerAddr, c.models)
 	return nil
 }
 
@@ -555,7 +559,8 @@ func (c *InferenceClient) heartbeatPump() {
 
 func (c *InferenceClient) sendHeartbeat() {
 	payload := HeartbeatPayload{
-		ProviderID: c.providerID,
+		NodeID:     c.nodeID,   // Local node ID for routing
+		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
 	}
@@ -603,7 +608,8 @@ func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
 	}
 
 	payload := ModelHealthUpdatePayload{
-		ProviderID:  c.providerID,
+		NodeID:      c.nodeID,   // Local node ID for routing
+		ProviderID:  c.nodeID,   // Deprecated: kept for backward compatibility
 		ModelHealth: modelHealth,
 		Timestamp:   time.Now().Unix(),
 	}
@@ -990,9 +996,9 @@ func (c *InferenceClient) IsConnected() bool {
 	return c.conn != nil && c.registered
 }
 
-// GetProviderID returns the provider ID
-func (c *InferenceClient) GetProviderID() string {
-	return c.providerID
+// GetNodeID returns the local node ID
+func (c *InferenceClient) GetNodeID() string {
+	return c.nodeID
 }
 
 // GetMetrics returns a snapshot of the current metrics
