@@ -47,12 +47,16 @@ func main() {
 			ubiZeroCmd,
 			researchCmd,
 			dashboardCmd,
+			inferenceCmd,
 		},
 		Before: func(c *cli.Context) error {
-			// Skip repo initialization for research and dashboard commands
+			// Skip repo initialization for research, dashboard, and inference commands
+			// (inference commands handle their own config loading)
 			if c.Args().Present() {
 				firstArg := c.Args().First()
-				if strings.EqualFold(firstArg, researchCmd.Name) || strings.EqualFold(firstArg, dashboardCmd.Name) {
+				if strings.EqualFold(firstArg, researchCmd.Name) ||
+					strings.EqualFold(firstArg, dashboardCmd.Name) ||
+					strings.EqualFold(firstArg, inferenceCmd.Name) {
 					return nil
 				}
 			}

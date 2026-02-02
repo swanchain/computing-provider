@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -261,9 +263,110 @@ func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]stri
 	c.modelHealthProvider = provider
 }
 
+// ProviderStatusResponse represents the status check response from Swan Inference
+type ProviderStatusResponse struct {
+	ProviderID  string   `json:"provider_id"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	CanConnect  bool     `json:"can_connect"`
+	APIKeyValid bool     `json:"api_key_valid"`
+	Message     string   `json:"message"`
+	NextSteps   []string `json:"next_steps,omitempty"`
+}
+
+// checkProviderStatus verifies the provider is approved before connecting
+func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error) {
+	if c.apiKey == "" {
+		return &ProviderStatusResponse{
+			APIKeyValid: false,
+			CanConnect:  false,
+			Message:     "No API key configured",
+			NextSteps: []string{
+				"1. Sign up at https://inference.swanchain.io or via API",
+				"2. Add your API key to config.toml [Inference] section",
+				"3. Or set INFERENCE_API_KEY environment variable",
+			},
+		}, nil
+	}
+
+	// Derive HTTP URL from WebSocket URL
+	serviceURL := c.wsURL
+	serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
+	serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
+	serviceURL = strings.TrimSuffix(serviceURL, "/ws")
+	statusURL := serviceURL + "/api/v1/provider/status"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", statusURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		// If we can't reach the status endpoint, log a warning but allow connection attempt
+		logs.GetLogger().Warnf("Could not check provider status (will attempt connection anyway): %v", err)
+		return nil, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status response: %w", err)
+	}
+
+	var status ProviderStatusResponse
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, fmt.Errorf("failed to parse status response: %w", err)
+	}
+
+	return &status, nil
+}
+
 // Start connects to Swan Inference and starts the client
 func (c *InferenceClient) Start() error {
 	logs.GetLogger().Infof("Connecting to Swan Inference at %s", c.wsURL)
+
+	// Check provider status before connecting
+	status, err := c.checkProviderStatus()
+	if err != nil {
+		logs.GetLogger().Warnf("Status check failed: %v (continuing anyway)", err)
+	} else if status != nil {
+		if !status.APIKeyValid {
+			logs.GetLogger().Error("===========================================")
+			logs.GetLogger().Error("PROVIDER AUTHENTICATION ERROR")
+			logs.GetLogger().Error("===========================================")
+			logs.GetLogger().Errorf("Message: %s", status.Message)
+			if len(status.NextSteps) > 0 {
+				logs.GetLogger().Error("Next steps:")
+				for _, step := range status.NextSteps {
+					logs.GetLogger().Errorf("  %s", step)
+				}
+			}
+			logs.GetLogger().Error("===========================================")
+			return fmt.Errorf("invalid API key: %s", status.Message)
+		}
+
+		if !status.CanConnect {
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warn("PROVIDER NOT YET APPROVED")
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warnf("Status: %s", status.Status)
+			logs.GetLogger().Warnf("Message: %s", status.Message)
+			if len(status.NextSteps) > 0 {
+				logs.GetLogger().Warn("Next steps:")
+				for _, step := range status.NextSteps {
+					logs.GetLogger().Warnf("  %s", step)
+				}
+			}
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warn("Run 'computing-provider inference status' to check approval status")
+			return fmt.Errorf("provider not approved: %s (status: %s)", status.Message, status.Status)
+		}
+
+		logs.GetLogger().Infof("Provider status: %s (can_connect: %v)", status.Status, status.CanConnect)
+	}
 
 	if err := c.connect(); err != nil {
 		return err
