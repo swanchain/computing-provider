@@ -27,6 +27,28 @@ computing-provider init --node-name=my-provider
 computing-provider run
 ```
 
+## Development: Run from Code vs Binary
+
+**IMPORTANT:** When developing, prefer `go run` over the binary to ensure you're running the latest code.
+
+```bash
+# ✅ RECOMMENDED for development - always runs latest code
+go run ./cmd/computing-provider run
+
+# ⚠️  Binary may be outdated - rebuild after code changes
+./computing-provider run
+```
+
+**Why this matters:**
+- The binary (`./computing-provider`) is compiled at build time
+- Code changes are NOT reflected until you rebuild
+- `go run` compiles and runs in one step, always using latest code
+
+**If using the binary, always rebuild after changes:**
+```bash
+go build -o computing-provider ./cmd/computing-provider && ./computing-provider run
+```
+
 ## Provider Modes
 
 | Mode | Description | Wallet Required |
@@ -37,6 +59,22 @@ computing-provider run
 ## Inference Mode Quick Reference
 
 **Prerequisites:** Docker + NVIDIA Container Toolkit (Linux) or Ollama (macOS)
+
+**Getting a Provider API Key:**
+1. Sign up at https://inference.swanchain.io or via API:
+   ```bash
+   # Create user account
+   curl -X POST https://inference.swanchain.io/api/v1/user/signup \
+     -H "Content-Type: application/json" \
+     -d '{"email":"you@example.com","password":"YourPassword123","display_name":"My Provider"}'
+
+   # Upgrade to provider (use token from signup response)
+   curl -X POST https://inference.swanchain.io/api/v1/user/upgrade-to-provider \
+     -H "Authorization: Bearer <your-token>" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"My GPU Provider","wallet_address":"0x..."}'
+   ```
+2. Save the returned `provider_api_key` (starts with `sk-prov-`)
 
 **Config files:**
 - `$CP_PATH/config.toml` - Provider settings
@@ -123,11 +161,35 @@ internal/computing/         # Core services
   inference_service.go      # Inference WebSocket client
   inference_client.go       # Swan Inference connection
   model_registry.go         # Model management
+  model_health_checker.go   # Model health monitoring
   docker_service.go         # Container management
 internal/contract/          # Smart contract bindings
 internal/db/                # SQLite database
 conf/                       # Configuration
 ```
+
+## WebSocket Message Types
+
+The provider communicates with Swan Inference via WebSocket using these message types:
+
+| Message | Direction | Description |
+|---------|-----------|-------------|
+| `register` | Provider → Server | Register with model list and auth |
+| `inference` | Server → Provider | Inference request |
+| `stream_chunk` | Provider → Server | Streaming response chunk |
+| `stream_end` | Provider → Server | End of streaming response |
+| `warmup` | Server → Provider | Pre-load model into GPU memory |
+| `heartbeat` | Provider → Server | Liveness check with metrics |
+| `ack` | Both | Acknowledgment/response |
+
+## Model Warmup
+
+When Swan Inference sends a `warmup` message, the provider:
+1. Looks up the model endpoint from `models.json`
+2. Sends a minimal inference request (`max_tokens: 1`) to load the model
+3. Returns success/failure with load time
+
+This reduces cold start latency for first requests.
 
 ## Configuration
 
@@ -139,14 +201,16 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "wss://inference-ws.swanchain.io"
+WebSocketURL = "wss://inference.swanchain.io/ws"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Your provider API key
 Models = ["llama-3.2-3b"]
 ```
 
 **Environment overrides:**
 ```bash
-export CP_PATH=~/.swan/computing          # Config directory
-export INFERENCE_WS_URL=ws://localhost:8081  # Dev WebSocket
+export CP_PATH=~/.swan/computing              # Config directory
+export INFERENCE_API_KEY=sk-prov-xxx          # Provider API key (overrides config)
+export INFERENCE_WS_URL=ws://localhost:8081   # Dev WebSocket URL
 ```
 
 ## Common Issues
@@ -156,3 +220,8 @@ export INFERENCE_WS_URL=ws://localhost:8081  # Dev WebSocket
 | `permission denied...docker.sock` | `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install NVIDIA Container Toolkit |
 | `container "/resource-exporter" already in use` | `docker rm -f resource-exporter` |
+| `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
+| `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
+| `WebSocket connection failed` | Check WebSocketURL and network connectivity |
+| Config changes not taking effect | **Rebuild binary** or use `go run ./cmd/computing-provider run` |
+| Token not being sent | Rebuild: `go build -o computing-provider ./cmd/computing-provider` |

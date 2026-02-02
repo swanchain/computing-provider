@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-computing-provider
+/computing-provider
 .idea
 
 # Test binary, built with `go test -c`
@@ -27,4 +27,4 @@ config.toml
 logs/
 
 # Dashboard UI
-internal/dashboard/ui/node_modules/
+internal/dashboard/ui/node_modules/cp.log

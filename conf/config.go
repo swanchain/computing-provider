@@ -49,6 +49,7 @@ type Inference struct {
 	Enable             bool     `toml:"Enable"`
 	ServiceURL         string   `toml:"ServiceURL"`         // HTTP API URL (e.g., http://localhost:8080)
 	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
+	ApiKey             string   `toml:"ApiKey"`             // Provider API key for authentication (sk-prov-*)
 	Models             []string `toml:"Models"`             // Models this provider serves
 	ChainRPC           string   `toml:"ChainRPC"`           // Base Sepolia RPC for Swan Inference
 	CollateralContract string   `toml:"CollateralContract"` // Collateral contract address
@@ -432,7 +433,7 @@ func generateDefaultConfig() ComputeNode {
 		Inference: Inference{
 			Enable:             true, // Inference mode is enabled by default
 			ServiceURL:         "",
-			WebSocketURL:       "wss://inference-ws.swanchain.io",
+			WebSocketURL:       "wss://inference-ws-dev.swanchain.io",
 			Models:             []string{},
 			ChainRPC:           "",
 			CollateralContract: "",

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,26 @@ import (
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/wallet"
 )
+
+// streamingHttpClient is a shared HTTP client for streaming inference requests
+// with connection pooling to avoid creating new connections for each request
+var streamingHttpClient = &http.Client{
+	Timeout: 5 * time.Minute,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Disable compression to reduce latency for streaming
+		DisableCompression: true,
+	},
+}
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
@@ -169,12 +190,28 @@ func (s *InferenceService) Start() error {
 	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
+	s.client.SetWarmupHandler(s.handleWarmup)
+
+	// Set up model health provider for heartbeats (backup for health update messages)
+	s.client.SetModelHealthProvider(func() map[string]string {
+		if s.registry != nil {
+			return s.registry.GetAllModelHealthMap()
+		}
+		return nil
+	})
+
+	// Set up health update callback to notify Swan Inference when model health changes
+	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
+		if s.client != nil && s.client.IsConnected() {
+			s.client.SendModelHealthUpdate(modelHealth)
+		}
+	})
 
 	if err := s.client.Start(); err != nil {
 		return fmt.Errorf("failed to start Inference client: %w", err)
 	}
 
-	logs.GetLogger().Infof("Inference service started with provider ID: %s, owner: %s", s.nodeID, ownerAddr)
+	logs.GetLogger().Infof("Inference service started with node ID: %s, owner: %s", s.nodeID, ownerAddr)
 	return nil
 }
 
@@ -350,6 +387,52 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 	return s.streamFromDockerModel(endpoint, payload.Request, sendChunk)
 }
 
+// handleWarmup processes model warmup requests from Swan Inference
+func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse, error) {
+	logs.GetLogger().Infof("Handling warmup for model: %s (type: %s)", payload.ModelID, payload.WarmupType)
+
+	// Try to get endpoint from registry first (preferred)
+	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
+	if !ok {
+		// Fall back to direct mapping lookup for backward compatibility
+		mapping, mapOk := s.modelMappings[payload.ModelID]
+		if !mapOk {
+			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+		}
+		endpoint = mapping.Endpoint
+	}
+
+	logs.GetLogger().Infof("Warming up model %s at endpoint %s", payload.ModelID, endpoint)
+
+	// Send a simple warmup request to load the model into memory
+	warmupRequest := map[string]interface{}{
+		"model": payload.ModelID,
+		"messages": []map[string]string{
+			{"role": "user", "content": "Hi"},
+		},
+		"max_tokens": 1, // Minimal response to save resources
+	}
+
+	reqBytes, err := json.Marshal(warmupRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create warmup request: %w", err)
+	}
+
+	// Forward to model endpoint
+	httpClient := NewHttpClient(endpoint, nil)
+	var response json.RawMessage
+	if err := httpClient.PostJSON("/v1/chat/completions", reqBytes, &response); err != nil {
+		return nil, fmt.Errorf("warmup request failed: %w", err)
+	}
+
+	logs.GetLogger().Infof("Model %s warmed up successfully", payload.ModelID)
+
+	return &WarmupResponse{
+		ModelID: payload.ModelID,
+		Success: true,
+	}, nil
+}
+
 // streamFromDockerModel streams inference response from a model endpoint
 func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	result := &StreamResult{}
@@ -371,15 +454,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 		return result
 	}
 
-	// Create HTTP client with longer timeout for streaming
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	// Make streaming request to model
+	// Make streaming request to model using shared HTTP client with connection pooling
 	url := endpoint + "/v1/chat/completions"
 	req, err := http.NewRequest("POST", url, bytes.NewReader(modifiedRequest))
 	if err != nil {
@@ -389,7 +464,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
-	resp, err := client.Do(req)
+	resp, err := streamingHttpClient.Do(req)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to send request: %w", err)
 		return result

@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -21,14 +23,16 @@ import (
 type MessageType string
 
 const (
-	MsgTypeRegister    MessageType = "register"
-	MsgTypeInference   MessageType = "inference"
-	MsgTypeVerify      MessageType = "verify"
-	MsgTypeHeartbeat   MessageType = "heartbeat"
-	MsgTypeAck         MessageType = "ack"
-	MsgTypeError       MessageType = "error"
-	MsgTypeStreamChunk MessageType = "stream_chunk" // Streaming chunk to Swan Inference
-	MsgTypeStreamEnd   MessageType = "stream_end"   // End of stream marker
+	MsgTypeRegister          MessageType = "register"
+	MsgTypeInference         MessageType = "inference"
+	MsgTypeVerify            MessageType = "verify"
+	MsgTypeHeartbeat         MessageType = "heartbeat"
+	MsgTypeAck               MessageType = "ack"
+	MsgTypeError             MessageType = "error"
+	MsgTypeStreamChunk       MessageType = "stream_chunk"        // Streaming chunk to Swan Inference
+	MsgTypeStreamEnd         MessageType = "stream_end"          // End of stream marker
+	MsgTypeWarmup            MessageType = "warmup"              // Model warmup request
+	MsgTypeModelHealthUpdate MessageType = "model_health_update" // Model health status update
 )
 
 // Message is the base WebSocket message structure
@@ -51,10 +55,12 @@ type HardwareInfo struct {
 
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
-	ProviderID   string        `json:"provider_id"`
+	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID   string        `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	WorkerAddr   string        `json:"worker_addr"`
 	OwnerAddr    string        `json:"owner_addr"`
-	Signature    string        `json:"signature"`
+	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
+	Signature    string        `json:"signature,omitempty"`
 	Models       []string      `json:"models"`
 	Capabilities []string      `json:"capabilities"`
 	Hardware     *HardwareInfo `json:"hardware,omitempty"`
@@ -86,9 +92,11 @@ type VerifyPayload struct {
 
 // HeartbeatPayload for liveness checks
 type HeartbeatPayload struct {
-	ProviderID string             `json:"provider_id"`
-	Timestamp  int64              `json:"timestamp"`
-	Metrics    map[string]float64 `json:"metrics,omitempty"`
+	NodeID      string             `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID  string             `json:"provider_id,omitempty"`        // Deprecated: use NodeID
+	Timestamp   int64              `json:"timestamp"`
+	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 }
 
 // AckPayload for acknowledgments
@@ -119,6 +127,30 @@ type StreamEndPayload struct {
 	TokensInput  int64  `json:"tokens_input,omitempty"`
 	TokensOutput int64  `json:"tokens_output,omitempty"`
 	Error        string `json:"error,omitempty"`
+}
+
+// WarmupPayload is sent from Swan Inference to pre-load a model
+type WarmupPayload struct {
+	ModelID    string `json:"model_id"`
+	WarmupType string `json:"warmup_type"` // "load" or "inference"
+}
+
+// WarmupResponse is returned by provider after warmup
+type WarmupResponse struct {
+	RequestID  string `json:"request_id"`
+	ModelID    string `json:"model_id"`
+	Success    bool   `json:"success"`
+	LoadTimeMs int64  `json:"load_time_ms,omitempty"`
+	MemoryMB   int64  `json:"memory_mb,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ModelHealthUpdatePayload is sent to Swan Inference when model health changes
+type ModelHealthUpdatePayload struct {
+	NodeID      string            `json:"node_id"`                      // Local node ID (not the DB provider ID)
+	ProviderID  string            `json:"provider_id,omitempty"`        // Deprecated: use NodeID
+	ModelHealth map[string]string `json:"model_health"` // modelID -> health status ("healthy", "degraded", "unhealthy")
+	Timestamp   int64             `json:"timestamp"`
 }
 
 const (
@@ -152,19 +184,26 @@ type StreamResult struct {
 // It receives a callback to send chunks back to Swan Inference and returns token usage
 type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
 
+// WarmupHandler handles model warmup requests
+type WarmupHandler func(payload WarmupPayload) (*WarmupResponse, error)
+
 // InferenceClient manages WebSocket connection to Swan Inference service
 type InferenceClient struct {
-	providerID                string
+	nodeID                    string // Local node ID (not the DB provider ID which is resolved via API key)
 	workerAddr                string
 	ownerAddr                 string
+	apiKey                    string // Provider API key for authentication (sk-prov-*)
 	models                    []string
 	wsURL                     string
+	serviceURL                string // HTTP API URL for status checks
 	conn                      *websocket.Conn
 	send                      chan []byte
 	stopCh                    chan struct{}
 	registered                bool
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
+	warmupHandler             WarmupHandler
+	modelHealthProvider       func() map[string]string // Returns current model health for heartbeat
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -174,7 +213,7 @@ type InferenceClient struct {
 }
 
 // NewInferenceClient creates a new Inference client
-func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClient {
+func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 	config := conf.GetConfig()
 
 	// Allow env var override for dev mode
@@ -184,12 +223,31 @@ func NewInferenceClient(providerID, workerAddr, ownerAddr string) *InferenceClie
 		logs.GetLogger().Infof("Using INFERENCE_WS_URL env override: %s", wsURL)
 	}
 
+	// Get service URL for HTTP API calls (status checks)
+	serviceURL := config.Inference.ServiceURL
+	if serviceURL == "" {
+		// Derive from WebSocket URL if not configured
+		serviceURL = wsURL
+		serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
+		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
+		serviceURL = strings.TrimSuffix(serviceURL, "/ws")
+	}
+
+	// Allow env var override for API key
+	apiKey := config.Inference.ApiKey
+	if envKey := os.Getenv("INFERENCE_API_KEY"); envKey != "" {
+		apiKey = envKey
+		logs.GetLogger().Infof("Using INFERENCE_API_KEY env override")
+	}
+
 	return &InferenceClient{
-		providerID:   providerID,
+		nodeID:       nodeID,
 		workerAddr:   workerAddr,
 		ownerAddr:    ownerAddr,
+		apiKey:       apiKey,
 		models:       config.Inference.Models,
 		wsURL:        wsURL,
+		serviceURL:   serviceURL,
 		send:         make(chan []byte, 256),
 		stopCh:       make(chan struct{}),
 		metrics:      NewInferenceMetrics(),
@@ -207,9 +265,116 @@ func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenc
 	c.streamingInferenceHandler = handler
 }
 
+// SetWarmupHandler sets the handler for model warmup requests
+func (c *InferenceClient) SetWarmupHandler(handler WarmupHandler) {
+	c.warmupHandler = handler
+}
+
+// SetModelHealthProvider sets the function that provides current model health for heartbeats
+func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]string) {
+	c.modelHealthProvider = provider
+}
+
+// ProviderStatusResponse represents the status check response from Swan Inference
+type ProviderStatusResponse struct {
+	ProviderID  string   `json:"provider_id"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	CanConnect  bool     `json:"can_connect"`
+	APIKeyValid bool     `json:"api_key_valid"`
+	Message     string   `json:"message"`
+	NextSteps   []string `json:"next_steps,omitempty"`
+}
+
+// checkProviderStatus verifies the provider is approved before connecting
+func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error) {
+	if c.apiKey == "" {
+		return &ProviderStatusResponse{
+			APIKeyValid: false,
+			CanConnect:  false,
+			Message:     "No API key configured",
+			NextSteps: []string{
+				"1. Sign up at https://inference.swanchain.io or via API",
+				"2. Add your API key to config.toml [Inference] section",
+				"3. Or set INFERENCE_API_KEY environment variable",
+			},
+		}, nil
+	}
+
+	// Use serviceURL for HTTP API calls
+	statusURL := c.serviceURL + "/api/v1/provider/status"
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", statusURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create status request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		// If we can't reach the status endpoint, log a warning but allow connection attempt
+		logs.GetLogger().Warnf("Could not check provider status (will attempt connection anyway): %v", err)
+		return nil, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read status response: %w", err)
+	}
+
+	var status ProviderStatusResponse
+	if err := json.Unmarshal(body, &status); err != nil {
+		return nil, fmt.Errorf("failed to parse status response: %w", err)
+	}
+
+	return &status, nil
+}
+
 // Start connects to Swan Inference and starts the client
 func (c *InferenceClient) Start() error {
 	logs.GetLogger().Infof("Connecting to Swan Inference at %s", c.wsURL)
+
+	// Check provider status before connecting
+	status, err := c.checkProviderStatus()
+	if err != nil {
+		logs.GetLogger().Warnf("Status check failed: %v (continuing anyway)", err)
+	} else if status != nil {
+		if !status.APIKeyValid {
+			logs.GetLogger().Error("===========================================")
+			logs.GetLogger().Error("PROVIDER AUTHENTICATION ERROR")
+			logs.GetLogger().Error("===========================================")
+			logs.GetLogger().Errorf("Message: %s", status.Message)
+			if len(status.NextSteps) > 0 {
+				logs.GetLogger().Error("Next steps:")
+				for _, step := range status.NextSteps {
+					logs.GetLogger().Errorf("  %s", step)
+				}
+			}
+			logs.GetLogger().Error("===========================================")
+			return fmt.Errorf("invalid API key: %s", status.Message)
+		}
+
+		if !status.CanConnect {
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warn("PROVIDER NOT YET APPROVED")
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warnf("Status: %s", status.Status)
+			logs.GetLogger().Warnf("Message: %s", status.Message)
+			if len(status.NextSteps) > 0 {
+				logs.GetLogger().Warn("Next steps:")
+				for _, step := range status.NextSteps {
+					logs.GetLogger().Warnf("  %s", step)
+				}
+			}
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warn("Run 'computing-provider inference status' to check approval status")
+			return fmt.Errorf("provider not approved: %s (status: %s)", status.Message, status.Status)
+		}
+
+		logs.GetLogger().Infof("Provider status: %s (can_connect: %v)", status.Status, status.CanConnect)
+	}
 
 	if err := c.connect(); err != nil {
 		return err
@@ -363,9 +528,11 @@ func (c *InferenceClient) register() error {
 	hardware := detectGPUHardware()
 
 	payload := RegisterPayload{
-		ProviderID:   c.providerID,
+		NodeID:       c.nodeID,   // Local node ID for routing
+		ProviderID:   c.nodeID,   // Deprecated: kept for backward compatibility
 		WorkerAddr:   c.workerAddr,
 		OwnerAddr:    c.ownerAddr,
+		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
 		Models:       c.models,
 		Capabilities: []string{"inference", "verification"},
 		Hardware:     hardware,
@@ -388,7 +555,15 @@ func (c *InferenceClient) register() error {
 	}
 
 	c.send <- msgBytes
-	logs.GetLogger().Infof("Sent registration for provider %s (owner: %s) with models: %v", c.providerID, c.ownerAddr, c.models)
+	if len(c.apiKey) > 0 {
+		displayLen := 15
+		if len(c.apiKey) < 15 {
+			displayLen = len(c.apiKey)
+		}
+		logs.GetLogger().Infof("Sent registration for provider %s (owner: %s) with models: %v and token: %s...", c.nodeID, c.ownerAddr, c.models, c.apiKey[:displayLen])
+	} else {
+		logs.GetLogger().Warnf("Sent registration for provider %s (owner: %s) with models: %v - NO TOKEN SET!", c.nodeID, c.ownerAddr, c.models)
+	}
 	return nil
 }
 
@@ -503,9 +678,15 @@ func (c *InferenceClient) heartbeatPump() {
 
 func (c *InferenceClient) sendHeartbeat() {
 	payload := HeartbeatPayload{
-		ProviderID: c.providerID,
+		NodeID:     c.nodeID,   // Local node ID for routing
+		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
+	}
+
+	// Include model health in heartbeat as backup for health update messages
+	if c.modelHealthProvider != nil {
+		payload.ModelHealth = c.modelHealthProvider()
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -527,6 +708,55 @@ func (c *InferenceClient) sendHeartbeat() {
 	}
 
 	c.send <- msgBytes
+}
+
+// SendModelHealthUpdate sends a model health update to Swan Inference
+// This is called when model health status changes (healthy/degraded/unhealthy)
+func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
+	c.mu.RLock()
+	registered := c.registered
+	c.mu.RUnlock()
+
+	if !registered {
+		logs.GetLogger().Debug("Not sending health update: not registered")
+		return
+	}
+
+	if len(modelHealth) == 0 {
+		return
+	}
+
+	payload := ModelHealthUpdatePayload{
+		NodeID:      c.nodeID,   // Local node ID for routing
+		ProviderID:  c.nodeID,   // Deprecated: kept for backward compatibility
+		ModelHealth: modelHealth,
+		Timestamp:   time.Now().Unix(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal health update: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeModelHealthUpdate,
+		RequestID: uuid.New().String(),
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal message: %v", err)
+		return
+	}
+
+	select {
+	case c.send <- msgBytes:
+		logs.GetLogger().Infof("Sent model health update: %v", modelHealth)
+	default:
+		logs.GetLogger().Warn("Send buffer full, dropping health update")
+	}
 }
 
 func (c *InferenceClient) collectMetrics() map[string]float64 {
@@ -614,6 +844,15 @@ func (c *InferenceClient) handleMessage(msg Message) {
 			return
 		}
 		logs.GetLogger().Errorf("Received error from Swan Inference: [%d] %s", payload.Code, payload.Message)
+
+	case MsgTypeWarmup:
+		var payload WarmupPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse warmup payload: %v", err)
+			c.sendError(msg.RequestID, 400, "invalid warmup payload")
+			return
+		}
+		go c.handleWarmup(msg.RequestID, payload)
 
 	default:
 		logs.GetLogger().Warnf("Unknown message type: %s", msg.Type)
@@ -766,6 +1005,56 @@ func (c *InferenceClient) handleVerification(requestID string, payload VerifyPay
 	c.sendAck(requestID, true, "verification completed")
 }
 
+func (c *InferenceClient) handleWarmup(requestID string, payload WarmupPayload) {
+	startTime := time.Now()
+	logs.GetLogger().Infof("Processing warmup request %s for model %s (type: %s)", requestID, payload.ModelID, payload.WarmupType)
+
+	var response *WarmupResponse
+	var err error
+
+	if c.warmupHandler != nil {
+		response, err = c.warmupHandler(payload)
+	} else {
+		err = fmt.Errorf("no warmup handler configured")
+	}
+
+	loadTime := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		logs.GetLogger().Warnf("Warmup failed for model %s: %v", payload.ModelID, err)
+		response = &WarmupResponse{
+			RequestID:  requestID,
+			ModelID:    payload.ModelID,
+			Success:    false,
+			Error:      err.Error(),
+			LoadTimeMs: loadTime,
+		}
+	} else {
+		response.RequestID = requestID
+		response.LoadTimeMs = loadTime
+		logs.GetLogger().Infof("Warmup successful for model %s in %dms", payload.ModelID, loadTime)
+	}
+
+	c.sendWarmupResponse(response)
+}
+
+func (c *InferenceClient) sendWarmupResponse(response *WarmupResponse) {
+	payloadBytes, err := json.Marshal(response)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal warmup response: %v", err)
+		return
+	}
+
+	msg := Message{
+		Type:      MsgTypeAck,
+		RequestID: response.RequestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	c.send <- msgBytes
+}
+
 func (c *InferenceClient) sendAck(requestID string, success bool, message string) {
 	payload := AckPayload{
 		RequestID: requestID,
@@ -826,9 +1115,9 @@ func (c *InferenceClient) IsConnected() bool {
 	return c.conn != nil && c.registered
 }
 
-// GetProviderID returns the provider ID
-func (c *InferenceClient) GetProviderID() string {
-	return c.providerID
+// GetNodeID returns the local node ID
+func (c *InferenceClient) GetNodeID() string {
+	return c.nodeID
 }
 
 // GetMetrics returns a snapshot of the current metrics

@@ -65,9 +65,10 @@ type ModelRegistry struct {
 	running       bool
 
 	// Callbacks
-	onModelAdded   func(model *RegisteredModel)
-	onModelRemoved func(modelID string)
-	onModelUpdated func(model *RegisteredModel)
+	onModelAdded       func(model *RegisteredModel)
+	onModelRemoved     func(modelID string)
+	onModelUpdated     func(model *RegisteredModel)
+	onHealthUpdate     func(modelHealth map[string]string) // Called when any model health changes
 }
 
 // NewModelRegistry creates a new model registry
@@ -98,6 +99,29 @@ func (r *ModelRegistry) SetCallbacks(
 	r.onModelAdded = onAdded
 	r.onModelRemoved = onRemoved
 	r.onModelUpdated = onUpdated
+}
+
+// SetHealthUpdateCallback sets the callback for model health updates
+// The callback receives a map of modelID -> health status ("healthy", "degraded", "unhealthy")
+func (r *ModelRegistry) SetHealthUpdateCallback(callback func(modelHealth map[string]string)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onHealthUpdate = callback
+}
+
+// GetAllModelHealthMap returns a map of all model health statuses
+// Returns modelID -> health status string ("healthy", "degraded", "unhealthy", "unknown")
+func (r *ModelRegistry) GetAllModelHealthMap() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	healthMap := make(map[string]string, len(r.models))
+	for id, model := range r.models {
+		if model.Enabled {
+			healthMap[id] = model.HealthString
+		}
+	}
+	return healthMap
 }
 
 // Start loads initial configuration and begins watching for changes
@@ -326,10 +350,10 @@ func (r *ModelRegistry) startWatcher() error {
 // onHealthStatusChange handles health status changes from the health checker
 func (r *ModelRegistry) onHealthStatusChange(modelID string, oldHealth, newHealth ModelHealth) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	model, exists := r.models[modelID]
 	if !exists {
+		r.mu.Unlock()
 		return
 	}
 
@@ -351,16 +375,46 @@ func (r *ModelRegistry) onHealthStatusChange(modelID string, oldHealth, newHealt
 
 	logs.GetLogger().Infof("Model %s health changed: %s -> %s", modelID, oldHealth.String(), newHealth.String())
 
-	if r.onModelUpdated != nil {
-		modelCopy := *model
+	// Copy callback references while holding lock
+	onModelUpdated := r.onModelUpdated
+	onHealthUpdate := r.onHealthUpdate
+
+	// Build health map for callback while holding lock
+	var healthMap map[string]string
+	if onHealthUpdate != nil {
+		healthMap = make(map[string]string, len(r.models))
+		for id, m := range r.models {
+			if m.Enabled {
+				healthMap[id] = m.HealthString
+			}
+		}
+	}
+
+	modelCopy := *model
+	r.mu.Unlock()
+
+	// Call callbacks outside of lock to prevent deadlock
+	if onModelUpdated != nil {
 		go func(m *RegisteredModel) {
 			defer func() {
 				if err := recover(); err != nil {
 					logs.GetLogger().Errorf("[model_registry:onModelUpdated] panic recovered: %v", err)
 				}
 			}()
-			r.onModelUpdated(m)
+			onModelUpdated(m)
 		}(&modelCopy)
+	}
+
+	// Notify Swan Inference of health update
+	if onHealthUpdate != nil && healthMap != nil {
+		go func(hm map[string]string) {
+			defer func() {
+				if err := recover(); err != nil {
+					logs.GetLogger().Errorf("[model_registry:onHealthUpdate] panic recovered: %v", err)
+				}
+			}()
+			onHealthUpdate(hm)
+		}(healthMap)
 	}
 }
 
