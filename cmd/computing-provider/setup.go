@@ -217,11 +217,31 @@ func checkPrerequisites() error {
 	checker := setup.NewPrerequisiteChecker()
 	results := checker.CheckAll()
 
+	// Check if we have at least one working backend
+	hasOllama := false
+	hasDocker := false
+	for _, r := range results {
+		if r.Name == "Ollama" && r.Status {
+			hasOllama = true
+		}
+		if r.Name == "Docker" && r.Status {
+			hasDocker = true
+		}
+	}
+
+	// Print results with appropriate styling
 	for _, r := range results {
 		if r.Status {
 			setup.PrintSuccess(fmt.Sprintf("%s: %s", r.Name, r.Message))
 		} else {
-			setup.PrintError(fmt.Sprintf("%s: %s", r.Name, r.Message))
+			// Show Docker as warning (optional) if Ollama is available
+			if r.Name == "Docker" && hasOllama {
+				setup.PrintWarning(fmt.Sprintf("%s: %s (optional - Ollama available)", r.Name, r.Message))
+			} else if r.Name == "Ollama" && hasDocker {
+				setup.PrintWarning(fmt.Sprintf("%s: %s (optional - Docker available)", r.Name, r.Message))
+			} else {
+				setup.PrintError(fmt.Sprintf("%s: %s", r.Name, r.Message))
+			}
 		}
 	}
 
@@ -481,13 +501,13 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 		providerName = nodeName
 	}
 
-	walletAddr, err := prompter.AskString("Wallet Address (0x...)", "")
+	walletAddr, err := prompter.AskString("Wallet Address (optional, for rewards)", "")
 	if err != nil {
 		return "", false, err
 	}
 
 	if walletAddr == "" {
-		return "", false, fmt.Errorf("wallet address is required")
+		setup.PrintInfo("No wallet address provided - you can add one later to receive rewards")
 	}
 
 	fmt.Println("\nUpgrading to provider...")
