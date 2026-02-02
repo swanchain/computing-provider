@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/mitchellh/go-homedir"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/dashboard"
 	"github.com/urfave/cli/v2"
@@ -26,7 +27,11 @@ var dashboardCmd = &cli.Command{
 	Action: func(cctx *cli.Context) error {
 		cpRepoPath, ok := cctx.Context.Value("CP_PATH").(string)
 		if !ok {
-			cpRepoPath = cctx.String(FlagRepo.Name)
+			var err error
+			cpRepoPath, err = homedir.Expand(cctx.String(FlagRepo.Name))
+			if err != nil {
+				return fmt.Errorf("failed to expand repo path: %v", err)
+			}
 		}
 
 		if err := conf.InitConfig(cpRepoPath, true); err != nil {

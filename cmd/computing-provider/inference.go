@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/mitchellh/go-homedir"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/urfave/cli/v2"
 )
@@ -45,8 +46,11 @@ var inferenceStatusCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
-		cpRepoPath := cctx.String(FlagRepo.Name)
-		if err := conf.InitConfig(cpRepoPath, false); err != nil {
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
 			return fmt.Errorf("failed to load config: %v", err)
 		}
 
@@ -186,8 +190,11 @@ var inferenceConfigCmd = &cli.Command{
 	Name:  "config",
 	Usage: "Show current inference configuration",
 	Action: func(cctx *cli.Context) error {
-		cpRepoPath := cctx.String(FlagRepo.Name)
-		if err := conf.InitConfig(cpRepoPath, false); err != nil {
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
 			return fmt.Errorf("failed to load config: %v", err)
 		}
 
