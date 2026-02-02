@@ -45,7 +45,11 @@ cat > ~/.swan/computing/models.json << 'EOF'
 }
 EOF
 
-# 6. Run the provider
+# 6. Update ~/.swan/computing/config.toml to enable the model
+#    Add the model name to the Models array under [Inference]:
+#    Models = ["llama-3.2-3b"]
+
+# 7. Run the provider
 computing-provider run
 ```
 
@@ -84,7 +88,11 @@ cat > ~/.swan/computing/models.json << 'EOF'
 }
 EOF
 
-# 6. Run
+# 6. Update ~/.swan/computing/config.toml to enable the model
+#    Add the model name to the Models array under [Inference]:
+#    Models = ["llama-3.2-3b"]
+
+# 7. Run
 computing-provider run
 ```
 
