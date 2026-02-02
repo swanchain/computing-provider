@@ -27,6 +27,28 @@ computing-provider init --node-name=my-provider
 computing-provider run
 ```
 
+## Development: Run from Code vs Binary
+
+**IMPORTANT:** When developing, prefer `go run` over the binary to ensure you're running the latest code.
+
+```bash
+# ✅ RECOMMENDED for development - always runs latest code
+go run ./cmd/computing-provider run
+
+# ⚠️  Binary may be outdated - rebuild after code changes
+./computing-provider run
+```
+
+**Why this matters:**
+- The binary (`./computing-provider`) is compiled at build time
+- Code changes are NOT reflected until you rebuild
+- `go run` compiles and runs in one step, always using latest code
+
+**If using the binary, always rebuild after changes:**
+```bash
+go build -o computing-provider ./cmd/computing-provider && ./computing-provider run
+```
+
 ## Provider Modes
 
 | Mode | Description | Wallet Required |
@@ -201,3 +223,5 @@ export INFERENCE_WS_URL=ws://localhost:8081   # Dev WebSocket URL
 | `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
 | `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
 | `WebSocket connection failed` | Check WebSocketURL and network connectivity |
+| Config changes not taking effect | **Rebuild binary** or use `go run ./cmd/computing-provider run` |
+| Token not being sent | Rebuild: `go build -o computing-provider ./cmd/computing-provider` |
