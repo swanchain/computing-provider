@@ -40,18 +40,19 @@ func (s ModelState) String() string {
 
 // RegisteredModel represents a fully configured model in the registry
 type RegisteredModel struct {
-	ID          string       `json:"id"`
-	Container   string       `json:"container"`
-	Endpoint    string       `json:"endpoint"`
-	GPUMemory   int          `json:"gpu_memory"`
-	Category    string       `json:"category"`
-	State       ModelState   `json:"state"`
-	StateString string       `json:"state_string"`
-	Health      ModelHealth  `json:"health"`
-	HealthString string      `json:"health_string"`
-	LoadedAt    time.Time    `json:"loaded_at,omitempty"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-	Enabled     bool         `json:"enabled"`
+	ID           string       `json:"id"`
+	Container    string       `json:"container"`
+	Endpoint     string       `json:"endpoint"`
+	GPUMemory    int          `json:"gpu_memory"`
+	Category     string       `json:"category"`
+	LocalModel   string       `json:"local_model,omitempty"` // Actual model name for local inference server
+	State        ModelState   `json:"state"`
+	StateString  string       `json:"state_string"`
+	Health       ModelHealth  `json:"health"`
+	HealthString string       `json:"health_string"`
+	LoadedAt     time.Time    `json:"loaded_at,omitempty"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	Enabled      bool         `json:"enabled"`
 }
 
 // ModelRegistry manages the lifecycle of model configurations
@@ -202,12 +203,14 @@ func (r *ModelRegistry) loadConfig() error {
 			if existingModel.Endpoint != mapping.Endpoint ||
 				existingModel.Container != mapping.Container ||
 				existingModel.GPUMemory != mapping.GPUMemory ||
-				existingModel.Category != mapping.Category {
+				existingModel.Category != mapping.Category ||
+				existingModel.LocalModel != mapping.LocalModel {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
 				existingModel.GPUMemory = mapping.GPUMemory
 				existingModel.Category = mapping.Category
+				existingModel.LocalModel = mapping.LocalModel
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
@@ -230,18 +233,19 @@ func (r *ModelRegistry) loadConfig() error {
 		} else {
 			// Add new model
 			model := &RegisteredModel{
-				ID:          modelID,
-				Container:   mapping.Container,
-				Endpoint:    mapping.Endpoint,
-				GPUMemory:   mapping.GPUMemory,
-				Category:    mapping.Category,
-				State:       ModelStateLoading,
-				StateString: ModelStateLoading.String(),
-				Health:      ModelHealthUnknown,
+				ID:           modelID,
+				Container:    mapping.Container,
+				Endpoint:     mapping.Endpoint,
+				GPUMemory:    mapping.GPUMemory,
+				Category:     mapping.Category,
+				LocalModel:   mapping.LocalModel,
+				State:        ModelStateLoading,
+				StateString:  ModelStateLoading.String(),
+				Health:       ModelHealthUnknown,
 				HealthString: ModelHealthUnknown.String(),
-				LoadedAt:    now,
-				UpdatedAt:   now,
-				Enabled:     true,
+				LoadedAt:     now,
+				UpdatedAt:    now,
+				Enabled:      true,
 			}
 			r.models[modelID] = model
 
@@ -250,7 +254,7 @@ func (r *ModelRegistry) loadConfig() error {
 				r.healthChecker.RegisterModel(modelID, mapping.Endpoint)
 			}
 
-			logs.GetLogger().Infof("Registered new model: %s -> %s", modelID, mapping.Endpoint)
+			logs.GetLogger().Infof("Registered new model: %s -> %s (local: %s)", modelID, mapping.Endpoint, mapping.LocalModel)
 			if r.onModelAdded != nil {
 				go func(m *RegisteredModel) {
 					defer func() {
@@ -492,6 +496,20 @@ func (r *ModelRegistry) GetModelEndpoint(modelID string) (string, bool) {
 	}
 
 	return model.Endpoint, true
+}
+
+// GetLocalModelName returns the local model name for a model (e.g., Ollama model name)
+// Returns empty string if not configured (use the model ID directly)
+func (r *ModelRegistry) GetLocalModelName(modelID string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, exists := r.models[modelID]
+	if !exists {
+		return ""
+	}
+
+	return model.LocalModel
 }
 
 // EnableModel enables a model for serving

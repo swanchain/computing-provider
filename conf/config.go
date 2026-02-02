@@ -3,10 +3,8 @@ package conf
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/swanchain/computing-provider-v2/build"
-	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"log"
 	"net"
 	"os"
@@ -15,6 +13,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/swanchain/computing-provider-v2/build"
+	"github.com/swanchain/computing-provider-v2/internal/contract"
 )
 
 var config *ComputeNode
@@ -432,7 +434,7 @@ func generateDefaultConfig() ComputeNode {
 		},
 		Inference: Inference{
 			Enable:             true, // Inference mode is enabled by default
-			ServiceURL:         "",
+			ServiceURL:         "https://inference-dev.swanchain.io",
 			WebSocketURL:       "wss://inference-ws-dev.swanchain.io",
 			Models:             []string{},
 			ChainRPC:           "",
@@ -469,4 +471,100 @@ func checkDomain(domain string, expectedIP string) bool {
 		}
 	}
 	return matched
+}
+
+// ModelConfig represents a model configuration for models.json
+type ModelConfig struct {
+	Container  string `json:"container,omitempty"`
+	Endpoint   string `json:"endpoint"`
+	GPUMemory  int    `json:"gpu_memory"`
+	Category   string `json:"category"`
+	LocalModel string `json:"local_model,omitempty"` // Actual model name to use in requests (e.g., Ollama model name)
+}
+
+// UpdateInferenceConfig updates the Inference section in config.toml
+func UpdateInferenceConfig(cpRepoPath, apiKey string, models []string) error {
+	configFilePath := path.Join(cpRepoPath, "config.toml")
+
+	var configTmpl ComputeNode
+	if _, err := toml.DecodeFile(configFilePath, &configTmpl); err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Update Inference config
+	configTmpl.Inference.Enable = true
+	if apiKey != "" {
+		configTmpl.Inference.ApiKey = apiKey
+	}
+	if models != nil {
+		configTmpl.Inference.Models = models
+	}
+
+	// Write back
+	os.Remove(configFilePath)
+	configFile, err := os.Create(configFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+	defer configFile.Close()
+
+	if err := toml.NewEncoder(configFile).Encode(configTmpl); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
+}
+
+// WriteModelsJson writes the models.json file from model configurations
+func WriteModelsJson(cpRepoPath string, models map[string]ModelConfig) error {
+	modelsPath := path.Join(cpRepoPath, "models.json")
+
+	data, err := json.MarshalIndent(models, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal models: %w", err)
+	}
+
+	if err := os.WriteFile(modelsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write models.json: %w", err)
+	}
+
+	return nil
+}
+
+// LoadModelsJson loads the models.json file
+func LoadModelsJson(cpRepoPath string) (map[string]ModelConfig, error) {
+	modelsPath := path.Join(cpRepoPath, "models.json")
+
+	data, err := os.ReadFile(modelsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]ModelConfig), nil
+		}
+		return nil, fmt.Errorf("failed to read models.json: %w", err)
+	}
+
+	var models map[string]ModelConfig
+	if err := json.Unmarshal(data, &models); err != nil {
+		return nil, fmt.Errorf("failed to parse models.json: %w", err)
+	}
+
+	return models, nil
+}
+
+// GetInferenceApiKey returns the configured Inference API key
+// It first checks the environment variable, then the config file
+func GetInferenceApiKey(cpRepoPath string) string {
+	// Check environment variable first
+	if key := os.Getenv("INFERENCE_API_KEY"); key != "" {
+		return key
+	}
+
+	// Try to read from config
+	configFilePath := path.Join(cpRepoPath, "config.toml")
+	var configTmpl ComputeNode
+	if _, err := toml.DecodeFile(configFilePath, &configTmpl); err == nil {
+		return configTmpl.Inference.ApiKey
+	}
+
+	return ""
 }

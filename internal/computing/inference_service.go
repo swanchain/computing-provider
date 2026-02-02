@@ -41,10 +41,11 @@ var streamingHttpClient = &http.Client{
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
-	Container string `json:"container"`
-	Endpoint  string `json:"endpoint"`
-	GPUMemory int    `json:"gpu_memory"`
-	Category  string `json:"category"`
+	Container  string `json:"container"`
+	Endpoint   string `json:"endpoint"`
+	GPUMemory  int    `json:"gpu_memory"`
+	Category   string `json:"category"`
+	LocalModel string `json:"local_model"` // Actual model name for local inference server (e.g., Ollama model name)
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -275,15 +276,21 @@ func (s *InferenceService) IsHealthy() bool {
 func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
-	// Try to get endpoint from registry first (preferred)
-	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
-	if !ok {
+	// Try to get endpoint and local model name from registry first (preferred)
+	var endpoint string
+	var localModel string
+
+	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
+		endpoint = ep
+		localModel = s.registry.GetLocalModelName(payload.ModelID)
+	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
 		if !mapOk {
 			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
 		}
 		endpoint = mapping.Endpoint
+		localModel = mapping.LocalModel
 	}
 
 	// Check model health before forwarding
@@ -291,8 +298,8 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 		logs.GetLogger().Warnf("Model %s is unhealthy, but attempting request anyway", payload.ModelID)
 	}
 
-	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s", payload.ModelID, endpoint)
-	response, err := s.forwardToDockerModel(endpoint, payload.Request)
+	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	response, err := s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel)
 	if err != nil {
 		return nil, fmt.Errorf("inference failed: %w", err)
 	}
@@ -302,15 +309,46 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 }
 
 // forwardToDockerModel forwards inference request to a Docker container endpoint
-func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage) (json.RawMessage, error) {
+func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage, modelID, localModel string) (json.RawMessage, error) {
+	// Substitute model name if local_model is configured
+	modifiedRequest := s.substituteModelName(request, modelID, localModel)
+
 	httpClient := NewHttpClient(endpoint, nil)
 
 	var response json.RawMessage
-	if err := httpClient.PostJSON("/v1/chat/completions", request, &response); err != nil {
+	if err := httpClient.PostJSON("/v1/chat/completions", modifiedRequest, &response); err != nil {
 		return nil, fmt.Errorf("failed to forward request to Docker model: %w", err)
 	}
 
 	return response, nil
+}
+
+// substituteModelName replaces the model name in the request if local_model is configured
+func (s *InferenceService) substituteModelName(request json.RawMessage, modelID, localModel string) json.RawMessage {
+	if localModel == "" {
+		return request
+	}
+
+	// Parse the request to modify the model field
+	var reqMap map[string]interface{}
+	if err := json.Unmarshal(request, &reqMap); err != nil {
+		logs.GetLogger().Warnf("Failed to parse request for model substitution: %v", err)
+		return request
+	}
+
+	// Replace the model field with the local model name
+	if _, ok := reqMap["model"]; ok {
+		logs.GetLogger().Debugf("Substituting model name: %s -> %s", modelID, localModel)
+		reqMap["model"] = localModel
+	}
+
+	modifiedRequest, err := json.Marshal(reqMap)
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to marshal modified request: %v", err)
+		return request
+	}
+
+	return modifiedRequest
 }
 
 // GetClient returns the Inference client
@@ -367,15 +405,21 @@ func (s *InferenceService) RegisterModels(models []string) {
 func (s *InferenceService) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
-	// Try to get endpoint from registry first (preferred)
-	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
-	if !ok {
+	// Try to get endpoint and local model name from registry first (preferred)
+	var endpoint string
+	var localModel string
+
+	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
+		endpoint = ep
+		localModel = s.registry.GetLocalModelName(payload.ModelID)
+	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
 		if !mapOk {
 			return &StreamResult{Error: fmt.Errorf("model %s not deployed on this provider", payload.ModelID)}
 		}
 		endpoint = mapping.Endpoint
+		localModel = mapping.LocalModel
 	}
 
 	// Check model health before forwarding
@@ -383,30 +427,42 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 		logs.GetLogger().Warnf("Model %s is unhealthy, but attempting streaming request anyway", payload.ModelID)
 	}
 
-	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s", payload.ModelID, endpoint)
-	return s.streamFromDockerModel(endpoint, payload.Request, sendChunk)
+	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, sendChunk)
 }
 
 // handleWarmup processes model warmup requests from Swan Inference
 func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse, error) {
 	logs.GetLogger().Infof("Handling warmup for model: %s (type: %s)", payload.ModelID, payload.WarmupType)
 
-	// Try to get endpoint from registry first (preferred)
-	endpoint, ok := s.registry.GetModelEndpoint(payload.ModelID)
-	if !ok {
+	// Try to get endpoint and local model name from registry first (preferred)
+	var endpoint string
+	var localModel string
+
+	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
+		endpoint = ep
+		localModel = s.registry.GetLocalModelName(payload.ModelID)
+	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
 		if !mapOk {
 			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
 		}
 		endpoint = mapping.Endpoint
+		localModel = mapping.LocalModel
 	}
 
-	logs.GetLogger().Infof("Warming up model %s at endpoint %s", payload.ModelID, endpoint)
+	logs.GetLogger().Infof("Warming up model %s at endpoint %s (local: %s)", payload.ModelID, endpoint, localModel)
+
+	// Use local model name if configured, otherwise use the Swan Inference model ID
+	modelNameForRequest := payload.ModelID
+	if localModel != "" {
+		modelNameForRequest = localModel
+	}
 
 	// Send a simple warmup request to load the model into memory
 	warmupRequest := map[string]interface{}{
-		"model": payload.ModelID,
+		"model": modelNameForRequest,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Hi"},
 		},
@@ -434,7 +490,7 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
-func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, modelID, localModel string, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	result := &StreamResult{}
 
 	// Ensure stream is set to true in the request and request usage
@@ -447,6 +503,11 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 	// Request usage stats in streaming response (OpenAI-compatible)
 	reqMap["stream_options"] = map[string]interface{}{
 		"include_usage": true,
+	}
+	// Substitute model name if local_model is configured
+	if localModel != "" {
+		logs.GetLogger().Debugf("Substituting model name in stream: %s -> %s", modelID, localModel)
+		reqMap["model"] = localModel
 	}
 	modifiedRequest, err := json.Marshal(reqMap)
 	if err != nil {

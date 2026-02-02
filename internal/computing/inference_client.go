@@ -227,10 +227,12 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 	serviceURL := config.Inference.ServiceURL
 	if serviceURL == "" {
 		// Derive from WebSocket URL if not configured
+		// e.g., wss://inference-ws-dev.swanchain.io -> https://inference-dev.swanchain.io
 		serviceURL = wsURL
 		serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
 		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
 		serviceURL = strings.TrimSuffix(serviceURL, "/ws")
+		serviceURL = strings.Replace(serviceURL, "-ws", "", 1) // Remove -ws from hostname
 	}
 
 	// Allow env var override for API key

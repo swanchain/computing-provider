@@ -34,6 +34,7 @@ func main() {
 		Commands: []*cli.Command{
 			runCmd,
 			initCmd,
+			setupCmd,
 			infoCmd,
 			stateCmd,
 			accountCmd,
@@ -50,13 +51,14 @@ func main() {
 			inferenceCmd,
 		},
 		Before: func(c *cli.Context) error {
-			// Skip repo initialization for research, dashboard, and inference commands
-			// (inference commands handle their own config loading)
+			// Skip repo initialization for research, dashboard, inference, and setup commands
+			// (these commands handle their own config loading)
 			if c.Args().Present() {
 				firstArg := c.Args().First()
 				if strings.EqualFold(firstArg, researchCmd.Name) ||
 					strings.EqualFold(firstArg, dashboardCmd.Name) ||
-					strings.EqualFold(firstArg, inferenceCmd.Name) {
+					strings.EqualFold(firstArg, inferenceCmd.Name) ||
+					strings.EqualFold(firstArg, setupCmd.Name) {
 					return nil
 				}
 			}

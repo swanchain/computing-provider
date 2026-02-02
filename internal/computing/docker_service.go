@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -41,6 +42,37 @@ func NewDockerService() *DockerService {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		logs.GetLogger().Errorf("failed to create docker client, please check that the docker service is running normally")
+		return nil
+	}
+
+	// Test connection - if it fails on macOS, try Docker Desktop socket
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = cli.Ping(ctx)
+	if err != nil && runtime.GOOS == "darwin" {
+		// Try macOS Docker Desktop socket location
+		homeDir, _ := os.UserHomeDir()
+		dockerDesktopSocket := "unix://" + filepath.Join(homeDir, ".docker/run/docker.sock")
+
+		cli, err = client.NewClientWithOpts(
+			client.WithHost(dockerDesktopSocket),
+			client.WithAPIVersionNegotiation(),
+		)
+		if err != nil {
+			logs.GetLogger().Errorf("failed to create docker client with Docker Desktop socket: %v", err)
+			return nil
+		}
+
+		// Verify the new client works
+		_, err = cli.Ping(ctx)
+		if err != nil {
+			logs.GetLogger().Errorf("failed to connect to Docker Desktop: %v", err)
+			return nil
+		}
+		logs.GetLogger().Info("Connected to Docker Desktop at " + dockerDesktopSocket)
+	} else if err != nil {
+		logs.GetLogger().Errorf("failed to connect to docker daemon: %v", err)
 		return nil
 	}
 
