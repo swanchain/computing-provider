@@ -136,6 +136,7 @@ func (p *Prompter) AskSelection(prompt string, options []SelectionOption) (int, 
 }
 
 // AskMultiSelect prompts user to select multiple options from a list
+// Defaults to "all" if user presses Enter without input
 func (p *Prompter) AskMultiSelect(prompt string, options []SelectionOption) ([]int, error) {
 	fmt.Println(prompt)
 	for i, opt := range options {
@@ -146,14 +147,16 @@ func (p *Prompter) AskMultiSelect(prompt string, options []SelectionOption) ([]i
 		}
 	}
 
-	fmt.Printf("Enter selections separated by comma (e.g., 1,3,4) or 'all': ")
+	fmt.Printf("Enter selections (e.g., 1,3,4) or press Enter for all [all]: ")
 	input, err := p.reader.ReadString('\n')
 	if err != nil {
 		return nil, err
 	}
 
 	input = strings.TrimSpace(strings.ToLower(input))
-	if input == "all" {
+
+	// Default to "all" if empty input
+	if input == "" || input == "all" {
 		result := make([]int, len(options))
 		for i := range options {
 			result[i] = i

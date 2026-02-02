@@ -226,7 +226,21 @@ func checkPrerequisites() error {
 	}
 
 	if checker.HasCriticalFailures() {
-		return fmt.Errorf("critical prerequisites not met")
+		fmt.Println()
+		setup.PrintError("No inference backend available!")
+		fmt.Println()
+		fmt.Println("You need at least one of:")
+		setup.PrintBullet("Docker (running) - for SGLang, vLLM, or other containerized servers")
+		setup.PrintBullet("Ollama (running) - for native inference on macOS/Linux")
+		fmt.Println()
+		fmt.Println("To start Ollama:")
+		fmt.Println("  ollama serve")
+		fmt.Println()
+		fmt.Println("To start Docker:")
+		fmt.Println("  # macOS: Open Docker Desktop")
+		fmt.Println("  # Linux: sudo systemctl start docker")
+		fmt.Println()
+		return fmt.Errorf("no inference backend available (need Docker or Ollama running)")
 	}
 
 	return nil
