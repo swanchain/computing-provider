@@ -444,7 +444,15 @@ func (c *InferenceClient) register() error {
 	}
 
 	c.send <- msgBytes
-	logs.GetLogger().Infof("Sent registration for node %s (owner: %s) with models: %v", c.nodeID, c.ownerAddr, c.models)
+	if len(c.apiKey) > 0 {
+		displayLen := 15
+		if len(c.apiKey) < 15 {
+			displayLen = len(c.apiKey)
+		}
+		logs.GetLogger().Infof("Sent registration for provider %s (owner: %s) with models: %v and token: %s...", c.nodeID, c.ownerAddr, c.models, c.apiKey[:displayLen])
+	} else {
+		logs.GetLogger().Warnf("Sent registration for provider %s (owner: %s) with models: %v - NO TOKEN SET!", c.nodeID, c.ownerAddr, c.models)
+	}
 	return nil
 }
 
