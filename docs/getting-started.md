@@ -12,19 +12,22 @@ git clone https://github.com/swanchain/computing-provider-v2.git
 cd computing-provider-v2
 make clean && make mainnet && sudo make install
 
-# 2. Initialize
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-provider
+# 2. Start your inference backend (Ollama, SGLang, vLLM, etc.)
+# See examples below
 
-# 3. Configure models.json (see below)
+# 3. Run the setup wizard (handles auth, config, and model discovery)
+computing-provider setup
 
-# 4. Start your inference backend (Ollama, vLLM, etc.)
-
-# 5. Run
+# 4. Run the provider
 computing-provider run
 ```
 
-That's it! Your provider will connect to Swan Inference and start receiving requests.
+That's it! The setup wizard will:
+- Check prerequisites (Docker, GPU, Ollama)
+- Create or login to your Swan Inference account
+- Auto-discover running model servers
+- Auto-match local models to Swan Inference model IDs
+- Generate `config.toml` and `models.json`
 
 ## Choose Provider Mode
 
@@ -47,26 +50,26 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Initialize
+### 2. Start an Inference Server
 
 ```bash
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-provider
+# Example: SGLang with Llama 3.2
+docker run -d --gpus all -p 30000:30000 --name sglang \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size 32g --ipc=host \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
 ```
 
-### 3. Configure Models
+### 3. Run Setup Wizard
 
-Create `$CP_PATH/models.json`:
-
-```json
-{
-  "llama-3.1-8b": {
-    "endpoint": "http://localhost:8000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  }
-}
+```bash
+computing-provider setup
 ```
+
+The wizard will auto-discover your running model server and configure everything.
 
 ### 4. Start Provider
 
@@ -114,25 +117,17 @@ make clean && make mainnet
 sudo make install
 ```
 
-### 4. Initialize and Configure
+### 4. Run Setup Wizard
 
 ```bash
-# Initialize (no public IP required)
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-mac-provider
+computing-provider setup
 ```
 
-Create `$CP_PATH/models.json`:
-
-```json
-{
-  "llama-3.2-3b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 4000,
-    "category": "text-generation"
-  }
-}
-```
+The wizard will:
+- Detect Ollama and your pulled models
+- Auto-match models to Swan Inference IDs (e.g., `llama3.2:3b` → `llama-3.2-3b`)
+- Create your Swan Inference account
+- Generate all config files
 
 ### 5. Start Provider
 
@@ -141,7 +136,6 @@ Create `$CP_PATH/models.json`:
 ollama serve &
 
 # Start provider
-export CP_PATH=~/.swan/computing
 nohup computing-provider run >> cp.log 2>&1 &
 ```
 

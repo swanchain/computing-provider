@@ -91,62 +91,66 @@ make clean && make mainnet
 sudo make install
 ```
 
-### Step 4: Initialize Configuration
+### Step 4: Run the Setup Wizard
+
+The setup wizard handles configuration, authentication, and model discovery automatically:
 
 ```bash
-# Set config path
-export CP_PATH=~/.swan/computing
-
-# Initialize (no public IP required for Inference mode)
-computing-provider init --node-name=my-mac-provider
-
-# Verify initialization
-ls -la $CP_PATH/
+computing-provider setup
 ```
 
-### Step 5: Configure Model Mappings
+The wizard will:
+1. Check prerequisites (Ollama, Docker)
+2. Create or login to your Swan Inference account
+3. Auto-discover your Ollama models
+4. Auto-match them to Swan Inference model IDs (e.g., `llama3.2:3b` → `llama-3.2-3b`)
+5. Generate `config.toml` and `models.json`
 
-Create `$CP_PATH/models.json` to map model names to Ollama:
-
-```json
-{
-  "llama-3.2-3b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 4000,
-    "category": "text-generation"
-  },
-  "llama-3.1-8b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  }
-}
-```
-
-### Step 6: Start the Provider
+### Step 5: Start the Provider
 
 ```bash
-# Set environment variable
-export CP_PATH=~/.swan/computing
-
-# Start the computing provider
 computing-provider run
 
 # Or run in background
 nohup computing-provider run >> cp.log 2>&1 &
 ```
 
-### Step 7: Verify It's Working
+### Step 6: Verify It's Working
 
 ```bash
-# Test Ollama endpoint directly
-curl http://localhost:11434/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "llama-3.2-3b", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10}'
-
 # Check provider logs
 tail -f cp.log
+
+# You should see:
+# - "Connected to Swan Inference"
+# - "Registration successful"
+# - Heartbeat messages
 ```
+
+### Manual Configuration (Alternative)
+
+If you prefer manual setup instead of the wizard:
+
+```bash
+# Initialize
+computing-provider init --node-name=my-mac-provider
+
+# Create models.json manually
+cat > ~/.swan/computing/models.json << 'EOF'
+{
+  "llama-3.2-3b": {
+    "endpoint": "http://localhost:11434",
+    "gpu_memory": 4000,
+    "category": "text-generation",
+    "local_model": "llama3.2:3b"
+  }
+}
+EOF
+
+# Edit config.toml to add your API key and models
+```
+
+> **Note:** The `local_model` field maps Swan Inference model IDs to Ollama model names.
 
 ## Alternative: llama.cpp
 
