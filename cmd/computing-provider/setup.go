@@ -501,12 +501,21 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 		providerName = nodeName
 	}
 
-	walletAddr, err := prompter.AskString("Wallet Address (optional, for rewards)", "")
+	fmt.Println("\nWallet address is optional but required for receiving rewards.")
+	fmt.Println("You can use any EVM-compatible address, or press Enter to skip.")
+	fmt.Println()
+
+	walletAddr, err := prompter.AskString("Wallet Address (optional, press Enter to skip)", "")
 	if err != nil {
 		return "", false, err
 	}
 
-	if walletAddr == "" {
+	// Validate format only if provided
+	if walletAddr != "" {
+		if len(walletAddr) != 42 || walletAddr[:2] != "0x" {
+			return "", false, fmt.Errorf("invalid wallet address format (must be 42 characters starting with 0x)")
+		}
+	} else {
 		setup.PrintInfo("No wallet address provided - you can add one later to receive rewards")
 	}
 
