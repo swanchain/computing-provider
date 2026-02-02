@@ -195,6 +195,7 @@ type InferenceClient struct {
 	apiKey                    string // Provider API key for authentication (sk-prov-*)
 	models                    []string
 	wsURL                     string
+	serviceURL                string // HTTP API URL for status checks
 	conn                      *websocket.Conn
 	send                      chan []byte
 	stopCh                    chan struct{}
@@ -222,6 +223,16 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 		logs.GetLogger().Infof("Using INFERENCE_WS_URL env override: %s", wsURL)
 	}
 
+	// Get service URL for HTTP API calls (status checks)
+	serviceURL := config.Inference.ServiceURL
+	if serviceURL == "" {
+		// Derive from WebSocket URL if not configured
+		serviceURL = wsURL
+		serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
+		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
+		serviceURL = strings.TrimSuffix(serviceURL, "/ws")
+	}
+
 	// Allow env var override for API key
 	apiKey := config.Inference.ApiKey
 	if envKey := os.Getenv("INFERENCE_API_KEY"); envKey != "" {
@@ -236,6 +247,7 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 		apiKey:       apiKey,
 		models:       config.Inference.Models,
 		wsURL:        wsURL,
+		serviceURL:   serviceURL,
 		send:         make(chan []byte, 256),
 		stopCh:       make(chan struct{}),
 		metrics:      NewInferenceMetrics(),
@@ -289,12 +301,8 @@ func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error)
 		}, nil
 	}
 
-	// Derive HTTP URL from WebSocket URL
-	serviceURL := c.wsURL
-	serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
-	serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
-	serviceURL = strings.TrimSuffix(serviceURL, "/ws")
-	statusURL := serviceURL + "/api/v1/provider/status"
+	// Use serviceURL for HTTP API calls
+	statusURL := c.serviceURL + "/api/v1/provider/status"
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	req, err := http.NewRequest("GET", statusURL, nil)
