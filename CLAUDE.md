@@ -14,6 +14,27 @@ Computing Provider v2 is a CLI tool that turns GPUs into AI inference endpoints 
 - **Docker-based** - All workloads run as containers
 - **Cross-platform** - Linux (NVIDIA) and macOS (Apple Silicon via Ollama)
 
+## Prerequisites
+
+**Build requirements:**
+```bash
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y git make
+
+# Install Go 1.21+ (https://go.dev/dl/)
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+
+# macOS (via Homebrew)
+brew install go git make
+```
+
+**Runtime requirements (at least one):**
+- Docker + NVIDIA Container Toolkit (Linux with NVIDIA GPU)
+- Ollama (macOS or Linux)
+
 ## Build & Run
 
 ```bash
@@ -235,6 +256,7 @@ export INFERENCE_WS_URL=ws://localhost:8081   # Dev WebSocket URL
 
 | Error | Solution |
 |-------|----------|
+| `go: command not found` | Install Go 1.21+ (see Prerequisites section above) |
 | `permission denied...docker.sock` | `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install NVIDIA Container Toolkit |
 | `container "/resource-exporter" already in use` | `docker rm -f resource-exporter` |

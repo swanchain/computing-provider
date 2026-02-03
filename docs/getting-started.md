@@ -6,8 +6,26 @@ This guide will walk you through the complete setup process for your Computing P
 
 Inference mode is the simplest way to get started. No wallet, no blockchain, no public IP required.
 
+### Prerequisites
+
 ```bash
-# 1. Install
+# Ubuntu/Debian - install build tools
+sudo apt-get update && sudo apt-get install -y git make
+
+# Install Go 1.21+ (https://go.dev/dl/)
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify installation
+go version  # Should show go1.22.0 or higher
+```
+
+### Install & Run
+
+```bash
+# 1. Clone and build
 git clone https://github.com/swanchain/computing-provider-v2.git
 cd computing-provider-v2
 make clean && make mainnet && sudo make install
