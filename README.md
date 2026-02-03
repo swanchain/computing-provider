@@ -12,7 +12,13 @@ Turn your GPU into an AI inference endpoint and join the Swan Chain decentralize
 ### Linux (NVIDIA GPU)
 
 ```bash
-# 1. Install
+# 0. Install build tools (skip if already installed)
+sudo apt-get update && sudo apt-get install -y git make
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
+
+# 1. Clone and build
 git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider && git checkout releases
 make clean && make mainnet && sudo make install
@@ -275,6 +281,7 @@ computing-provider research gpu-benchmark    # Run benchmark
 
 | Error | Solution |
 |-------|----------|
+| `go: command not found` | Install Go 1.21+: see [go.dev/dl](https://go.dev/dl/) |
 | `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
 | `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
