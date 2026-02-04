@@ -4,12 +4,50 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/term"
 )
+
+// ValidateEmail validates an email address (simplified RFC 5322)
+func ValidateEmail(email string) error {
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+	// Simplified email regex - checks for basic format: something@something.something
+	emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+	if !emailRegex.MatchString(email) {
+		return fmt.Errorf("invalid email format")
+	}
+	return nil
+}
+
+// ValidatePassword validates a password (minimum 8 characters)
+func ValidatePassword(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	return nil
+}
+
+// ValidateName validates a node/provider name (1-64 chars, alphanumeric + hyphens/underscores)
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if len(name) > 64 {
+		return fmt.Errorf("name must be at most 64 characters")
+	}
+	// Allow alphanumeric, hyphens, underscores, and spaces
+	nameRegex := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9\-_ ]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$`)
+	if !nameRegex.MatchString(name) {
+		return fmt.Errorf("name must start and end with alphanumeric characters and contain only letters, numbers, hyphens, underscores, or spaces")
+	}
+	return nil
+}
 
 // Colors for terminal output
 const (

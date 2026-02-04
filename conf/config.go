@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -18,6 +19,49 @@ import (
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/internal/contract"
 )
+
+// atomicWriteFile writes data to a temp file then renames to target path.
+// This prevents config corruption if the process is interrupted during write.
+func atomicWriteFile(targetPath string, writeFunc func(w io.Writer) error, perm os.FileMode) error {
+	dir := filepath.Dir(targetPath)
+
+	// Create temp file in same directory (for same-filesystem rename)
+	tmpFile, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	// Clean up temp file on any error
+	defer func() {
+		if tmpPath != "" {
+			os.Remove(tmpPath)
+		}
+	}()
+
+	// Write to temp file
+	if err := writeFunc(tmpFile); err != nil {
+		tmpFile.Close()
+		return err
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Set permissions
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+
+	tmpPath = "" // Prevent cleanup of successfully renamed file
+	return nil
+}
 
 var config *ComputeNode
 
@@ -331,26 +375,11 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 				defaultComputeNode.UBI.EdgeUrl = ncCopy.Config.EdgeUrl
 			}
 		}
-
-		configFile, err := os.Create(configFilePath)
-		if err != nil {
-			return fmt.Errorf("create %s file failed, error: %v", configFilePath, err)
-		}
-		if err = toml.NewEncoder(configFile).Encode(defaultComputeNode); err != nil {
-			return fmt.Errorf("write data to %s file failed, error: %v", configFilePath, err)
-		}
-
 		configTmpl = defaultComputeNode
 	} else {
 		if _, err = toml.DecodeFile(configFilePath, &configTmpl); err != nil {
 			return err
 		}
-	}
-
-	os.Remove(configFilePath)
-	configFile, err := os.Create(configFilePath)
-	if err != nil {
-		return err
 	}
 
 	if len(multiAddress) != 0 && !strings.EqualFold(multiAddress, strings.TrimSpace(configTmpl.API.MultiAddress)) {
@@ -371,8 +400,11 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 		configTmpl.API.Port = port
 	}
 
-	if err = toml.NewEncoder(configFile).Encode(configTmpl); err != nil {
-		return err
+	// Atomic write of config file
+	if err := atomicWriteFile(configFilePath, func(w io.Writer) error {
+		return toml.NewEncoder(w).Encode(configTmpl)
+	}, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	file, err := os.Create(path.Join(cpRepoPath, "provider.db"))
@@ -500,19 +532,10 @@ func UpdateInferenceConfig(cpRepoPath, apiKey string, models []string) error {
 		configTmpl.Inference.Models = models
 	}
 
-	// Write back
-	os.Remove(configFilePath)
-	configFile, err := os.Create(configFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to create config file: %w", err)
-	}
-	defer configFile.Close()
-
-	if err := toml.NewEncoder(configFile).Encode(configTmpl); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	return nil
+	// Atomic write
+	return atomicWriteFile(configFilePath, func(w io.Writer) error {
+		return toml.NewEncoder(w).Encode(configTmpl)
+	}, 0644)
 }
 
 // WriteModelsJson writes the models.json file from model configurations
@@ -524,11 +547,11 @@ func WriteModelsJson(cpRepoPath string, models map[string]ModelConfig) error {
 		return fmt.Errorf("failed to marshal models: %w", err)
 	}
 
-	if err := os.WriteFile(modelsPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write models.json: %w", err)
-	}
-
-	return nil
+	// Atomic write
+	return atomicWriteFile(modelsPath, func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	}, 0644)
 }
 
 // LoadModelsJson loads the models.json file

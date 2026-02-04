@@ -290,6 +290,10 @@ func initializeRepo(cpRepoPath string, prompter *setup.Prompter) (string, error)
 	if err != nil {
 		return "", err
 	}
+	if err := setup.ValidateName(nodeName); err != nil {
+		setup.PrintError(err.Error())
+		return "", err
+	}
 
 	// Generate config (using localhost for inference mode)
 	multiAddr := "/ip4/127.0.0.1/tcp/9085"
@@ -392,9 +396,17 @@ func handleLogin(cpRepoPath string, prompter *setup.Prompter, authClient *setup.
 	if err != nil {
 		return "", err
 	}
+	if err := setup.ValidateEmail(email); err != nil {
+		setup.PrintError(err.Error())
+		return "", err
+	}
 
 	password, err := prompter.AskPassword("Password")
 	if err != nil {
+		return "", err
+	}
+	if err := setup.ValidatePassword(password); err != nil {
+		setup.PrintError(err.Error())
 		return "", err
 	}
 
@@ -500,6 +512,10 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 	if providerName == "" {
 		providerName = nodeName
 	}
+	if err := setup.ValidateName(providerName); err != nil {
+		setup.PrintError(err.Error())
+		return "", false, err
+	}
 
 	fmt.Println("\nWallet address is optional but required for receiving rewards.")
 	fmt.Println("You can use any EVM-compatible address, or press Enter to skip.")
@@ -512,8 +528,9 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 
 	// Validate format only if provided
 	if walletAddr != "" {
-		if len(walletAddr) != 42 || walletAddr[:2] != "0x" {
-			return "", false, fmt.Errorf("invalid wallet address format (must be 42 characters starting with 0x)")
+		if err := setup.ValidateEVMAddress(walletAddr); err != nil {
+			setup.PrintError(err.Error())
+			return "", false, err
 		}
 	} else {
 		setup.PrintInfo("No wallet address provided - you can add one later to receive rewards")
@@ -560,9 +577,17 @@ func handleSignup(cpRepoPath string, prompter *setup.Prompter, authClient *setup
 	if err != nil {
 		return "", err
 	}
+	if err := setup.ValidateEmail(email); err != nil {
+		setup.PrintError(err.Error())
+		return "", err
+	}
 
 	password, err := prompter.AskPassword("Password")
 	if err != nil {
+		return "", err
+	}
+	if err := setup.ValidatePassword(password); err != nil {
+		setup.PrintError(err.Error())
 		return "", err
 	}
 
@@ -649,6 +674,34 @@ func discoverModels() ([]discoveredModel, error) {
 
 	// Match local models to Swan models
 	matches := setup.MatchModels(localModels, swanModels)
+
+	// Detect collisions: multiple local models matching the same Swan model ID
+	swanToLocal := make(map[string][]string) // SwanModelID -> []LocalModel
+	for _, match := range matches {
+		swanToLocal[match.SwanModelID] = append(swanToLocal[match.SwanModelID], match.LocalModel)
+	}
+
+	// Warn about collisions
+	for swanID, locals := range swanToLocal {
+		if len(locals) > 1 {
+			setup.PrintWarning(fmt.Sprintf("Multiple models match %s:", swanID))
+			for _, local := range locals {
+				setup.PrintBullet(local)
+			}
+			setup.PrintInfo("Only the first will be used. Run setup again to choose differently.")
+		}
+	}
+
+	// Use only first match per Swan ID to avoid duplicates
+	seenSwanIDs := make(map[string]bool)
+	var uniqueMatches []setup.ModelMatch
+	for _, match := range matches {
+		if !seenSwanIDs[match.SwanModelID] {
+			seenSwanIDs[match.SwanModelID] = true
+			uniqueMatches = append(uniqueMatches, match)
+		}
+	}
+	matches = uniqueMatches
 
 	// Create discovered models from matches
 	var discovered []discoveredModel

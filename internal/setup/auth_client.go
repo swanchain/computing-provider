@@ -6,8 +6,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
+
+// ValidateEVMAddress validates an EVM wallet address format
+// - Must be 42 characters
+// - Must start with "0x"
+// - Remaining 40 chars must be valid hex
+func ValidateEVMAddress(addr string) error {
+	if len(addr) != 42 {
+		return fmt.Errorf("address must be 42 characters, got %d", len(addr))
+	}
+	if !strings.HasPrefix(addr, "0x") {
+		return fmt.Errorf("address must start with 0x")
+	}
+	// Validate hex characters
+	for _, c := range addr[2:] {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("invalid hex character: %c", c)
+		}
+	}
+	return nil
+}
 
 const (
 	// DefaultInferenceAPIURL is the default Swan Inference API URL (dev environment)
@@ -186,8 +207,10 @@ type ProviderSignupResponse struct {
 // This is the main signup flow - creates provider and returns API key
 func (c *AuthClient) ProviderSignup(name, ownerAddress string) (*ProviderSignupResponse, error) {
 	// Validate owner address format
-	if ownerAddress != "" && (len(ownerAddress) != 42 || ownerAddress[:2] != "0x") {
-		return nil, fmt.Errorf("invalid wallet address format: must be 42 characters starting with 0x")
+	if ownerAddress != "" {
+		if err := ValidateEVMAddress(ownerAddress); err != nil {
+			return nil, fmt.Errorf("invalid wallet address: %w", err)
+		}
 	}
 
 	req := ProviderSignupRequest{
