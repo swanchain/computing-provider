@@ -50,16 +50,17 @@ type ModelMapping struct {
 
 // InferenceService manages the Inference client and inference handling
 type InferenceService struct {
-	client            *InferenceClient
-	nodeID            string
-	cpPath            string
-	modelMappings     map[string]ModelMapping
-	registry          *ModelRegistry
-	healthChecker     *ModelHealthChecker
-	rateLimiter       *RateLimiter
+	client             *InferenceClient
+	nodeID             string
+	cpPath             string
+	modelMappings      map[string]ModelMapping
+	registry           *ModelRegistry
+	healthChecker      *ModelHealthChecker
+	rateLimiter        *RateLimiter
 	concurrencyLimiter *ConcurrencyLimiter
-	retryPolicy       *RetryPolicy
-	gpuCollector      *GPUMetricsCollector
+	retryPolicy        *RetryPolicy
+	gpuCollector       *GPUMetricsCollector
+	metricsHistory     *MetricsHistory
 }
 
 // NewInferenceService creates a new Inference service
@@ -82,6 +83,9 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	// Create retry policy
 	retryPolicy := NewRetryPolicy(DefaultRetryConfig())
 
+	// Create metrics history for persistence
+	metricsHistory := NewMetricsHistory()
+
 	s := &InferenceService{
 		nodeID:             nodeID,
 		cpPath:             cpPath,
@@ -92,6 +96,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		concurrencyLimiter: concurrencyLimiter,
 		retryPolicy:        retryPolicy,
 		gpuCollector:       gpuCollector,
+		metricsHistory:     metricsHistory,
 	}
 
 	// Set up registry callbacks to update modelMappings for backward compatibility
@@ -212,6 +217,15 @@ func (s *InferenceService) Start() error {
 		return fmt.Errorf("failed to start Inference client: %w", err)
 	}
 
+	// Start metrics history recorder
+	if s.metricsHistory != nil {
+		if err := s.metricsHistory.Start(func() *InferenceMetrics {
+			return s.GetMetrics()
+		}); err != nil {
+			logs.GetLogger().Warnf("Failed to start metrics history: %v", err)
+		}
+	}
+
 	logs.GetLogger().Infof("Inference service started with node ID: %s, owner: %s", s.nodeID, ownerAddr)
 	return nil
 }
@@ -256,6 +270,9 @@ func (s *InferenceService) Stop() {
 	}
 	if s.concurrencyLimiter != nil {
 		s.concurrencyLimiter.Stop()
+	}
+	if s.metricsHistory != nil {
+		s.metricsHistory.Stop()
 	}
 }
 
@@ -754,4 +771,48 @@ func (s *InferenceService) GetRequestManagementStatus() map[string]interface{} {
 	}
 
 	return status
+}
+
+// GetRequestHistory returns recent request history, optionally filtered by model
+func (s *InferenceService) GetRequestHistory(limit int, modelFilter string) []RequestMetric {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.metrics.GetRequestHistory(limit, modelFilter)
+}
+
+// GetModelDetailedMetrics returns detailed metrics for a specific model including recent requests
+func (s *InferenceService) GetModelDetailedMetrics(modelID string) map[string]interface{} {
+	result := make(map[string]interface{})
+
+	// Get model info from registry
+	if model, ok := s.registry.GetModel(modelID); ok {
+		result["model"] = model
+	}
+
+	// Get model health
+	if health, ok := s.healthChecker.GetModelStatus(modelID); ok {
+		result["health"] = health
+	}
+
+	// Get model metrics from InferenceMetrics
+	if s.client != nil {
+		metrics := s.client.GetMetrics()
+		if mm, ok := metrics.ModelMetrics[modelID]; ok {
+			result["metrics"] = mm
+		}
+	}
+
+	// Get recent requests for this model
+	result["recent_requests"] = s.GetRequestHistory(20, modelID)
+
+	return result
+}
+
+// GetMetricsHistory returns historical metrics for the specified duration and resolution
+func (s *InferenceService) GetMetricsHistory(duration, resolution time.Duration) ([]HistoricalDataPoint, error) {
+	if s.metricsHistory == nil {
+		return nil, nil
+	}
+	return s.metricsHistory.GetHistory(duration, resolution)
 }

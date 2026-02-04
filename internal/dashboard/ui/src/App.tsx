@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { RefreshCw, Server } from 'lucide-react';
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
@@ -9,10 +9,15 @@ import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { LatencyChart } from './components/LatencyChart';
 import { ThroughputChart } from './components/ThroughputChart';
+import { RequestHistoryPanel } from './components/RequestHistoryPanel';
+import { HistoricalChart } from './components/HistoricalChart';
+import { ModelDetailPanel } from './components/ModelDetailPanel';
 
 const POLL_INTERVAL = 5000; // 5 seconds
 
 function App() {
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+
   const {
     data: metrics,
     loading: metricsLoading,
@@ -79,7 +84,7 @@ function App() {
           <ThroughputChart metrics={metrics} />
         </div>
 
-        {/* Bottom Row */}
+        {/* Middle Row - Models, GPU, Request Management */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
             <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} />
@@ -89,6 +94,7 @@ function App() {
               models={models?.models ?? []}
               loading={modelsLoading}
               onRefresh={refetchModels}
+              onModelClick={setSelectedModelId}
             />
           </div>
           <div className="lg:col-span-1">
@@ -99,6 +105,12 @@ function App() {
             />
           </div>
         </div>
+
+        {/* Request History */}
+        <RequestHistoryPanel models={models?.models ?? []} />
+
+        {/* Historical Trends */}
+        <HistoricalChart />
       </main>
 
       {/* Footer */}
@@ -108,6 +120,14 @@ function App() {
           <span>Auto-refresh: {POLL_INTERVAL / 1000}s</span>
         </div>
       </footer>
+
+      {/* Model Detail Modal */}
+      {selectedModelId && (
+        <ModelDetailPanel
+          modelId={selectedModelId}
+          onClose={() => setSelectedModelId(null)}
+        />
+      )}
     </div>
   );
 }

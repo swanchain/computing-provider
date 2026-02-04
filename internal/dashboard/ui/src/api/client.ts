@@ -3,6 +3,9 @@ import type {
   ModelsResponse,
   ConnectionStatus,
   RequestManagement,
+  RequestHistoryResponse,
+  HistoricalMetricsResponse,
+  ModelDetailedMetrics,
 } from '../types';
 
 const API_BASE = '/api/v1/computing/inference';
@@ -45,4 +48,25 @@ export const api = {
   setModelRateLimit: (id: string, rate: number) => postJson<{ success: boolean }>(`/ratelimit/model/${id}`, { rate }),
   setGlobalConcurrency: (max: number) => postJson<{ success: boolean }>('/concurrency/global', { max }),
   setModelConcurrency: (id: string, max: number) => postJson<{ success: boolean }>(`/concurrency/model/${id}`, { max }),
+
+  // Request History
+  getRequestHistory: (limit?: number, model?: string) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', limit.toString());
+    if (model) params.set('model', model);
+    const query = params.toString();
+    return fetchJson<RequestHistoryResponse>(`/requests${query ? `?${query}` : ''}`);
+  },
+
+  // Historical Metrics
+  getMetricsHistory: (duration?: string, resolution?: string) => {
+    const params = new URLSearchParams();
+    if (duration) params.set('duration', duration);
+    if (resolution) params.set('resolution', resolution);
+    const query = params.toString();
+    return fetchJson<HistoricalMetricsResponse>(`/metrics/history${query ? `?${query}` : ''}`);
+  },
+
+  // Model Detailed Metrics
+  getModelMetrics: (id: string) => fetchJson<ModelDetailedMetrics>(`/models/${id}/metrics`),
 };

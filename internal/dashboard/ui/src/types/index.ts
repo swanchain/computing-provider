@@ -113,3 +113,58 @@ export interface RequestManagement {
   concurrency_limiter: ConcurrencyMetrics;
   retry_policy: RetryMetrics;
 }
+
+export interface RequestLog {
+  request_id: string;
+  model: string;
+  start_time: string;
+  end_time: string;
+  latency_ms: number;
+  tokens_in: number;
+  tokens_out: number;
+  streaming: boolean;
+  success: boolean;
+  error_reason?: string;
+}
+
+export interface RequestHistoryResponse {
+  requests: RequestLog[];
+}
+
+export interface HistoricalDataPoint {
+  timestamp: string;
+  total_requests: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  p99_latency_ms: number;
+  tokens_per_second: number;
+  requests_per_minute: number;
+}
+
+export interface HistoricalMetricsResponse {
+  data: HistoricalDataPoint[];
+  duration: string;
+  resolution: string;
+}
+
+export interface ModelDetailedMetrics {
+  model?: ModelStatus;
+  health?: {
+    healthy: boolean;
+    last_check: string;
+    consecutive_failures: number;
+    last_error?: string;
+  };
+  metrics?: {
+    model_name: string;
+    total_requests: number;
+    successful_requests: number;
+    failed_requests: number;
+    avg_latency_ms: number;
+    total_tokens_in: number;
+    total_tokens_out: number;
+    tokens_per_second: number;
+    active_requests: number;
+  };
+  recent_requests?: RequestLog[];
+}

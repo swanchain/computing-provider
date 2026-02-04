@@ -460,6 +460,69 @@ func runDaemon() error {
 		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
 	})
 
+	// Request history endpoint
+	router.GET("/inference/requests", func(c *gin.Context) {
+		limitStr := c.DefaultQuery("limit", "100")
+		modelFilter := c.Query("model")
+
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit <= 0 {
+			limit = 100
+		}
+		if limit > 1000 {
+			limit = 1000
+		}
+
+		history := inferenceService.GetRequestHistory(limit, modelFilter)
+		c.JSON(200, gin.H{"requests": history})
+	})
+
+	// Model detailed metrics endpoint
+	router.GET("/inference/models/:model_id/metrics", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		metrics := inferenceService.GetModelDetailedMetrics(modelID)
+		if metrics == nil || len(metrics) == 0 {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+
+	// Historical metrics endpoint
+	router.GET("/inference/metrics/history", func(c *gin.Context) {
+		durationStr := c.DefaultQuery("duration", "1h")
+		resolutionStr := c.DefaultQuery("resolution", "1m")
+
+		duration, err := time.ParseDuration(durationStr)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid duration format"})
+			return
+		}
+
+		resolution, err := time.ParseDuration(resolutionStr)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid resolution format"})
+			return
+		}
+
+		// Limit duration to 7 days max
+		if duration > 7*24*time.Hour {
+			duration = 7 * 24 * time.Hour
+		}
+
+		history, err := inferenceService.GetMetricsHistory(duration, resolution)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"data":       history,
+			"duration":   durationStr,
+			"resolution": resolutionStr,
+		})
+	})
+
 	shutdownChan := make(chan struct{})
 	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
 	if err != nil {
