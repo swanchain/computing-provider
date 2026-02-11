@@ -71,14 +71,14 @@ sudo systemctl restart docker
 ### 2. Start an Inference Server
 
 ```bash
-# Example: SGLang with Llama 3.2
+# Example: SGLang with Qwen 2.5 3B (no HuggingFace auth required)
 docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.2-3B-Instruct \
-    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
+    --model-path Qwen/Qwen2.5-3B-Instruct \
+    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-3b
 ```
 
 ### 3. Run Setup Wizard
