@@ -27,7 +27,7 @@ make clean && make mainnet && sudo make install
 docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
-  lmsysorg/sglang:v0.4.7.post1-cu124 \
+  lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path Qwen/Qwen2.5-7B \
     --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-7b
@@ -283,6 +283,7 @@ computing-provider research gpu-benchmark    # Run benchmark
 | `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
 | `WebSocket connection failed` | Check WebSocketURL and network connectivity |
 | Provider not receiving requests | Check `models.json` matches your inference server |
+| `cuda>=12.x unsatisfied condition` | Use an older SGLang tag: `lmsysorg/sglang:v0.4.7.post1-cu124` |
 
 ### Check Logs
 
