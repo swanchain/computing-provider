@@ -23,14 +23,14 @@ git clone https://github.com/swanchain/go-computing-provider.git
 cd go-computing-provider && git checkout releases
 make clean && make mainnet && sudo make install
 
-# 2. Start an inference server (example: Qwen 2.5 3B with SGLang)
+# 2. Start an inference server (example: Qwen 2.5 7B with SGLang)
 docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
-  lmsysorg/sglang:latest \
+  lmsysorg/sglang:v0.4.7.post1-cu124 \
   python3 -m sglang.launch_server \
-    --model-path Qwen/Qwen2.5-3B-Instruct \
-    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-3b
+    --model-path Qwen/Qwen2.5-7B \
+    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-7b
 
 # 3. Run the setup wizard (handles auth, config, and model discovery)
 computing-provider setup
@@ -52,7 +52,7 @@ That's it! The setup wizard will:
 # 1. Install Ollama and pull a model
 brew install ollama
 ollama serve &
-ollama pull qwen2.5:3b
+ollama pull qwen2.5:7b
 
 # 2. Install Computing Provider
 brew install go
@@ -67,7 +67,7 @@ computing-provider setup
 computing-provider run
 ```
 
-The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:3b` → `qwen-2.5-3b`).
+The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
 
 ---
 
@@ -127,16 +127,10 @@ Map Swan Inference model IDs to your local inference endpoints:
 
 ```json
 {
-  "qwen-2.5-3b": {
-    "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  },
   "qwen-2.5-7b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 14000,
-    "category": "text-generation",
-    "local_model": "qwen2.5:7b"
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 16000,
+    "category": "text-generation"
   }
 }
 ```
@@ -163,7 +157,7 @@ NodeName = "my-provider"
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
-Models = ["qwen-2.5-3b"]
+Models = ["qwen-2.5-7b"]
 ```
 
 ---
