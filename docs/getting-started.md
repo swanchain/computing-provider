@@ -6,34 +6,46 @@ This guide will walk you through the complete setup process for your Computing P
 
 Inference mode is the simplest way to get started. No wallet, no blockchain, no public IP required.
 
+### Prerequisites
+
 ```bash
-# 1. Install
+# Ubuntu/Debian - install build tools
+sudo apt-get update && sudo apt-get install -y git make
+
+# Install Go 1.21+ (https://go.dev/dl/)
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+
+# Verify installation
+go version  # Should show go1.22.0 or higher
+```
+
+### Install & Run
+
+```bash
+# 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
 make clean && make mainnet && sudo make install
 
-# 2. Initialize
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-provider
+# 2. Start your inference backend (Ollama, SGLang, vLLM, etc.)
+# See examples below
 
-# 3. Get your Provider API Key
-#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
-#    Add it to ~/.swan/computing/config.toml under [Inference]:
-#    ApiKey = "sk-prov-your-key-here"
+# 3. Run the setup wizard (handles auth, config, and model discovery)
+computing-provider setup
 
-# 4. Configure models.json (see below)
-
-# 5. Enable your models in config.toml
-#    Add model names to the Models array under [Inference]:
-#    Models = ["llama-3.2-3b"]
-
-# 6. Start your inference backend (Ollama, vLLM, etc.)
-
-# 7. Run
+# 4. Run the provider
 computing-provider run
 ```
 
-That's it! Your provider will connect to Swan Inference and start receiving requests.
+That's it! The setup wizard will:
+- Check prerequisites (Docker, GPU, Ollama)
+- Create or login to your Swan Inference account
+- Auto-discover running model servers
+- Auto-match local models to Swan Inference model IDs
+- Generate `config.toml` and `models.json`
 
 ## Choose Provider Mode
 
@@ -56,51 +68,28 @@ sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 2. Initialize
+### 2. Start an Inference Server
 
 ```bash
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-provider
+# Example: SGLang with Qwen 2.5 3B (no HuggingFace auth required)
+docker run -d --gpus all -p 30000:30000 --name sglang \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --shm-size 32g --ipc=host \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path Qwen/Qwen2.5-3B-Instruct \
+    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-3b
 ```
 
-### 3. Set Up Provider API Key
+### 3. Run Setup Wizard
 
-Sign up at https://inference.swanchain.io to get your provider API key (starts with `sk-prov-`).
-
-Add it to `$CP_PATH/config.toml`:
-
-```toml
-[Inference]
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"
-```
-
-Or set via environment variable:
 ```bash
-export INFERENCE_API_KEY=sk-prov-xxxxxxxxxxxxxxxxxxxx
+computing-provider setup
 ```
 
-### 4. Configure Models
+The wizard will auto-discover your running model server and configure everything.
 
-Create `$CP_PATH/models.json`:
-
-```json
-{
-  "llama-3.1-8b": {
-    "endpoint": "http://localhost:8000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  }
-}
-```
-
-Then enable the model in `$CP_PATH/config.toml`:
-
-```toml
-[Inference]
-Models = ["llama-3.1-8b"]
-```
-
-### 5. Start Provider
+### 4. Start Provider
 
 ```bash
 # Start the provider
@@ -146,39 +135,17 @@ make clean && make mainnet
 sudo make install
 ```
 
-### 4. Initialize and Configure
+### 4. Run Setup Wizard
 
 ```bash
-# Initialize (no public IP required)
-export CP_PATH=~/.swan/computing
-computing-provider init --node-name=my-mac-provider
+computing-provider setup
 ```
 
-Add your provider API key to `$CP_PATH/config.toml`:
-
-```toml
-[Inference]
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"
-```
-
-Create `$CP_PATH/models.json`:
-
-```json
-{
-  "llama-3.2-3b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 4000,
-    "category": "text-generation"
-  }
-}
-```
-
-Enable the model in `$CP_PATH/config.toml`:
-
-```toml
-[Inference]
-Models = ["llama-3.2-3b"]
-```
+The wizard will:
+- Detect Ollama and your pulled models
+- Auto-match models to Swan Inference IDs (e.g., `llama3.2:3b` → `llama-3.2-3b`)
+- Create your Swan Inference account
+- Generate all config files
 
 ### 5. Start Provider
 
@@ -187,7 +154,6 @@ Models = ["llama-3.2-3b"]
 ollama serve &
 
 # Start provider
-export CP_PATH=~/.swan/computing
 nohup computing-provider run >> cp.log 2>&1 &
 ```
 

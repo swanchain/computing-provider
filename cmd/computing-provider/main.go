@@ -34,6 +34,7 @@ func main() {
 		Commands: []*cli.Command{
 			runCmd,
 			initCmd,
+			setupCmd,
 			infoCmd,
 			stateCmd,
 			accountCmd,
@@ -51,7 +52,7 @@ func main() {
 		},
 		Before: func(c *cli.Context) error {
 			// Skip repo initialization for research, dashboard, and inference commands
-			// (inference commands handle their own config loading)
+			// (these commands handle their own config loading)
 			if c.Args().Present() {
 				firstArg := c.Args().First()
 				if strings.EqualFold(firstArg, researchCmd.Name) ||
@@ -67,12 +68,20 @@ func main() {
 			}
 
 			if c.Args().Present() {
-				if strings.EqualFold(c.Args().First(), initCmd.Name) || strings.EqualFold(c.Args().First(), walletCmd.Name) {
+				firstArg := c.Args().First()
+				if strings.EqualFold(firstArg, initCmd.Name) ||
+					strings.EqualFold(firstArg, walletCmd.Name) ||
+					strings.EqualFold(firstArg, setupCmd.Name) {
 					if _, err := os.Stat(cpRepoPath); os.IsNotExist(err) {
 						err := os.MkdirAll(cpRepoPath, 0755)
 						if err != nil {
 							return fmt.Errorf("failed to create cp repo, error: %v", cpRepoPath)
 						}
+					}
+					// Setup handles its own initialization, skip remaining checks
+					if strings.EqualFold(firstArg, setupCmd.Name) {
+						os.Setenv("CP_PATH", cpRepoPath)
+						return nil
 					}
 				}
 			}

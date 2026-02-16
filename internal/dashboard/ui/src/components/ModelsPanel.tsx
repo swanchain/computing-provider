@@ -7,9 +7,10 @@ interface ModelsPanelProps {
   models: ModelStatus[];
   loading: boolean;
   onRefresh: () => void;
+  onModelClick?: (modelId: string) => void;
 }
 
-export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
+export function ModelsPanel({ models, loading, onRefresh, onModelClick }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const handleToggle = async (model: ModelStatus) => {
@@ -88,9 +89,13 @@ export function ModelsPanel({ models, loading, onRefresh }: ModelsPanelProps) {
           {models.map((model) => (
             <div
               key={model.id}
-              className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600"
+              className="flex items-center justify-between p-3 bg-slate-700/50 rounded-lg border border-slate-600 hover:border-slate-500 transition-colors"
             >
-              <div className="flex items-center gap-3">
+              <div
+                className="flex items-center gap-3 flex-1 cursor-pointer"
+                onClick={() => onModelClick?.(model.id)}
+                title="Click for details"
+              >
                 <div className="flex-shrink-0">
                   {!model.enabled ? (
                     <AlertCircle size={20} className="text-slate-500" />

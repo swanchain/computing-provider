@@ -12,56 +12,47 @@ Turn your GPU into an AI inference endpoint and join the Swan Chain decentralize
 ### Linux (NVIDIA GPU)
 
 ```bash
-# 1. Install
+# 0. Install build tools (skip if already installed)
+sudo apt-get update && sudo apt-get install -y git make
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
+
+# 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
 make clean && make mainnet && sudo make install
 
-# 2. Initialize
-computing-provider init --node-name=my-provider
-
-# 3. Get your Provider API Key
-#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
-#    Add it to ~/.swan/computing/config.toml under [Inference]:
-#    ApiKey = "sk-prov-your-key-here"
-
-# 4. Start an inference server (example: Llama 3.2 with SGLang)
+# 2. Start an inference server (example: Qwen 2.5 7B with SGLang)
 docker run -d --gpus all -p 30000:30000 --name sglang \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   --shm-size 32g --ipc=host \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.2-3B-Instruct \
-    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
+    --model-path Qwen/Qwen2.5-7B \
+    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-7b
 
-# 5. Configure your model
-cat > ~/.swan/computing/models.json << 'EOF'
-{
-  "llama-3.2-3b": {
-    "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  }
-}
-EOF
+# 3. Run the setup wizard (handles auth, config, and model discovery)
+computing-provider setup
 
-# 6. Update ~/.swan/computing/config.toml to enable the model
-#    Add the model name to the Models array under [Inference]:
-#    Models = ["llama-3.2-3b"]
-
-# 7. Run the provider
+# 4. Run the provider
 computing-provider run
 ```
 
-That's it! Your provider connects to Swan Inference and starts receiving requests.
+That's it! The setup wizard will:
+- Check prerequisites (Docker, GPU)
+- Create/login to your Swan Inference account
+- Auto-discover your running model servers
+- Auto-match local models to Swan Inference model IDs
+- Generate `config.toml` and `models.json`
 
 ### macOS (Apple Silicon)
 
 ```bash
-# 1. Install Ollama
+# 1. Install Ollama and pull a model
 brew install ollama
 ollama serve &
-ollama pull llama3.2:3b
+ollama pull qwen2.5:7b
 
 # 2. Install Computing Provider
 brew install go
@@ -69,32 +60,14 @@ git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
 make clean && make mainnet && sudo make install
 
-# 3. Initialize
-computing-provider init --node-name=my-mac-provider
+# 3. Run the setup wizard
+computing-provider setup
 
-# 4. Get your Provider API Key
-#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
-#    Add it to ~/.swan/computing/config.toml under [Inference]:
-#    ApiKey = "sk-prov-your-key-here"
-
-# 5. Configure your model
-cat > ~/.swan/computing/models.json << 'EOF'
-{
-  "llama-3.2-3b": {
-    "endpoint": "http://localhost:11434",
-    "gpu_memory": 4000,
-    "category": "text-generation"
-  }
-}
-EOF
-
-# 6. Update ~/.swan/computing/config.toml to enable the model
-#    Add the model name to the Models array under [Inference]:
-#    Models = ["llama-3.2-3b"]
-
-# 7. Run
+# 4. Run the provider
 computing-provider run
 ```
+
+The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
 
 ---
 
@@ -150,17 +123,12 @@ docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 
 ### Model Configuration (`models.json`)
 
-Map model names to your local inference endpoints:
+Map Swan Inference model IDs to your local inference endpoints:
 
 ```json
 {
-  "llama-3.2-3b": {
+  "qwen-2.5-7b": {
     "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
-    "category": "text-generation"
-  },
-  "mistral-7b": {
-    "endpoint": "http://localhost:30001",
     "gpu_memory": 16000,
     "category": "text-generation"
   }
@@ -172,6 +140,9 @@ Map model names to your local inference endpoints:
 | `endpoint` | URL of your local inference server |
 | `gpu_memory` | GPU memory required (MB) |
 | `category` | Model category (`text-generation`, `image-generation`, etc.) |
+| `local_model` | (Optional) Actual model name for local server (e.g., Ollama model name) |
+
+> **Note:** The `local_model` field is used when your local server uses different model names than Swan Inference. For example, Ollama uses `qwen2.5:7b` while Swan Inference expects `qwen-2.5-7b`. The setup wizard handles this mapping automatically.
 
 ### Provider Configuration (`config.toml`)
 
@@ -186,7 +157,7 @@ NodeName = "my-provider"
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
-Models = ["llama-3.2-3b"]
+Models = ["qwen-2.5-7b"]
 ```
 
 ---
@@ -261,12 +232,27 @@ Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
 ### Basic Commands
 
 ```bash
-computing-provider init --node-name=<name>  # Initialize
+computing-provider setup                     # Interactive setup wizard (recommended)
 computing-provider run                       # Start provider
 computing-provider inference status          # Check status on Swan Inference
 computing-provider inference config          # Show inference config
 computing-provider dashboard                 # Web UI (port 3005)
 computing-provider task list --ecp           # List tasks
+```
+
+### Setup Wizard
+
+The setup wizard is the recommended way to configure a new provider:
+
+```bash
+computing-provider setup                     # Full interactive setup
+computing-provider setup --skip-discovery    # Skip model discovery
+computing-provider setup --api-key=sk-prov-xxx  # Use existing API key
+
+# Subcommands
+computing-provider setup discover            # Just discover model servers
+computing-provider setup login               # Login to existing account
+computing-provider setup signup              # Create new account
 ```
 
 ### Wallet Commands (for rewards)
@@ -291,6 +277,7 @@ computing-provider research gpu-benchmark    # Run benchmark
 
 | Error | Solution |
 |-------|----------|
+| `go: command not found` | Install Go 1.21+: see [go.dev/dl](https://go.dev/dl/) |
 | `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
 | `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
@@ -298,6 +285,7 @@ computing-provider research gpu-benchmark    # Run benchmark
 | `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
 | `WebSocket connection failed` | Check WebSocketURL and network connectivity |
 | Provider not receiving requests | Check `models.json` matches your inference server |
+| `cuda>=12.x unsatisfied condition` | Use an older SGLang tag: `lmsysorg/sglang:v0.4.7.post1-cu124` |
 
 ### Check Logs
 

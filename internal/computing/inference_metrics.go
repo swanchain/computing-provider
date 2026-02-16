@@ -48,6 +48,11 @@ type InferenceMetrics struct {
 	startTime        time.Time
 	latencies        []float64 // Recent latencies for percentile calculation
 	maxLatencySample int       // Max samples to keep for percentile calculation
+
+	// Request history (circular buffer)
+	requestHistory    []RequestMetric
+	historyMu         sync.RWMutex
+	maxHistorySize    int
 }
 
 // ModelMetrics tracks metrics for a specific model
@@ -105,6 +110,8 @@ func NewInferenceMetrics() *InferenceMetrics {
 		startTime:        time.Now(),
 		latencies:        make([]float64, 0, 1000),
 		maxLatencySample: 1000,
+		requestHistory:   make([]RequestMetric, 0, 1000),
+		maxHistorySize:   1000,
 	}
 }
 
@@ -398,6 +405,38 @@ func (m *InferenceMetrics) Reset() {
 	m.ModelMetrics = make(map[string]*ModelMetrics)
 	m.latencies = make([]float64, 0, m.maxLatencySample)
 	m.startTime = time.Now()
+}
+
+// RecordRequest adds a request to the history circular buffer
+func (m *InferenceMetrics) RecordRequest(req RequestMetric) {
+	m.historyMu.Lock()
+	defer m.historyMu.Unlock()
+
+	if len(m.requestHistory) >= m.maxHistorySize {
+		// Remove oldest entry (circular buffer)
+		m.requestHistory = m.requestHistory[1:]
+	}
+	m.requestHistory = append(m.requestHistory, req)
+}
+
+// GetRequestHistory returns recent requests, optionally filtered by model
+func (m *InferenceMetrics) GetRequestHistory(limit int, modelFilter string) []RequestMetric {
+	m.historyMu.RLock()
+	defer m.historyMu.RUnlock()
+
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var result []RequestMetric
+	// Iterate in reverse to get most recent first
+	for i := len(m.requestHistory) - 1; i >= 0 && len(result) < limit; i-- {
+		req := m.requestHistory[i]
+		if modelFilter == "" || req.Model == modelFilter {
+			result = append(result, req)
+		}
+	}
+	return result
 }
 
 // Helper functions

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -166,40 +167,77 @@ var listCmd = &cli.Command{
 	},
 }
 
+// checkDockerAvailable checks if Docker is available and responding with a timeout
+// Returns true if Docker is available, false otherwise
+func checkDockerAvailable() bool {
+	// Check if docker command exists
+	if _, err := exec.LookPath("docker"); err != nil {
+		return false
+	}
+
+	// Check if Docker daemon is responding with timeout
+	cmd := exec.Command("docker", "info")
+	if err := cmd.Start(); err != nil {
+		return false
+	}
+
+	done := make(chan error)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case <-time.After(10 * time.Second):
+		cmd.Process.Kill()
+		return false
+	case err := <-done:
+		if err != nil {
+			return false
+		}
+	}
+
+	return true
+}
+
 // runDaemon starts the computing provider daemon
 func runDaemon() error {
 	logs.GetLogger().Info("Starting computing provider...")
 	cpRepoPath, _ := os.LookupEnv("CP_PATH")
 
-	computing.NewDockerService().CleanResourceForDocker(true)
+	// Check Docker availability (optional for Inference-only mode)
+	dockerAvailable := checkDockerAvailable()
 
-	resourceExporterContainerName := "resource-exporter"
-	rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
-	if err != nil {
-		return fmt.Errorf("check %s container failed, error: %v", resourceExporterContainerName, err)
-	}
+	if dockerAvailable {
+		computing.NewDockerService().CleanResourceForDocker(true)
 
-	if version != "" {
-		if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
-			logs.GetLogger().Fatalf("resource-exporter %s", errMsg)
+		resourceExporterContainerName := "resource-exporter"
+		rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
+		if err != nil {
+			logs.GetLogger().Warnf("check %s container failed: %v (continuing without it)", resourceExporterContainerName, err)
+		} else {
+			if version != "" {
+				if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
+					logs.GetLogger().Warnf("resource-exporter version mismatch: %s", errMsg)
+				}
+			}
+
+			if !rsExist {
+				if err = computing.RestartResourceExporter(); err != nil {
+					logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
+				}
+			}
 		}
-	}
 
-	if !rsExist {
-		if err = computing.RestartResourceExporter(); err != nil {
-			logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
+		traefikServiceContainerName := "traefik-service"
+		tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
+		if err != nil {
+			logs.GetLogger().Warnf("check %s container failed: %v (continuing without it)", traefikServiceContainerName, err)
+		} else if !tsExist {
+			if err = computing.RestartTraefikService(); err != nil {
+				logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
+			}
 		}
-	}
-
-	traefikServiceContainerName := "traefik-service"
-	tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
-	if err != nil {
-		return fmt.Errorf("check %s container failed, error: %v", traefikServiceContainerName, err)
-	}
-	if !tsExist {
-		if err = computing.RestartTraefikService(); err != nil {
-			logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
-		}
+	} else {
+		logs.GetLogger().Info("Docker not available - running in Inference-only mode (Ollama)")
+		logs.GetLogger().Info("Some features (resource-exporter, traefik) will be disabled")
 	}
 
 	if err := conf.InitConfig(cpRepoPath, true); err != nil {
@@ -420,6 +458,69 @@ func runDaemon() error {
 		}
 		inferenceService.SetModelConcurrencyLimit(modelID, req.Max)
 		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
+	})
+
+	// Request history endpoint
+	router.GET("/inference/requests", func(c *gin.Context) {
+		limitStr := c.DefaultQuery("limit", "100")
+		modelFilter := c.Query("model")
+
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit <= 0 {
+			limit = 100
+		}
+		if limit > 1000 {
+			limit = 1000
+		}
+
+		history := inferenceService.GetRequestHistory(limit, modelFilter)
+		c.JSON(200, gin.H{"requests": history})
+	})
+
+	// Model detailed metrics endpoint
+	router.GET("/inference/models/:model_id/metrics", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		metrics := inferenceService.GetModelDetailedMetrics(modelID)
+		if metrics == nil || len(metrics) == 0 {
+			c.JSON(404, gin.H{"error": "model not found"})
+			return
+		}
+		c.JSON(200, metrics)
+	})
+
+	// Historical metrics endpoint
+	router.GET("/inference/metrics/history", func(c *gin.Context) {
+		durationStr := c.DefaultQuery("duration", "1h")
+		resolutionStr := c.DefaultQuery("resolution", "1m")
+
+		duration, err := time.ParseDuration(durationStr)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid duration format"})
+			return
+		}
+
+		resolution, err := time.ParseDuration(resolutionStr)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid resolution format"})
+			return
+		}
+
+		// Limit duration to 7 days max
+		if duration > 7*24*time.Hour {
+			duration = 7 * 24 * time.Hour
+		}
+
+		history, err := inferenceService.GetMetricsHistory(duration, resolution)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"data":       history,
+			"duration":   durationStr,
+			"resolution": resolutionStr,
+		})
 	})
 
 	shutdownChan := make(chan struct{})

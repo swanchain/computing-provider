@@ -37,7 +37,7 @@ Client ←(SSE)→ Swan Inference ←(WebSocket)→ Provider ←(SSE)→ SGLang
 curl -N http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama-3.1-8b",
+    "model": "qwen-2.5-7b",
     "messages": [{"role": "user", "content": "Count to 10 slowly"}],
     "stream": true
   }'
@@ -58,7 +58,7 @@ curl -N http://localhost:8000/v1/chat/completions \
 
 - Docker with NVIDIA Container Toolkit
 - CUDA 12.1+ drivers
-- HuggingFace account (for gated models)
+- Internet connection for model downloads
 
 ### Install NVIDIA Container Toolkit
 
@@ -98,21 +98,20 @@ docker pull nvcr.io/nvidia/sglang:25.04
 ### 2. Start SGLang Server
 
 ```bash
-# Basic deployment with Llama 3.1 8B
+# Basic deployment with Qwen 2.5 7B (no HuggingFace auth required)
 docker run -d \
-  --name sglang-llama \
+  --name sglang-qwen \
   --gpus all \
   --shm-size 32g \
   --ipc=host \
   -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --model-path Qwen/Qwen2.5-7B-Instruct \
     --host 0.0.0.0 \
     --port 30000 \
-    --served-model-name llama-3.1-8b
+    --served-model-name qwen-2.5-7b
 ```
 
 ### 3. Verify Server
@@ -128,7 +127,7 @@ curl http://localhost:30000/v1/models
 curl http://localhost:30000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama-3.1-8b",
+    "model": "qwen-2.5-7b",
     "messages": [{"role": "user", "content": "Hello!"}],
     "max_tokens": 100
   }'
@@ -136,55 +135,36 @@ curl http://localhost:30000/v1/chat/completions \
 
 ## Model Deployment Examples
 
-### Llama 3.1 8B (24GB VRAM)
+> **Note:** Qwen and DeepSeek models are fully open and download automatically without authentication.
+
+### Qwen 2.5 3B (8GB VRAM) - No Auth Required
 
 ```bash
 docker run -d \
-  --name sglang-llama-8b \
-  --gpus all \
-  --shm-size 32g \
-  --ipc=host \
-  -p 30000:30000 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e HF_TOKEN=${HF_TOKEN} \
-  lmsysorg/sglang:latest \
-  python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.1-8B-Instruct \
-    --host 0.0.0.0 \
-    --port 30000 \
-    --served-model-name llama-3.1-8b \
-    --mem-fraction-static 0.9
-```
-
-### Llama 3.2 3B (8GB VRAM)
-
-```bash
-docker run -d \
-  --name sglang-llama-3b \
+  --name sglang-qwen-3b \
   --gpus all \
   --shm-size 16g \
   --ipc=host \
   -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --model-path Qwen/Qwen2.5-3B-Instruct \
     --host 0.0.0.0 \
     --port 30000 \
-    --served-model-name llama-3.2-3b \
+    --served-model-name qwen-2.5-3b \
     --mem-fraction-static 0.9
 ```
 
-### Qwen 2.5 7B (16GB VRAM)
+### Qwen 2.5 7B (16GB VRAM) - No Auth Required
 
 ```bash
 docker run -d \
-  --name sglang-qwen \
+  --name sglang-qwen-7b \
   --gpus all \
   --shm-size 32g \
   --ipc=host \
-  -p 30001:30000 \
+  -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
@@ -195,23 +175,41 @@ docker run -d \
     --mem-fraction-static 0.85
 ```
 
-### Llama 3.1 70B (Multi-GPU with Tensor Parallelism)
+### Qwen 2.5 14B (24GB VRAM) - No Auth Required
 
 ```bash
 docker run -d \
-  --name sglang-llama-70b \
+  --name sglang-qwen-14b \
+  --gpus all \
+  --shm-size 32g \
+  --ipc=host \
+  -p 30000:30000 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path Qwen/Qwen2.5-14B-Instruct \
+    --host 0.0.0.0 \
+    --port 30000 \
+    --served-model-name qwen-2.5-14b \
+    --mem-fraction-static 0.9
+```
+
+### Qwen 2.5 72B (Multi-GPU with Tensor Parallelism) - No Auth Required
+
+```bash
+docker run -d \
+  --name sglang-qwen-72b \
   --gpus all \
   --shm-size 64g \
   --ipc=host \
-  -p 30002:30000 \
+  -p 30000:30000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e HF_TOKEN=${HF_TOKEN} \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.1-70B-Instruct \
+    --model-path Qwen/Qwen2.5-72B-Instruct \
     --host 0.0.0.0 \
     --port 30000 \
-    --served-model-name llama-3.1-70b \
+    --served-model-name qwen-2.5-72b \
     --tp 4 \
     --mem-fraction-static 0.9
 ```
@@ -264,7 +262,7 @@ Edit `~/.swan/computing/config.toml`:
 [Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
-Models = ["llama-3.1-8b", "qwen-2.5-7b"]
+Models = ["qwen-2.5-7b", "qwen-2.5-72b"]
 ```
 
 ### Model-to-Container Mapping
@@ -273,10 +271,10 @@ Create a mapping file `~/.swan/computing/models.json`:
 
 ```json
 {
-  "llama-3.1-8b": {
+  "qwen-2.5-3b": {
     "container": "lmsysorg/sglang:latest",
     "endpoint": "http://localhost:30000",
-    "gpu_memory": 24000,
+    "gpu_memory": 8000,
     "category": "text-generation"
   },
   "qwen-2.5-7b": {
@@ -285,7 +283,7 @@ Create a mapping file `~/.swan/computing/models.json`:
     "gpu_memory": 16000,
     "category": "text-generation"
   },
-  "llama-3.1-70b": {
+  "qwen-2.5-72b": {
     "container": "lmsysorg/sglang:latest",
     "endpoint": "http://localhost:30002",
     "gpu_memory": 160000,
@@ -300,7 +298,7 @@ Create a mapping file `~/.swan/computing/models.json`:
 
 ```bash
 # Start SGLang containers first
-docker start sglang-llama-8b sglang-qwen
+docker start sglang-qwen-7b sglang-qwen-72b
 
 # Then start computing provider
 export CP_PATH=~/.swan/computing
@@ -345,7 +343,7 @@ computing-provider run
 --enable-prefix-caching
 
 # Speculative decoding (if supported)
---speculative-model meta-llama/Llama-3.1-8B-Instruct
+--speculative-model Qwen/Qwen2.5-3B-Instruct
 ```
 
 ## Monitoring
@@ -354,15 +352,16 @@ computing-provider run
 
 ```bash
 docker run -d \
-  --name sglang-llama \
+  --name sglang-qwen \
   --gpus all \
   -p 8000:8000 \
   -p 9090:9090 \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
-    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --model-path Qwen/Qwen2.5-7B-Instruct \
     --host 0.0.0.0 \
     --port 8000 \
+    --served-model-name qwen-2.5-7b \
     --enable-metrics \
     --metrics-port 9090
 ```
@@ -395,9 +394,9 @@ Create `docker-compose.yml` for multi-model deployment:
 version: '3.8'
 
 services:
-  sglang-llama-8b:
+  sglang-qwen-7b:
     image: lmsysorg/sglang:latest
-    container_name: sglang-llama-8b
+    container_name: sglang-qwen-7b
     runtime: nvidia
     deploy:
       resources:
@@ -412,14 +411,12 @@ services:
       - "8000:8000"
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
-    environment:
-      - HF_TOKEN=${HF_TOKEN}
     command: >
       python3 -m sglang.launch_server
-      --model-path meta-llama/Llama-3.1-8B-Instruct
+      --model-path Qwen/Qwen2.5-7B-Instruct
       --host 0.0.0.0 --port 8000
-      --served-model-name llama-3.1-8b
-      --mem-fraction-static 0.9
+      --served-model-name qwen-2.5-7b
+      --mem-fraction-static 0.85
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -427,9 +424,9 @@ services:
       timeout: 10s
       retries: 3
 
-  sglang-qwen:
+  sglang-qwen-14b:
     image: lmsysorg/sglang:latest
-    container_name: sglang-qwen
+    container_name: sglang-qwen-14b
     runtime: nvidia
     deploy:
       resources:
@@ -446,10 +443,10 @@ services:
       - ~/.cache/huggingface:/root/.cache/huggingface
     command: >
       python3 -m sglang.launch_server
-      --model-path Qwen/Qwen2.5-7B-Instruct
+      --model-path Qwen/Qwen2.5-14B-Instruct
       --host 0.0.0.0 --port 8000
-      --served-model-name qwen-2.5-7b
-      --mem-fraction-static 0.85
+      --served-model-name qwen-2.5-14b
+      --mem-fraction-static 0.9
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -483,17 +480,16 @@ docker compose up -d
 # Model loading is slow on first request
 # Pre-warm with a dummy request after startup
 curl http://localhost:8000/v1/chat/completions \
-  -d '{"model":"llama-3.1-8b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}'
+  -d '{"model":"qwen-2.5-7b","messages":[{"role":"user","content":"hi"}],"max_tokens":1}'
 ```
 
 **Container Keeps Restarting**
 ```bash
 # Check logs
-docker logs sglang-llama-8b
+docker logs sglang-qwen-7b
 
 # Common causes:
 # - Insufficient GPU memory
-# - Missing HF_TOKEN for gated models
 # - CUDA version mismatch
 ```
 
@@ -509,7 +505,7 @@ docker logs sglang-llama-8b
 #!/bin/bash
 # check_sglang.sh
 
-CONTAINERS=("sglang-llama-8b" "sglang-qwen")
+CONTAINERS=("sglang-qwen-7b" "sglang-qwen-14b")
 PORTS=(8000 8001)
 
 for i in "${!CONTAINERS[@]}"; do
@@ -530,18 +526,19 @@ done
 If SGLang doesn't work for your setup, vLLM is a reliable alternative:
 
 ```bash
+# Qwen 2.5 7B (no HuggingFace auth required)
 docker run -d \
-  --name vllm-llama \
+  --name vllm-qwen \
   --runtime nvidia \
   --gpus all \
   -p 8000:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  -e HF_TOKEN=${HF_TOKEN} \
   --ipc=host \
   vllm/vllm-openai:latest \
-  --model meta-llama/Llama-3.1-8B-Instruct \
+  --model Qwen/Qwen2.5-7B-Instruct \
   --host 0.0.0.0 \
   --port 8000 \
+  --served-model-name qwen-2.5-7b \
   --gpu-memory-utilization 0.9
 ```
 

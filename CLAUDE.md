@@ -13,6 +13,27 @@ Computing Provider v2 is a CLI tool that turns GPUs into AI inference endpoints 
 
 **Two modes:** Inference (default, no wallet/blockchain needed) and ZK-Proof (requires wallet, public IP, v28 parameters).
 
+## Prerequisites
+
+**Build requirements:**
+```bash
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y git make
+
+# Install Go 1.21+ (https://go.dev/dl/)
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+source ~/.bashrc
+
+# macOS (via Homebrew)
+brew install go git make
+```
+
+**Runtime requirements (at least one):**
+- Docker + NVIDIA Container Toolkit (Linux with NVIDIA GPU)
+- Ollama (macOS or Linux)
+
 ## Build & Run
 
 ```bash
@@ -25,6 +46,12 @@ make darwin-arm64                # macOS Apple Silicon (mainnet)
 make darwin-arm64-testnet        # macOS Apple Silicon (testnet)
 make linux-arm64                 # Linux ARM64 (mainnet)
 make linux-arm64-testnet         # Linux ARM64 (testnet)
+
+# Setup (recommended - handles auth, config, and model discovery)
+computing-provider setup
+
+# Run
+computing-provider run
 
 # Development - always use go run to pick up code changes
 go run ./cmd/computing-provider run
@@ -132,6 +159,7 @@ Provider communicates with Swan Inference using typed JSON messages:
 
 Commands are defined in `cmd/computing-provider/`:
 - `run.go` — `run`, `init`, `info`, `state`, `account`, `contract` commands
+- `setup.go` — `setup` wizard (recommended for new providers), subcommands: `discover`, `login`, `signup`
 - `inference.go` — `inference status`, `inference config`
 - `wallet.go` — `wallet`, `collateral`, `sequencer` commands
 - `task.go` — task listing
@@ -184,6 +212,7 @@ Base: `/api/v1/computing/` (routes registered in `ubi.go` `runDaemon`)
 
 | Error | Solution |
 |-------|----------|
+| `go: command not found` | Install Go 1.21+ (see Prerequisites section above) |
 | `permission denied...docker.sock` | `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install NVIDIA Container Toolkit |
 | `container "/resource-exporter" already in use` | `docker rm -f resource-exporter` |
