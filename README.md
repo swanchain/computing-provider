@@ -13,8 +13,8 @@ Turn your GPU into an AI inference endpoint and join the Swan Chain decentralize
 
 ```bash
 # 1. Install
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider && git checkout releases
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 2. Initialize
@@ -65,8 +65,8 @@ ollama pull llama3.2:3b
 
 # 2. Install Computing Provider
 brew install go
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider && git checkout releases
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 3. Initialize
@@ -263,8 +263,10 @@ Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
 ```bash
 computing-provider init --node-name=<name>  # Initialize
 computing-provider run                       # Start provider
+computing-provider inference status          # Check status on Swan Inference
+computing-provider inference config          # Show inference config
+computing-provider dashboard                 # Web UI (port 3005)
 computing-provider task list --ecp           # List tasks
-computing-provider dashboard                 # Web UI
 ```
 
 ### Wallet Commands (for rewards)
@@ -327,7 +329,7 @@ computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=
 ## Getting Help
 
 - [Discord](https://discord.gg/3uQUWzaS7U) - Community support
-- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues) - Bug reports
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues) - Bug reports
 - [Documentation](https://docs.swanchain.io) - Full docs
 
 ## License

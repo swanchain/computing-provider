@@ -11,6 +11,12 @@ computing-provider state
 # Check configuration
 computing-provider info
 
+# Check inference status (API key, registration)
+computing-provider inference status
+
+# Check inference config
+computing-provider inference config
+
 # Check wallet status
 computing-provider wallet list
 
@@ -145,7 +151,57 @@ curl -X POST -H "Content-Type: application/json" \
   https://mainnet-rpc.swanchain.io
 ```
 
-### 4. Network Connectivity Issues
+### 4. Inference Mode Issues
+
+#### Symptoms
+- "authentication required" or "invalid provider API key" errors
+- WebSocket connection failures
+- Provider not receiving inference requests
+
+#### Solutions
+
+**API Key Not Configured**
+```bash
+# Check your current config
+computing-provider inference config
+
+# Check status on Swan Inference
+computing-provider inference status
+
+# Set API key in config.toml
+# [Inference]
+# ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"
+
+# Or set via environment variable
+export INFERENCE_API_KEY=sk-prov-xxxxxxxxxxxxxxxxxxxx
+```
+
+**WebSocket Connection Failed**
+```bash
+# Check that WebSocketURL is correct in config.toml
+computing-provider inference config
+
+# Test network connectivity to Swan Inference
+curl -s https://inference.swanchain.io/api/v1/health
+
+# For local development, override the WebSocket URL
+export INFERENCE_WS_URL=ws://localhost:8081
+```
+
+**Provider Not Receiving Requests**
+```bash
+# Verify models are configured in both models.json AND config.toml
+# models.json defines endpoints, config.toml Models array enables them
+computing-provider inference config
+
+# Check model health via REST API
+curl http://localhost:8085/api/v1/computing/inference/models
+
+# Force reload models.json
+curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
+```
+
+### 5. Network Connectivity Issues
 
 #### Symptoms
 - "Connection refused" errors
@@ -176,7 +232,7 @@ Edit `~/.swan/computing/config.toml`:
 SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
 ```
 
-### 5. Task Execution Issues
+### 6. Task Execution Issues
 
 #### ECP2/ECP Issues
 
@@ -224,7 +280,7 @@ export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
 ls -la $FIL_PROOFS_PARAMETER_CACHE
 ```
 
-### 6. Resource Exhaustion
+### 7. Resource Exhaustion
 
 #### Symptoms
 - Tasks stuck in pending
@@ -254,7 +310,7 @@ docker image prune
 docker system prune
 ```
 
-### 7. Collateral Issues
+### 8. Collateral Issues
 
 #### Symptoms
 - "Insufficient collateral" errors
@@ -412,7 +468,7 @@ cp ~/.swan/computing.backup/config.toml ~/.swan/computing/
 ### Support Channels
 
 - **Discord**: [Swan Chain Community](https://discord.gg/swanchain)
-- **GitHub**: [Issue Tracker](https://github.com/swanchain/computing-provider-v2/issues)
+- **GitHub**: [Issue Tracker](https://github.com/swanchain/computing-provider/issues)
 - **Documentation**: [Swan Chain Docs](https://docs.swanchain.io)
 
 ### Useful Commands for Support

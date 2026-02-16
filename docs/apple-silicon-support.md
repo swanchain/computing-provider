@@ -83,8 +83,8 @@ ollama pull llama3.3:70b   # Requires 48GB+ RAM
 brew install go
 
 # Clone repository
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 
 # Build for Apple Silicon
 make clean && make mainnet

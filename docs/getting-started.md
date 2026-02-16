@@ -8,19 +8,28 @@ Inference mode is the simplest way to get started. No wallet, no blockchain, no 
 
 ```bash
 # 1. Install
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 2. Initialize
 export CP_PATH=~/.swan/computing
 computing-provider init --node-name=my-provider
 
-# 3. Configure models.json (see below)
+# 3. Get your Provider API Key
+#    Sign up at https://inference.swanchain.io and get your API key (starts with sk-prov-)
+#    Add it to ~/.swan/computing/config.toml under [Inference]:
+#    ApiKey = "sk-prov-your-key-here"
 
-# 4. Start your inference backend (Ollama, vLLM, etc.)
+# 4. Configure models.json (see below)
 
-# 5. Run
+# 5. Enable your models in config.toml
+#    Add model names to the Models array under [Inference]:
+#    Models = ["llama-3.2-3b"]
+
+# 6. Start your inference backend (Ollama, vLLM, etc.)
+
+# 7. Run
 computing-provider run
 ```
 
@@ -54,7 +63,23 @@ export CP_PATH=~/.swan/computing
 computing-provider init --node-name=my-provider
 ```
 
-### 3. Configure Models
+### 3. Set Up Provider API Key
+
+Sign up at https://inference.swanchain.io to get your provider API key (starts with `sk-prov-`).
+
+Add it to `$CP_PATH/config.toml`:
+
+```toml
+[Inference]
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"
+```
+
+Or set via environment variable:
+```bash
+export INFERENCE_API_KEY=sk-prov-xxxxxxxxxxxxxxxxxxxx
+```
+
+### 4. Configure Models
 
 Create `$CP_PATH/models.json`:
 
@@ -68,7 +93,14 @@ Create `$CP_PATH/models.json`:
 }
 ```
 
-### 4. Start Provider
+Then enable the model in `$CP_PATH/config.toml`:
+
+```toml
+[Inference]
+Models = ["llama-3.1-8b"]
+```
+
+### 5. Start Provider
 
 ```bash
 # Start the provider
@@ -108,8 +140,8 @@ ollama pull llama3.2:3b
 brew install go
 
 # Clone and build
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet
 sudo make install
 ```
@@ -122,6 +154,13 @@ export CP_PATH=~/.swan/computing
 computing-provider init --node-name=my-mac-provider
 ```
 
+Add your provider API key to `$CP_PATH/config.toml`:
+
+```toml
+[Inference]
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"
+```
+
 Create `$CP_PATH/models.json`:
 
 ```json
@@ -132,6 +171,13 @@ Create `$CP_PATH/models.json`:
     "category": "text-generation"
   }
 }
+```
+
+Enable the model in `$CP_PATH/config.toml`:
+
+```toml
+[Inference]
+Models = ["llama-3.2-3b"]
 ```
 
 ### 5. Start Provider
@@ -356,7 +402,7 @@ docker logs <container_name>
 ### Getting Help
 
 - [Discord Community](https://discord.gg/swanchain)
-- [GitHub Issues](https://github.com/swanchain/computing-provider-v2/issues)
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues)
 - [Troubleshooting Guide](troubleshooting.md)
 
 ## Next Steps

@@ -59,14 +59,25 @@ Password = ""
 
 ```toml
 [Inference]
-Enable = true                   # Inference mode is enabled by default
-WebSocketURL = "wss://inference-ws.swanchain.io"  # Swan Inference WebSocket
-Models = []                               # Models this provider serves (e.g., ["llama-3.2-3b"])
+Enable = true                                        # Inference mode is enabled by default
+WebSocketURL = "wss://inference-ws.swanchain.io"     # Swan Inference WebSocket endpoint
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: Provider API key from https://inference.swanchain.io
+Models = ["llama-3.2-3b"]                            # Models this provider serves (must match models.json)
+ServiceURL = ""                                      # Optional: HTTP API URL (auto-derived from WebSocketURL if empty)
 ```
 
-**Environment variable override:**
+| Field | Required | Description |
+|-------|----------|-------------|
+| `Enable` | No | Enable inference mode (default: true) |
+| `WebSocketURL` | No | Swan Inference WebSocket endpoint |
+| `ApiKey` | Yes | Provider API key (starts with `sk-prov-`). Get one at https://inference.swanchain.io |
+| `Models` | Yes | List of model names to serve (must match keys in `models.json`) |
+| `ServiceURL` | No | HTTP API URL for status checks. Auto-derived from WebSocketURL if empty |
+
+**Environment variable overrides:**
 ```bash
-export INFERENCE_WS_URL=ws://localhost:8081  # Override WebSocket URL for dev
+export INFERENCE_WS_URL=ws://localhost:8081      # Override WebSocket URL for dev
+export INFERENCE_API_KEY=sk-prov-your-key-here   # Override API key
 ```
 
 ## Environment Variables
@@ -171,9 +182,16 @@ Domain = "*.example.com"        # Wildcard domain for services (optional for Inf
 PortRange = ["40000-40050", "40060"]
 
 [Inference]
-Enable = true                   # Enabled by default
-WebSocketURL = "wss://inference-ws.swanchain.io"  # Production
-Models = ["llama-3.2-3b"]       # Models this provider serves
+Enable = true                                        # Enabled by default
+WebSocketURL = "wss://inference-ws.swanchain.io"     # Production
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: your provider API key
+Models = ["llama-3.2-3b"]                            # Models this provider serves
+```
+
+To verify your configuration:
+```bash
+computing-provider inference config    # Show current inference config
+computing-provider inference status    # Check status on Swan Inference
 ```
 
 ### Development Mode (Local Testing)
