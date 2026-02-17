@@ -279,13 +279,18 @@ func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]stri
 
 // ProviderStatusResponse represents the status check response from Swan Inference
 type ProviderStatusResponse struct {
-	ProviderID  string   `json:"provider_id"`
-	Name        string   `json:"name"`
-	Status      string   `json:"status"`
-	CanConnect  bool     `json:"can_connect"`
-	APIKeyValid bool     `json:"api_key_valid"`
-	Message     string   `json:"message"`
-	NextSteps   []string `json:"next_steps,omitempty"`
+	ProviderID      string   `json:"provider_id"`
+	Name            string   `json:"name"`
+	Status          string   `json:"status"`
+	CanConnect      bool     `json:"can_connect"`
+	APIKeyValid     bool     `json:"api_key_valid"`
+	Message         string   `json:"message"`
+	Warning         string   `json:"warning,omitempty"`
+	NextSteps       []string `json:"next_steps,omitempty"`
+	Step            int      `json:"step"`
+	TotalSteps      int      `json:"total_steps"`
+	StepLabel       string   `json:"step_label"`
+	EarningsEnabled bool     `json:"earnings_enabled"`
 }
 
 // checkProviderStatus verifies the provider is approved before connecting
@@ -360,7 +365,7 @@ func (c *InferenceClient) Start() error {
 
 		if !status.CanConnect {
 			logs.GetLogger().Warn("===========================================")
-			logs.GetLogger().Warn("PROVIDER NOT YET APPROVED")
+			logs.GetLogger().Warn("PROVIDER CANNOT CONNECT")
 			logs.GetLogger().Warn("===========================================")
 			logs.GetLogger().Warnf("Status: %s", status.Status)
 			logs.GetLogger().Warnf("Message: %s", status.Message)
@@ -372,10 +377,21 @@ func (c *InferenceClient) Start() error {
 			}
 			logs.GetLogger().Warn("===========================================")
 			logs.GetLogger().Warn("Run 'computing-provider inference status' to check approval status")
-			return fmt.Errorf("provider not approved: %s (status: %s)", status.Message, status.Status)
+			return fmt.Errorf("provider cannot connect: %s (status: %s)", status.Message, status.Status)
 		}
 
-		logs.GetLogger().Infof("Provider status: %s (can_connect: %v)", status.Status, status.CanConnect)
+		// Display informational warning for non-active providers that can connect
+		if status.Status != "active" && status.CanConnect {
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warnf("PROVIDER STATUS: %s", strings.ToUpper(status.Status))
+			logs.GetLogger().Warn("Earnings are DISABLED until admin approval.")
+			if status.Status == "pending" {
+				logs.GetLogger().Warn("Run 'computing-provider inference request-approval' to request approval.")
+			}
+			logs.GetLogger().Warn("===========================================")
+		}
+
+		logs.GetLogger().Infof("Provider status: %s (can_connect: %v, earnings: %v)", status.Status, status.CanConnect, status.EarningsEnabled)
 	}
 
 	if err := c.connect(); err != nil {
