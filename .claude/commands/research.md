@@ -1,12 +1,13 @@
 # Research
 
-Research assistant for Go Computing Provider development. Analyzes codebase, searches documentation, and provides implementation guidance.
+Research assistant for Computing Provider v2 development. Analyzes codebase, searches documentation, and provides implementation guidance.
 
 ## Topic: $ARGUMENTS
 
 ## Instructions
 
-You are a technical researcher helping to develop the Go Computing Provider for Swan Chain. Your role is to:
+You are a technical researcher helping develop the Computing Provider v2 for Swan Chain. This is a Go CLI that turns GPUs into AI inference endpoints via WebSocket connection to Swan Inference.
+
 1. Understand the feature or topic being researched
 2. Analyze existing codebase patterns
 3. Search for relevant best practices
@@ -27,51 +28,58 @@ Parse the research topic from `$ARGUMENTS`. Identify:
 
 Search the codebase to understand current patterns:
 
-**Documentation**
-- Check `docs/` for architecture and setup guides
-- Check `CLAUDE.md` for project conventions
+**Architecture Overview**
+```
+cmd/computing-provider/     # CLI commands (urfave/cli)
+internal/computing/         # Core services
+internal/contract/          # Smart contract bindings
+internal/setup/             # Setup wizard & model discovery
+internal/dashboard/         # Web dashboard
+conf/                       # Configuration
+```
 
-**CLI Commands**
-- Check `cmd/computing-provider/` for CLI command patterns
-- Review `main.go` for command registration
-- Look at existing commands (wallet.go, task.go, ubi.go) for patterns
+**CLI Commands** (`cmd/computing-provider/`)
+- `main.go` - Command registration
+- `ubi.go` - `run` command, REST API routes, inference startup
+- `setup.go` - Setup wizard (auth, model discovery, config generation)
+- `inference.go` - Swan Inference status/config commands
+- `wallet.go` - Wallet management
+- `task.go` - Task listing
 
-**Core Services**
-- Check `internal/computing/` for service implementations
-- Review `k8s_service.go` for Kubernetes operations
-- Review `space_service.go` for job deployment patterns
-- Review `ubi_service.go` for UBI/ZK proof task handling
-- Review `cron_task.go` for background job patterns
-- Check `wire.go` and `wire_gen.go` for dependency injection
+**Inference Core** (`internal/computing/`)
+- `inference_client.go` - WebSocket client for Swan Inference (connect, register, heartbeat, message handling)
+- `inference_service.go` - Request forwarding to model servers, streaming, warmup
+- `model_registry.go` - Model config management, hot-reload from models.json
+- `model_health_checker.go` - Health monitoring with circuit breaker
+- `docker_service.go` - Docker container management
+- `metrics_collector.go` - Request/latency/token metrics
 
-**Smart Contracts**
-- Check `internal/contract/account/` for CP account registration
-- Check `internal/contract/ecp/` for Edge Computing contracts
-- Check `internal/contract/fcp/` for Fog Computing contracts
-- Check `internal/contract/token/` for SWAN token operations
+**Setup & Discovery** (`internal/setup/`)
+- `discovery.go` - Auto-discover model servers (SGLang, vLLM, Ollama), match to Swan Inference model IDs
+- `auth_client.go` - Swan Inference API auth (signup, login, API key management)
+- `prompter.go` - Interactive CLI prompts
 
-**Data Models**
-- Check `internal/models/` for data structures (job.go, resources.go, ubi.go)
-- Check `internal/yaml/` for deployment manifest parsing
+**Configuration** (`conf/`)
+- `config.go` - Config structs, defaults, environment overrides
+- Config file: `$CP_PATH/config.toml`
+- Model endpoints: `$CP_PATH/models.json`
 
-**Configuration**
-- Check `conf/config.go` for configuration structure
-- Check `config.toml.sample` for configuration options
-- Check `build/parameters.json` for network-specific parameters
+**Smart Contracts** (`internal/contract/`)
+- `ecp/` - Edge Computing Provider contracts
+- `account/` - CP account registration
+- `token/` - SWAN token operations
 
-**Infrastructure**
-- Check `internal/db/` for database operations
-- Check `internal/controller/` for HTTP handlers
-- Check `internal/service/` for business logic
-- Check `wallet/` for keystore and transaction signing
-- Check `util/` for utility functions
+**Dashboard** (`internal/dashboard/`)
+- `server.go` - Dashboard HTTP server (port 3005)
+- `ui/` - React frontend (Vite + Tailwind)
 
 ### Step 3: Search External Resources
 
 Use web search to find:
 - Go best practices for the specific feature
-- Kubernetes client-go patterns
-- Ethereum/smart contract interaction patterns
+- WebSocket patterns (gorilla/websocket)
+- Docker SDK patterns
+- OpenAI-compatible API patterns
 - Similar implementations in other Go projects
 
 ### Step 4: Provide Implementation Guidance
@@ -82,134 +90,68 @@ Deliver a research report with:
 2. **Existing Patterns** - How similar features are implemented in the codebase
 3. **Recommended Approach** - Step-by-step implementation plan
 4. **Key Files to Modify** - Specific files that need changes
-5. **Code Examples** - Sample code snippets following project conventions
-6. **Considerations** - Security, performance, and operational considerations
+5. **Code Examples** - Sample code following project conventions
+6. **Considerations** - Security, performance, and operational notes
 7. **References** - Links to relevant documentation
-
----
-
-## Output Format
-
-```markdown
-# Research Report: [Topic]
-
-## Executive Summary
-[2-3 sentence overview]
-
-## Existing Patterns
-- [Pattern 1 with file references]
-- [Pattern 2 with file references]
-
-## Recommended Approach
-
-### CLI Changes
-1. [Step with file path]
-2. [Step with file path]
-
-### Service Changes
-1. [Step with file path]
-2. [Step with file path]
-
-### Contract Integration
-1. [Step with file path]
-2. [Step with file path]
-
-## Key Files
-
-| File | Change Type | Description |
-|------|-------------|-------------|
-| path/to/file | Create/Modify | What to do |
-
-## Code Examples
-
-### [Component/Function Name]
-```go
-// Code following project conventions
-```
-
-## Considerations
-
-### Security
-- [Security consideration]
-
-### Performance
-- [Performance consideration]
-
-### Kubernetes
-- [K8s-specific consideration]
-
-## References
-- [Link to relevant documentation]
-```
 
 ---
 
 ## Common Research Topics
 
+### WebSocket & Swan Inference Integration
+- `internal/computing/inference_client.go` - Connection, registration, heartbeat, message types
+- Message types: register, inference, stream_chunk, stream_end, warmup, heartbeat, ack, error
+- Auth: Bearer token in status check, API key in register payload
+- Config: `WebSocketURL`, `ApiKey`, `Models` in `[Inference]` section
+
+### Model Server Integration
+- `internal/computing/inference_service.go` - Forward requests to `/v1/chat/completions`
+- `internal/computing/model_registry.go` - Load models.json, hot-reload
+- Supports: SGLang, vLLM, Ollama (OpenAI-compatible API)
+- `local_model` field maps Swan model IDs to server model names
+
 ### Adding a New CLI Command
-- Analyze `cmd/computing-provider/` for command patterns
-- Check how commands are registered in `main.go`
-- Review flag handling and validation patterns
-- Look at `tablewriter.go` for output formatting
+- Pattern: `cmd/computing-provider/*.go` using `urfave/cli`
+- Register in `main.go` app.Commands
+- Use `conf.GetConfig()` for configuration access
+- Use `logs.GetLogger()` for logging
 
-### Adding a New Core Service
-- Review `internal/computing/` for service patterns
-- Check `wire.go` for dependency injection setup
-- Look at existing services for initialization patterns
-- Review `provider.go` for service orchestration
+### REST API Endpoints
+- Routes defined in `cmd/computing-provider/ubi.go` (gin router)
+- Base path: `/api/v1/computing/`
+- Inference endpoints: `/api/v1/computing/inference/*`
+- Add new routes in the `startAPIServer()` function
 
-### Working with Kubernetes
-- Check `internal/computing/k8s_service.go` for K8s client patterns
-- Review deployment creation in `deploy.go`
-- Look at `space_service.go` for job lifecycle management
-- Check `internal/yaml/` for manifest parsing
+### Docker Container Management
+- `internal/computing/docker_service.go` - Container lifecycle
+- Uses Docker SDK (`github.com/docker/docker/client`)
+- NVIDIA GPU support via container toolkit
 
-### Smart Contract Integration
-- Review `internal/contract/` for contract stub patterns
-- Check how contract bindings are generated
-- Look at `wallet/transaction.go` for transaction signing
-- Review `internal/contract/utils.go` for common helpers
+### Model Health & Monitoring
+- `internal/computing/model_health_checker.go` - Periodic health checks
+- Circuit breaker pattern for failing models
+- Health updates sent to Swan Inference via WebSocket
 
-### Adding a New Data Model
-- Review `internal/models/` for model patterns
-- Check existing models (job.go, resources.go, ubi.go)
-- Look at how models are used in services
+### Setup Wizard & Model Discovery
+- `internal/setup/discovery.go` - Probe endpoints for model servers
+- `internal/setup/auth_client.go` - Swan Inference API (signup/login)
+- Auto-match local models to Swan Inference model catalog
 
-### Working with Configuration
-- Review `conf/config.go` for config structure
-- Check `build/parameters.json` for network parameters
-- Look at how `CP_PATH` environment variable is used
-
-### Background Tasks and Cron Jobs
-- Check `internal/computing/cron_task.go` for scheduled task patterns
-- Review how tasks are registered and executed
-- Look at error handling and retry patterns
-
-### UBI/ZK Proof Tasks
-- Review `internal/computing/ubi_service.go` for task handling
-- Check `internal/computing/sequence_service.go` for sequencer integration
-- Look at `internal/contract/ecp/` for task contracts
-
-### HTTP API Endpoints
-- Check `internal/computing/http.go` for route definitions
-- Review `internal/controller/` for handler implementations
-- Look at `util/response.go` for response formatting
-
-### Wallet and Transaction Operations
-- Review `wallet/wallet.go` for wallet management
-- Check `wallet/keystore.go` for key storage
-- Look at `wallet/transaction.go` for signing patterns
+### Dashboard
+- `internal/dashboard/server.go` - Go HTTP server
+- `internal/dashboard/ui/` - React + Vite + Tailwind
+- Proxies to inference API endpoints
 
 ---
 
 ## Project Conventions
 
 ### Go Patterns
-- Use `internal/` for non-exported packages
-- Google Wire for dependency injection
-- urfave/cli for CLI command framework
-- client-go for Kubernetes operations
-- go-ethereum for blockchain interactions
+- `internal/` for non-exported packages
+- `urfave/cli` for CLI framework
+- `gin` for HTTP router
+- `gorilla/websocket` for WebSocket client
+- Docker SDK for container management
 
 ### Error Handling
 - Return errors up the call stack
@@ -218,15 +160,14 @@ Deliver a research report with:
 
 ### Configuration
 - Config loaded from `$CP_PATH/config.toml`
-- Network parameters embedded at build time
+- Environment overrides: `CP_PATH`, `INFERENCE_API_KEY`, `INFERENCE_WS_URL`
 - Use `conf.GetConfig()` to access configuration
 
-### Testing
-- Tests in `test/` directory
-- Use `go test ./...` to run all tests
-- Most tests require Kubernetes cluster access
+### Development
+- `go run ./cmd/computing-provider run` (always runs latest code)
+- `make clean && make mainnet && make install` for binary
+- Dashboard: `computing-provider dashboard` (port 3005)
 
 ### Build
 - Use Makefile targets (`make mainnet`, `make testnet`)
-- Network tag set via ldflags at build time
 - Binary installed to `/usr/local/bin/computing-provider`
