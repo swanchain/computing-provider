@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -476,9 +477,16 @@ func (c *InferenceClient) reconnect() {
 	}
 }
 
-// detectGPUHardware detects GPU hardware information using nvidia-smi
+// detectGPUHardware detects GPU hardware information
 func detectGPUHardware() *HardwareInfo {
-	// Run nvidia-smi to get GPU info
+	if runtime.GOOS == "darwin" {
+		return detectAppleSiliconHardware()
+	}
+	return detectNvidiaHardware()
+}
+
+// detectNvidiaHardware detects NVIDIA GPU hardware using nvidia-smi
+func detectNvidiaHardware() *HardwareInfo {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
 	output, err := cmd.Output()
 	if err != nil {
@@ -520,24 +528,66 @@ func detectGPUHardware() *HardwareInfo {
 		gpuType = strings.Replace(gpuModel, "NVIDIA ", "", 1)
 	}
 
-	// Get CUDA version
-	cudaVersion := ""
+	// Get compute capability
+	computeCap := ""
 	cudaCmd := exec.Command("nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader")
 	if cudaOutput, err := cudaCmd.Output(); err == nil {
-		cudaVersion = strings.TrimSpace(string(cudaOutput))
+		computeCap = strings.TrimSpace(string(cudaOutput))
 	}
 
 	hardware := &HardwareInfo{
 		GPUType:           gpuType,
 		GPUModel:          gpuModel,
 		VRAMGB:            vramGB,
-		GPUCount:          len(lines), // Count of GPUs
-		ComputeCapability: cudaVersion,
+		GPUCount:          len(lines),
+		ComputeCapability: computeCap,
 		DriverVersion:     driverVersion,
-		CUDAVersion:       "", // nvidia-smi doesn't directly expose CUDA version
 	}
 
 	logs.GetLogger().Infof("Detected GPU hardware: %s (%dGB VRAM x%d)", gpuType, vramGB, len(lines))
+	return hardware
+}
+
+// detectAppleSiliconHardware detects Apple Silicon GPU hardware
+func detectAppleSiliconHardware() *HardwareInfo {
+	// Detect chip model via sysctl
+	gpuModel := "Apple Silicon"
+	gpuType := "apple_silicon"
+
+	chipCmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
+	if chipOutput, err := chipCmd.Output(); err == nil {
+		chip := strings.TrimSpace(string(chipOutput))
+		if chip != "" {
+			gpuModel = chip
+			// Extract chip type for gpu_type (e.g., "Apple M3 Max" -> "m3_max")
+			chipLower := strings.ToLower(chip)
+			chipLower = strings.ReplaceAll(chipLower, "apple ", "")
+			chipLower = strings.ReplaceAll(chipLower, " ", "_")
+			gpuType = chipLower
+		}
+	}
+
+	// Get total system memory (unified memory on Apple Silicon)
+	vramGB := 0
+	memCmd := exec.Command("sysctl", "-n", "hw.memsize")
+	if memOutput, err := memCmd.Output(); err == nil {
+		memBytes, _ := strconv.ParseInt(strings.TrimSpace(string(memOutput)), 10, 64)
+		if memBytes > 0 {
+			vramGB = int(memBytes / (1024 * 1024 * 1024))
+		}
+	}
+	if vramGB == 0 {
+		vramGB = 8 // Conservative fallback
+	}
+
+	hardware := &HardwareInfo{
+		GPUType:  gpuType,
+		GPUModel: gpuModel,
+		VRAMGB:   vramGB,
+		GPUCount: 1,
+	}
+
+	logs.GetLogger().Infof("Detected Apple Silicon hardware: %s (%dGB unified memory)", gpuModel, vramGB)
 	return hardware
 }
 
