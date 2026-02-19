@@ -109,12 +109,12 @@ The wizard handles:
 **Example models.json:**
 ```json
 {
-  "llama-3.2-3b": {
+  "meta-llama/Llama-3.2-3B-Instruct": {
     "endpoint": "http://localhost:30000",
     "gpu_memory": 8000,
     "category": "text-generation"
   },
-  "qwen-2.5-7b": {
+  "Qwen/Qwen2.5-7B-Instruct": {
     "endpoint": "http://localhost:11434",
     "gpu_memory": 14000,
     "category": "text-generation",
@@ -123,7 +123,7 @@ The wizard handles:
 }
 ```
 
-> **Note:** `local_model` is used when your server uses different model names (e.g., Ollama's `qwen2.5:7b` vs Swan's `qwen-2.5-7b`)
+> **Note:** Model IDs use HuggingFace repo IDs (e.g., `meta-llama/Llama-3.2-3B-Instruct`). `local_model` is used when your server uses different model names (e.g., Ollama's `qwen2.5:7b`)
 
 **Start SGLang server:**
 ```bash
@@ -131,7 +131,7 @@ docker run -d --gpus all -p 30000:30000 --name sglang \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.2-3B-Instruct \
-    --host 0.0.0.0 --port 30000 --served-model-name llama-3.2-3b
+    --host 0.0.0.0 --port 30000
 ```
 
 ## Key CLI Commands
@@ -242,7 +242,7 @@ NodeName = "my-provider"
 Enable = true
 WebSocketURL = "wss://inference.swanchain.io/ws"
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Your provider API key
-Models = ["llama-3.2-3b"]
+Models = ["meta-llama/Llama-3.2-3B-Instruct"]
 ```
 
 **Environment overrides:**
