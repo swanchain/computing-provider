@@ -459,7 +459,7 @@ var inferenceStatusCmd = &cli.Command{
 			fmt.Println("To use Swan Inference, you need a provider API key.")
 			fmt.Println()
 			fmt.Println("Quick start:")
-			fmt.Println("  computing-provider inference keygen --name \"My Provider\" --owner-address 0x...")
+			fmt.Println("  computing-provider inference keygen")
 			fmt.Println()
 			fmt.Println("Or manually:")
 			fmt.Println("  1. Sign up at https://inference.swanchain.io or via API")
