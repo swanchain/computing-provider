@@ -24,6 +24,7 @@ var inferenceCmd = &cli.Command{
 		inferenceConfigCmd,
 		inferenceKeygenCmd,
 		inferenceRequestApprovalCmd,
+		inferenceDepositCmd,
 	},
 }
 
@@ -61,6 +62,28 @@ type ApprovalRequestResponse struct {
 	Status      string `json:"status"`
 	Message     string `json:"message"`
 	RequestedAt string `json:"requested_at"`
+}
+
+// CollateralChainInfo mirrors the backend chain info response
+type CollateralChainInfo struct {
+	ChainID         int64   `json:"chain_id"`
+	ChainName       string  `json:"chain_name"`
+	ContractAddress string  `json:"contract_address"`
+	TokenAddress    string  `json:"token_address"`
+	TokenSymbol     string  `json:"token_symbol"`
+	TokenDecimals   int     `json:"token_decimals"`
+	MinCollateral   float64 `json:"min_collateral"`
+	RPCURL          string  `json:"rpc_url"`
+	ExplorerURL     string  `json:"explorer_url"`
+	FaucetURL       string  `json:"faucet_url"`
+}
+
+// CollateralCheckResponse mirrors the backend collateral check response
+type CollateralCheckResponse struct {
+	HasCollateral bool            `json:"has_collateral"`
+	Required      bool            `json:"required"`
+	AmountRequired float64        `json:"amount_required"`
+	Collateral    json.RawMessage `json:"collateral,omitempty"`
 }
 
 // getServiceURL determines the HTTP API URL from config
@@ -101,6 +124,10 @@ var inferenceKeygenCmd = &cli.Command{
 			Usage:    "Owner wallet address (0x...)",
 			Required: true,
 		},
+		&cli.StringFlag{
+			Name:  "email",
+			Usage: "Contact email for notifications (optional)",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
@@ -123,10 +150,14 @@ var inferenceKeygenCmd = &cli.Command{
 		}
 
 		signupURL := serviceURL + "/api/v1/provider/signup"
-		reqBody, _ := json.Marshal(map[string]string{
+		signupData := map[string]string{
 			"name":          name,
 			"owner_address": ownerAddress,
-		})
+		}
+		if email := cctx.String("email"); email != "" {
+			signupData["contact_email"] = email
+		}
+		reqBody, _ := json.Marshal(signupData)
 
 		client := &http.Client{Timeout: 15 * time.Second}
 		resp, err := client.Post(signupURL, "application/json", bytes.NewReader(reqBody))
@@ -461,6 +492,181 @@ var inferenceStatusCmd = &cli.Command{
 		}
 
 		fmt.Println()
+		return nil
+	},
+}
+
+var inferenceDepositCmd = &cli.Command{
+	Name:  "deposit",
+	Usage: "Check deposit status or get instructions to deposit collateral",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "check",
+			Usage: "Check current collateral status",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
+
+		cfg := conf.GetConfig()
+		serviceURL := getServiceURL(cfg)
+		apiKey := getAPIKey(cfg)
+
+		if apiKey == "" {
+			return fmt.Errorf("no API key configured. Run 'computing-provider inference keygen' first")
+		}
+
+		// Step 1: Check provider status
+		statusURL := serviceURL + "/api/v1/provider/status"
+		client := &http.Client{Timeout: 15 * time.Second}
+		req, err := http.NewRequest("GET", statusURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to connect to Swan Inference: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %v", err)
+		}
+
+		var status ProviderStatusResponse
+		if err := json.Unmarshal(body, &status); err != nil {
+			return fmt.Errorf("failed to parse status: %v", err)
+		}
+
+		// Gate by status
+		switch status.Status {
+		case "pending":
+			color.Yellow("Your provider is still pending.")
+			fmt.Println("Run 'computing-provider inference request-approval' to request admin approval first.")
+			return nil
+		case "under_review":
+			color.Yellow("Your provider is under review.")
+			fmt.Println("Please wait for admin approval (typically 1-3 business days).")
+			return nil
+		case "active":
+			color.Green("Your provider is already active and earning rewards!")
+			fmt.Println("Collateral deposit has been confirmed. No further action needed.")
+			return nil
+		case "approved", "activating":
+			// Proceed to show deposit info
+		default:
+			return fmt.Errorf("unexpected provider status: %s", status.Status)
+		}
+
+		if status.Status == "activating" {
+			color.Cyan("Your collateral deposit is confirmed. Provider is activating.")
+			fmt.Println("Your provider will be fully active within approximately 2 hours.")
+			fmt.Println("No further action needed.")
+			return nil
+		}
+
+		// Step 2: Get chain/contract info (public endpoint, no auth)
+		contractURL := serviceURL + "/api/v1/provider/collateral/contract"
+		contractResp, err := client.Get(contractURL)
+		if err != nil {
+			return fmt.Errorf("failed to get contract info: %v", err)
+		}
+		defer contractResp.Body.Close()
+
+		contractBody, err := io.ReadAll(contractResp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read contract info: %v", err)
+		}
+
+		var contractData struct {
+			Chains []CollateralChainInfo `json:"chains"`
+		}
+		if err := json.Unmarshal(contractBody, &contractData); err != nil {
+			return fmt.Errorf("failed to parse contract info: %v", err)
+		}
+
+		// Step 3: Display deposit instructions
+		fmt.Println()
+		fmt.Println("Swan Inference Collateral Deposit")
+		fmt.Println(strings.Repeat("=", 45))
+		color.Green("Your provider has been approved!")
+		fmt.Println()
+		fmt.Println("To start earning rewards, deposit collateral on one of the supported chains:")
+		fmt.Println()
+
+		for i, chain := range contractData.Chains {
+			if i > 0 {
+				fmt.Println(strings.Repeat("-", 40))
+			}
+			fmt.Printf("  Chain:            %s (ID: %d)\n", chain.ChainName, chain.ChainID)
+			fmt.Printf("  Token:            %s\n", chain.TokenSymbol)
+			fmt.Printf("  Min Collateral:   %.2f %s\n", chain.MinCollateral, chain.TokenSymbol)
+			fmt.Printf("  Contract:         %s\n", chain.ContractAddress)
+			if chain.ExplorerURL != "" {
+				fmt.Printf("  Explorer:         %s\n", chain.ExplorerURL)
+			}
+			if chain.FaucetURL != "" {
+				fmt.Printf("  Faucet (testnet): %s\n", chain.FaucetURL)
+			}
+		}
+
+		fmt.Println()
+		color.Yellow("How to deposit:")
+		fmt.Println("  1. Visit your Provider Dashboard to complete the deposit via MetaMask")
+		fmt.Printf("     %s/dashboard\n", serviceURL)
+		fmt.Println("  2. Or deposit directly to the contract from your owner wallet")
+		fmt.Println("  3. After deposit, your provider will activate within ~2 hours")
+		fmt.Println()
+
+		// Step 4: If --check, show current collateral status
+		if cctx.Bool("check") {
+			fmt.Println("Checking collateral status...")
+			fmt.Println()
+
+			collateralURL := serviceURL + "/api/v1/provider/collateral"
+			collReq, err := http.NewRequest("GET", collateralURL, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create request: %v", err)
+			}
+			collReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+			collResp, err := client.Do(collReq)
+			if err != nil {
+				return fmt.Errorf("failed to check collateral: %v", err)
+			}
+			defer collResp.Body.Close()
+
+			collBody, err := io.ReadAll(collResp.Body)
+			if err != nil {
+				return fmt.Errorf("failed to read collateral response: %v", err)
+			}
+
+			var collStatus CollateralCheckResponse
+			if err := json.Unmarshal(collBody, &collStatus); err != nil {
+				return fmt.Errorf("failed to parse collateral status: %v", err)
+			}
+
+			if collStatus.HasCollateral {
+				color.Green("Collateral record found!")
+				fmt.Printf("  Raw data: %s\n", string(collStatus.Collateral))
+			} else {
+				color.Yellow("No collateral deposit found yet.")
+				if collStatus.Required {
+					fmt.Printf("  Required amount: %.2f\n", collStatus.AmountRequired)
+				}
+			}
+			fmt.Println()
+		}
+
 		return nil
 	},
 }
