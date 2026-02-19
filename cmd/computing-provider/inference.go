@@ -13,6 +13,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/mitchellh/go-homedir"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/setup"
 	"github.com/urfave/cli/v2"
 )
 
@@ -112,21 +113,42 @@ func getAPIKey(cfg *conf.ComputeNode) string {
 
 var inferenceKeygenCmd = &cli.Command{
 	Name:  "keygen",
-	Usage: "Generate a provider API key (register with Swan Inference)",
+	Usage: "Generate a provider API key (login/signup with Swan Inference account)",
+	Description: `Generate or retrieve a provider API key by logging in or creating a Swan Inference account.
+
+This command links your provider to a user account, allowing you to:
+  - Log into the Swan Inference dashboard
+  - Manage API keys and provider settings
+  - Track earnings and performance
+
+Examples:
+  # Interactive login/signup flow (recommended)
+  computing-provider inference keygen
+
+  # Provide an existing API key directly
+  computing-provider inference keygen --api-key=sk-prov-xxx
+
+  # Specify provider name
+  computing-provider inference keygen --name "My GPU Provider"
+
+  # Legacy standalone signup (deprecated)
+  computing-provider inference keygen --standalone --name=test --owner-address=0x...`,
 	Flags: []cli.Flag{
 		&cli.StringFlag{
-			Name:     "name",
-			Usage:    "Provider name",
-			Required: true,
+			Name:  "name",
+			Usage: "Provider name (defaults to node name from config)",
 		},
 		&cli.StringFlag{
-			Name:     "owner-address",
-			Usage:    "Owner wallet address (0x...)",
-			Required: true,
+			Name:  "owner-address",
+			Usage: "Owner wallet address (0x...), required for --standalone",
 		},
 		&cli.StringFlag{
-			Name:  "email",
-			Usage: "Contact email for notifications (optional)",
+			Name:  "api-key",
+			Usage: "Provide an existing API key directly (skip authentication)",
+		},
+		&cli.BoolFlag{
+			Name:  "standalone",
+			Usage: "Use legacy standalone signup without user account (deprecated)",
 		},
 	},
 	Action: func(cctx *cli.Context) error {
@@ -138,102 +160,161 @@ var inferenceKeygenCmd = &cli.Command{
 			return fmt.Errorf("failed to load config: %v", err)
 		}
 
-		cfg := conf.GetConfig()
-		serviceURL := getServiceURL(cfg)
-
-		name := cctx.String("name")
-		ownerAddress := cctx.String("owner-address")
-
-		// Validate owner address format
-		if !strings.HasPrefix(ownerAddress, "0x") || len(ownerAddress) != 42 {
-			return fmt.Errorf("invalid owner-address: must be a 42-character hex address starting with 0x")
+		// Legacy standalone mode
+		if cctx.Bool("standalone") {
+			return keygenStandalone(cctx, cpRepoPath)
 		}
 
-		signupURL := serviceURL + "/api/v1/provider/signup"
-		signupData := map[string]string{
-			"name":          name,
-			"owner_address": ownerAddress,
+		// Determine node name from --name flag or config
+		nodeName := cctx.String("name")
+		if nodeName == "" {
+			nodeName = getNodeNameFromConfig(cpRepoPath)
 		}
-		if email := cctx.String("email"); email != "" {
-			signupData["contact_email"] = email
-		}
-		reqBody, _ := json.Marshal(signupData)
 
-		client := &http.Client{Timeout: 15 * time.Second}
-		resp, err := client.Post(signupURL, "application/json", bytes.NewReader(reqBody))
+		providedApiKey := cctx.String("api-key")
+
+		// Use the account-based authentication flow
+		setup.PrintHeader("Swan Inference - Provider Key Generation")
+
+		prompter := setup.NewPrompter()
+		apiKey, err := handleAuthentication(cpRepoPath, prompter, providedApiKey, nodeName)
 		if err != nil {
-			return fmt.Errorf("failed to connect to Swan Inference: %v", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read response: %v", err)
+			return err
 		}
 
-		if resp.StatusCode == http.StatusConflict {
-			return fmt.Errorf("a provider with this owner address already exists. Use 'inference status' to check your provider")
-		}
-
-		if resp.StatusCode != http.StatusCreated {
-			var errResp struct {
-				Error struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
-				return fmt.Errorf("signup failed: %s", errResp.Error.Message)
-			}
-			return fmt.Errorf("signup failed (HTTP %d): %s", resp.StatusCode, string(body))
-		}
-
-		var signup ProviderSignupResponse
-		if err := json.Unmarshal(body, &signup); err != nil {
-			return fmt.Errorf("failed to parse response: %v", err)
-		}
-
-		// Save API key to config
-		if err := conf.UpdateInferenceConfig(cpRepoPath, signup.APIKey, nil); err != nil {
+		// Save API key to config.toml
+		if err := conf.UpdateInferenceConfig(cpRepoPath, apiKey, nil); err != nil {
 			color.Yellow("Warning: Could not save API key to config: %v", err)
 			fmt.Println("Please manually add to config.toml:")
-			fmt.Printf("  [Inference]\n  ApiKey = \"%s\"\n", signup.APIKey)
+			fmt.Printf("  [Inference]\n  ApiKey = \"%s\"\n", apiKey)
 		} else {
-			color.Green("API key saved to config.toml")
+			setup.PrintSuccess("API key saved to config.toml")
 		}
 
-		// Display results
+		// Display success and next steps
 		fmt.Println()
-		fmt.Println("Swan Inference Provider Registration")
-		fmt.Println(strings.Repeat("=", 45))
-		color.Green("Registration successful!")
+		setup.PrintHeader("Provider Key Generated!")
+		fmt.Println("Your provider is now linked to your Swan Inference account.")
 		fmt.Println()
-		fmt.Printf("Provider ID: %s\n", signup.ProviderID)
-		fmt.Printf("Status:      %s\n", signup.Status)
-		fmt.Printf("Can Connect: %v\n", signup.CanConnect)
-		fmt.Println()
-
-		color.Yellow("YOUR API KEY (save this — it won't be shown again!):")
-		fmt.Println(signup.APIKey)
+		fmt.Println("Next steps:")
+		setup.PrintBullet("Start the provider: computing-provider run")
+		setup.PrintBullet("View dashboard: computing-provider dashboard")
+		setup.PrintBullet("Check status: computing-provider inference status")
 		fmt.Println()
 
-		if signup.Warning != "" {
-			color.Yellow("Warning: %s", signup.Warning)
-			fmt.Println()
-		}
-
-		fmt.Println(signup.Message)
-
-		if len(signup.NextSteps) > 0 {
-			fmt.Println()
-			fmt.Println("Next Steps:")
-			for _, step := range signup.NextSteps {
-				fmt.Printf("  %s\n", step)
-			}
-		}
-
-		fmt.Println()
 		return nil
 	},
+}
+
+// keygenStandalone runs the legacy standalone signup (POST /api/v1/provider/signup)
+// without linking to a user account. This is deprecated.
+func keygenStandalone(cctx *cli.Context, cpRepoPath string) error {
+	color.Yellow("WARNING: --standalone is deprecated. Providers created without an account")
+	color.Yellow("cannot log into the dashboard. Run 'inference keygen' without --standalone instead.")
+	fmt.Println()
+
+	name := cctx.String("name")
+	if name == "" {
+		return fmt.Errorf("--name is required for standalone signup")
+	}
+
+	ownerAddress := cctx.String("owner-address")
+	if ownerAddress == "" {
+		return fmt.Errorf("--owner-address is required for standalone signup")
+	}
+
+	// Validate owner address format
+	if !strings.HasPrefix(ownerAddress, "0x") || len(ownerAddress) != 42 {
+		return fmt.Errorf("invalid owner-address: must be a 42-character hex address starting with 0x")
+	}
+
+	cfg := conf.GetConfig()
+	serviceURL := getServiceURL(cfg)
+
+	signupURL := serviceURL + "/api/v1/provider/signup"
+	signupData := map[string]string{
+		"name":          name,
+		"owner_address": ownerAddress,
+	}
+	reqBody, _ := json.Marshal(signupData)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(signupURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to connect to Swan Inference: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %v", err)
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("a provider with this owner address already exists. Use 'inference status' to check your provider")
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errResp struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+			return fmt.Errorf("signup failed: %s", errResp.Error.Message)
+		}
+		return fmt.Errorf("signup failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	var signup ProviderSignupResponse
+	if err := json.Unmarshal(body, &signup); err != nil {
+		return fmt.Errorf("failed to parse response: %v", err)
+	}
+
+	// Save API key to config
+	if err := conf.UpdateInferenceConfig(cpRepoPath, signup.APIKey, nil); err != nil {
+		color.Yellow("Warning: Could not save API key to config: %v", err)
+		fmt.Println("Please manually add to config.toml:")
+		fmt.Printf("  [Inference]\n  ApiKey = \"%s\"\n", signup.APIKey)
+	} else {
+		color.Green("API key saved to config.toml")
+	}
+
+	// Display results
+	fmt.Println()
+	fmt.Println("Swan Inference Provider Registration (Standalone)")
+	fmt.Println(strings.Repeat("=", 50))
+	color.Green("Registration successful!")
+	fmt.Println()
+	fmt.Printf("Provider ID: %s\n", signup.ProviderID)
+	fmt.Printf("Status:      %s\n", signup.Status)
+	fmt.Printf("Can Connect: %v\n", signup.CanConnect)
+	fmt.Println()
+
+	color.Yellow("YOUR API KEY (save this — it won't be shown again!):")
+	fmt.Println(signup.APIKey)
+	fmt.Println()
+
+	if signup.Warning != "" {
+		color.Yellow("Warning: %s", signup.Warning)
+		fmt.Println()
+	}
+
+	fmt.Println(signup.Message)
+
+	if len(signup.NextSteps) > 0 {
+		fmt.Println()
+		fmt.Println("Next Steps:")
+		for _, step := range signup.NextSteps {
+			fmt.Printf("  %s\n", step)
+		}
+	}
+
+	fmt.Println()
+	color.Yellow("TIP: Run 'computing-provider inference keygen' (without --standalone) to link")
+	color.Yellow("your provider to a user account for dashboard access.")
+	fmt.Println()
+	return nil
 }
 
 var inferenceRequestApprovalCmd = &cli.Command{
