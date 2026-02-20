@@ -95,10 +95,40 @@ docker pull lmsysorg/sglang:latest
 docker pull nvcr.io/nvidia/sglang:25.04
 ```
 
-### 2. Start SGLang Server
+### 2. Get Model Weights
+
+**Option A: Swan Model Repository (Recommended)**
+
+Download verified weights from Swan's repository. See [Using Swan Model Repository](#using-swan-model-repository-recommended) below for the full workflow.
 
 ```bash
-# Basic deployment with Qwen 2.5 7B (no HuggingFace auth required)
+computing-provider models catalog                        # Browse available models
+computing-provider models download Qwen/Qwen2.5-7B-Instruct  # Download with hash verification
+```
+
+**Option B: Direct from HuggingFace**
+
+SGLang can download directly from HuggingFace (slower, no hash verification, may require auth for gated models).
+
+### 3. Start SGLang Server
+
+```bash
+# With Swan Model Repository weights (recommended):
+docker run -d \
+  --name sglang-qwen \
+  --gpus all \
+  --shm-size 32g \
+  --ipc=host \
+  -p 30000:30000 \
+  -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+    --model-path /models \
+    --host 0.0.0.0 \
+    --port 30000 \
+    --served-model-name Qwen/Qwen2.5-7B-Instruct
+
+# Or with direct HuggingFace download:
 docker run -d \
   --name sglang-qwen \
   --gpus all \
@@ -111,7 +141,7 @@ docker run -d \
     --model-path Qwen/Qwen2.5-7B-Instruct \
     --host 0.0.0.0 \
     --port 30000 \
-    --served-model-name qwen-2.5-7b
+    --served-model-name Qwen/Qwen2.5-7B-Instruct
 ```
 
 ### 3. Verify Server
@@ -521,42 +551,76 @@ for i in "${!CONTAINERS[@]}"; do
 done
 ```
 
-## Using Swan Model Repository
+## Using Swan Model Repository (Recommended)
 
-Swan provides a self-hosted model repository with verified weights on NebulaBlock cloud storage. This ensures providers download canonical, unmodified model weights with SHA256 hash verification.
+Swan provides a self-hosted model repository with verified weights on NebulaBlock cloud storage. **This is the recommended way to get model weights** — it ensures all providers use canonical, unmodified weights with SHA256 hash verification.
 
-### Download Verified Weights
+### Step 1: Browse Available Models
+
+```bash
+# See what models are available for download
+computing-provider models catalog
+
+# Example output:
+# +--------------------------------------+----------+-------+---------+----------------+
+# |              MODEL ID                | CATEGORY | FILES |  SIZE   |     STATUS     |
+# +--------------------------------------+----------+-------+---------+----------------+
+# | Qwen/Qwen2.5-0.5B-Instruct          |   llm    |    10 | 953 MB  | not downloaded |
+# | meta-llama/Llama-3.1-8B-Instruct     |   llm    |    20 | 16.1 GB | downloaded     |
+# +--------------------------------------+----------+-------+---------+----------------+
+
+# JSON output for scripting
+computing-provider models catalog --json
+```
+
+### Step 2: Download Model Weights
 
 ```bash
 # Download a model (files are verified after download)
-computing-provider models download meta-llama/Llama-3.1-8B-Instruct
+computing-provider models download Qwen/Qwen2.5-7B-Instruct
 
 # Download to a custom directory
-computing-provider models download --dest /data/models/llama-8b meta-llama/Llama-3.1-8B-Instruct
-
-# Verify existing weights
-computing-provider models verify meta-llama/Llama-3.1-8B-Instruct
-
-# List locally downloaded models
-computing-provider models list
+computing-provider models download --dest /data/models Qwen/Qwen2.5-7B-Instruct
 ```
 
-### Start SGLang with Local Weights
+Default download location: `~/.swan/models/<model-id>`
+
+### Step 3: Verify Weights (Optional)
 
 ```bash
-# Start SGLang with pre-downloaded weights (no HuggingFace download needed)
-docker run -d --gpus all -p 30000:30000 \
-  -v ~/.swan/models/meta-llama/Llama-3.1-8B-Instruct:/models \
+# Re-verify integrity of local weights at any time
+computing-provider models verify Qwen/Qwen2.5-7B-Instruct
+```
+
+### Step 4: Start SGLang with Local Weights
+
+```bash
+# Mount the downloaded weights into the SGLang container
+docker run -d --gpus all --shm-size 32g --ipc=host \
+  -p 30000:30000 \
+  -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
   lmsysorg/sglang:latest \
-  python3 -m sglang.launch_server --model-path /models --host 0.0.0.0 --port 30000
+  python3 -m sglang.launch_server \
+    --model-path /models \
+    --host 0.0.0.0 \
+    --port 30000 \
+    --served-model-name Qwen/Qwen2.5-7B-Instruct
+```
+
+### Step 5: List Local Models
+
+```bash
+# See what you have downloaded
+computing-provider models list
 ```
 
 ### Benefits
 
 - **Verified weights**: Every file is SHA256 hash-verified against the Swan registry
-- **Resume support**: Interrupted downloads resume automatically (matching files are skipped)
+- **Resume support**: Interrupted downloads resume automatically (verified files are skipped)
 - **No HuggingFace auth**: Downloads from Swan's public S3 bucket, no tokens needed
 - **Consistent source**: All providers use the same canonical weights
+- **Faster downloads**: NebulaBlock S3 provides reliable, fast downloads without HuggingFace rate limits
 
 ## vLLM Alternative
 
