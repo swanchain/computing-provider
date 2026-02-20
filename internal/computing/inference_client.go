@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -17,7 +18,9 @@ import (
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/mitchellh/go-homedir"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 )
 
 // Inference WebSocket Protocol Types
@@ -54,6 +57,21 @@ type HardwareInfo struct {
 	CUDAVersion       string `json:"cuda_version"`
 }
 
+// ModelInfo contains model identification and verification hash
+type ModelInfo struct {
+	ModelID    string `json:"model_id"`
+	WeightHash string `json:"weight_hash,omitempty"` // Composite SHA256 of all weight files
+	HashAlgo   string `json:"hash_algo,omitempty"`   // Hash algorithm, e.g. "sha256"
+}
+
+// VerifyResponsePayload is returned after processing a verification challenge
+type VerifyResponsePayload struct {
+	ChallengeID string          `json:"challenge_id"`
+	Success     bool            `json:"success"`
+	Response    json.RawMessage `json:"response"`
+	Error       string          `json:"error,omitempty"`
+}
+
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
 	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
@@ -63,6 +81,7 @@ type RegisterPayload struct {
 	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
 	Signature    string        `json:"signature,omitempty"`
 	Models       []string      `json:"models"`
+	ModelHashes  []ModelInfo   `json:"model_hashes,omitempty"`       // Per-model composite hashes for verification
 	Capabilities []string      `json:"capabilities"`
 	Hardware     *HardwareInfo `json:"hardware,omitempty"`
 }
@@ -600,6 +619,9 @@ func (c *InferenceClient) register() error {
 	hardware := detectGPUHardware()
 	c.hardware = hardware
 
+	// Load hash manifests for each model
+	modelHashes := c.loadModelHashes()
+
 	payload := RegisterPayload{
 		NodeID:       c.nodeID,   // Local node ID for routing
 		ProviderID:   c.nodeID,   // Deprecated: kept for backward compatibility
@@ -607,6 +629,7 @@ func (c *InferenceClient) register() error {
 		OwnerAddr:    c.ownerAddr,
 		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
 		Models:       c.models,
+		ModelHashes:  modelHashes,
 		Capabilities: []string{"inference", "verification"},
 		Hardware:     hardware,
 	}
@@ -1072,11 +1095,165 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 }
 
 func (c *InferenceClient) handleVerification(requestID string, payload VerifyPayload) {
-	logs.GetLogger().Infof("Processing verification request %s for model %s", requestID, payload.ModelID)
+	logs.GetLogger().Infof("Processing verification request %s for model %s (type: %s)", requestID, payload.ModelID, payload.ChallengeType)
 
-	// Verification implementation would go here
-	// For now, just acknowledge
-	c.sendAck(requestID, true, "verification completed")
+	switch payload.ChallengeType {
+	case "fingerprint":
+		c.handleFingerprintChallenge(requestID, payload)
+	default:
+		logs.GetLogger().Warnf("Unsupported challenge type: %s", payload.ChallengeType)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "unsupported challenge type: "+payload.ChallengeType)
+	}
+}
+
+// FingerprintChallengeData represents the fingerprint challenge from the server
+type FingerprintChallengeData struct {
+	Files []FingerprintChallengeFile `json:"files"`
+}
+
+// FingerprintChallengeFile is a single file in a fingerprint challenge
+type FingerprintChallengeFile struct {
+	Filename     string `json:"filename"`
+	ExpectedHash string `json:"expected_hash"`
+}
+
+// FingerprintResponseData is the response sent back for a fingerprint challenge
+type FingerprintResponseData struct {
+	Files []FingerprintResponseFile `json:"files"`
+}
+
+// FingerprintResponseFile is a single file result in a fingerprint response
+type FingerprintResponseFile struct {
+	Filename string `json:"filename"`
+	Hash     string `json:"hash"`
+	Status   string `json:"status"` // "pass", "fail", "missing"
+}
+
+func (c *InferenceClient) handleFingerprintChallenge(requestID string, payload VerifyPayload) {
+	// Parse the challenge
+	var challenge FingerprintChallengeData
+	if err := json.Unmarshal(payload.Challenge, &challenge); err != nil {
+		logs.GetLogger().Errorf("Failed to parse fingerprint challenge: %v", err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "failed to parse challenge")
+		return
+	}
+
+	// Determine the local model directory
+	modelDir := c.getModelDir(payload.ModelID)
+
+	// Try to load existing hash manifest
+	manifest, err := models.LoadHashManifest(modelDir)
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", payload.ModelID, err)
+	}
+
+	// Build a hash lookup from manifest
+	manifestHashes := make(map[string]string)
+	if manifest != nil {
+		for _, f := range manifest.Files {
+			manifestHashes[f.Filename] = f.Hash
+		}
+	}
+
+	// Verify each challenged file
+	response := FingerprintResponseData{
+		Files: make([]FingerprintResponseFile, 0, len(challenge.Files)),
+	}
+
+	for _, cf := range challenge.Files {
+		result := FingerprintResponseFile{
+			Filename: cf.Filename,
+		}
+
+		// First try manifest lookup (fast)
+		if hash, ok := manifestHashes[cf.Filename]; ok {
+			result.Hash = hash
+			if hash == cf.ExpectedHash {
+				result.Status = "pass"
+			} else {
+				result.Status = "fail"
+			}
+		} else {
+			// No manifest entry — file may not be locally accessible
+			result.Status = "missing"
+		}
+
+		response.Files = append(response.Files, result)
+	}
+
+	// Determine overall success
+	allPass := true
+	for _, f := range response.Files {
+		if f.Status != "pass" {
+			allPass = false
+			break
+		}
+	}
+
+	responseData, _ := json.Marshal(response)
+	c.sendVerifyResponse(requestID, payload.ChallengeID, allPass, responseData, "")
+	logs.GetLogger().Infof("Fingerprint verification %s completed: success=%v", requestID, allPass)
+}
+
+func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, success bool, responseData json.RawMessage, errMsg string) {
+	payload := VerifyResponsePayload{
+		ChallengeID: challengeID,
+		Success:     success,
+		Response:    responseData,
+		Error:       errMsg,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeVerify,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	select {
+	case c.send <- msgBytes:
+	default:
+		logs.GetLogger().Warn("Send buffer full, dropping verify response")
+	}
+}
+
+// loadModelHashes loads hash manifests for all configured models
+func (c *InferenceClient) loadModelHashes() []ModelInfo {
+	hashes := make([]ModelInfo, 0, len(c.models))
+
+	for _, modelID := range c.models {
+		info := ModelInfo{
+			ModelID: modelID,
+		}
+
+		modelDir := c.getModelDir(modelID)
+		manifest, err := models.LoadHashManifest(modelDir)
+		if err != nil {
+			logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
+			hashes = append(hashes, info)
+			continue
+		}
+
+		if manifest != nil {
+			info.WeightHash = manifest.CompositeHash
+			info.HashAlgo = manifest.Algorithm
+			logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, manifest.CompositeHash[:16]+"...")
+		}
+
+		hashes = append(hashes, info)
+	}
+
+	return hashes
+}
+
+// getModelDir returns the local directory for a model's weight files
+func (c *InferenceClient) getModelDir(modelID string) string {
+	home, err := homedir.Dir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".swan", "models", modelID)
 }
 
 func (c *InferenceClient) handleWarmup(requestID string, payload WarmupPayload) {

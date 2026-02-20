@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -81,7 +83,7 @@ func FetchCatalog(serviceURL string) (*CatalogResponse, error) {
 
 // FetchModelFiles calls the swan-inference API to get the file manifest for a model.
 func FetchModelFiles(serviceURL, modelID string) (*ModelFilesResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/models/%s/files", serviceURL, modelID)
+	url := fmt.Sprintf("%s/api/v1/models/%s/files", serviceURL, url.PathEscape(modelID))
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(url)
@@ -149,6 +151,23 @@ func DownloadModel(ctx context.Context, files []ModelFile, destDir string) error
 			return fmt.Errorf("hash mismatch for %s: expected %s, got %s", f.Filename, f.Hash, hash)
 		}
 		fmt.Printf("[%d/%d] verified %s\n", i+1, len(files), f.Filename)
+	}
+
+	return nil
+}
+
+// DownloadModelAndSaveManifest downloads a model and saves the hash manifest.
+// This is the recommended entry point for model downloads.
+func DownloadModelAndSaveManifest(ctx context.Context, modelID string, files []ModelFile, destDir string) error {
+	if err := DownloadModel(ctx, files, destDir); err != nil {
+		return err
+	}
+
+	if err := SaveHashManifest(modelID, destDir, files); err != nil {
+		fmt.Printf("Warning: failed to save hash manifest: %v\n", err)
+		// Non-fatal — model is still usable without manifest
+	} else {
+		fmt.Printf("Saved hash manifest for %s\n", modelID)
 	}
 
 	return nil
@@ -292,4 +311,101 @@ func humanSize(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// --- Hash Manifest for Model Verification ---
+
+// HashManifest stores per-file hashes and a composite hash for model weight verification.
+// Saved as .swan-hash-manifest.json in the model directory.
+type HashManifest struct {
+	ModelID       string             `json:"model_id"`
+	CompositeHash string             `json:"composite_hash"`
+	Algorithm     string             `json:"algorithm"`
+	Files         []HashManifestFile `json:"files"`
+	CreatedAt     string             `json:"created_at"`
+}
+
+// HashManifestFile describes a single file's hash in the manifest
+type HashManifestFile struct {
+	Filename  string `json:"filename"`
+	Hash      string `json:"hash"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+const hashManifestFilename = ".swan-hash-manifest.json"
+
+// ComputeCompositeHash computes a deterministic composite hash from per-file hashes.
+// Algorithm: sort filenames alphabetically, concatenate "filename:hash\n" strings, SHA256 the result.
+// This must match the server-side algorithm in swan-inference.
+func ComputeCompositeHash(files []HashManifestFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	sorted := make([]HashManifestFile, len(files))
+	copy(sorted, files)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Filename < sorted[j].Filename
+	})
+
+	h := sha256.New()
+	for _, f := range sorted {
+		h.Write([]byte(f.Filename + ":" + f.Hash + "\n"))
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// SaveHashManifest saves a hash manifest for a downloaded model.
+// Should be called after DownloadModel() succeeds.
+func SaveHashManifest(modelID, destDir string, files []ModelFile) error {
+	manifestFiles := make([]HashManifestFile, len(files))
+	for i, f := range files {
+		manifestFiles[i] = HashManifestFile{
+			Filename:  f.Filename,
+			Hash:      f.Hash,
+			SizeBytes: f.SizeBytes,
+		}
+	}
+
+	manifest := HashManifest{
+		ModelID:       modelID,
+		CompositeHash: ComputeCompositeHash(manifestFiles),
+		Algorithm:     "sha256",
+		Files:         manifestFiles,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+	}
+
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal hash manifest: %w", err)
+	}
+
+	manifestPath := filepath.Join(destDir, hashManifestFilename)
+	if err := os.WriteFile(manifestPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write hash manifest: %w", err)
+	}
+
+	return nil
+}
+
+// LoadHashManifest loads a hash manifest from a model directory.
+// Returns nil, nil if the manifest does not exist.
+func LoadHashManifest(destDir string) (*HashManifest, error) {
+	manifestPath := filepath.Join(destDir, hashManifestFilename)
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read hash manifest: %w", err)
+	}
+
+	var manifest HashManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse hash manifest: %w", err)
+	}
+
+	return &manifest, nil
 }

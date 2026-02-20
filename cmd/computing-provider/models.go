@@ -174,7 +174,7 @@ Examples:
 		fmt.Printf("Destination: %s\n\n", destDir)
 
 		ctx := context.Background()
-		if err := models.DownloadModel(ctx, manifest.Files, destDir); err != nil {
+		if err := models.DownloadModelAndSaveManifest(ctx, modelID, manifest.Files, destDir); err != nil {
 			return err
 		}
 
