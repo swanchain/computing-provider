@@ -98,6 +98,7 @@ type HeartbeatPayload struct {
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
+	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
 }
 
 // AckPayload for acknowledgments
@@ -207,6 +208,9 @@ type InferenceClient struct {
 	modelHealthProvider       func() map[string]string // Returns current model health for heartbeat
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
+
+	// Cached hardware info (detected once at registration)
+	hardware *HardwareInfo
 
 	// Metrics tracking
 	metrics      *InferenceMetrics
@@ -592,8 +596,9 @@ func detectAppleSiliconHardware() *HardwareInfo {
 }
 
 func (c *InferenceClient) register() error {
-	// Detect GPU hardware
+	// Detect GPU hardware and cache it for heartbeat messages
 	hardware := detectGPUHardware()
+	c.hardware = hardware
 
 	payload := RegisterPayload{
 		NodeID:       c.nodeID,   // Local node ID for routing
@@ -750,6 +755,7 @@ func (c *InferenceClient) sendHeartbeat() {
 		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
+		Hardware:   c.hardware, // Include cached hardware info for periodic updates
 	}
 
 	// Include model health in heartbeat as backup for health update messages
