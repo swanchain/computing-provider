@@ -521,6 +521,43 @@ for i in "${!CONTAINERS[@]}"; do
 done
 ```
 
+## Using Swan Model Repository
+
+Swan provides a self-hosted model repository with verified weights on NebulaBlock cloud storage. This ensures providers download canonical, unmodified model weights with SHA256 hash verification.
+
+### Download Verified Weights
+
+```bash
+# Download a model (files are verified after download)
+computing-provider models download meta-llama/Llama-3.1-8B-Instruct
+
+# Download to a custom directory
+computing-provider models download --dest /data/models/llama-8b meta-llama/Llama-3.1-8B-Instruct
+
+# Verify existing weights
+computing-provider models verify meta-llama/Llama-3.1-8B-Instruct
+
+# List locally downloaded models
+computing-provider models list
+```
+
+### Start SGLang with Local Weights
+
+```bash
+# Start SGLang with pre-downloaded weights (no HuggingFace download needed)
+docker run -d --gpus all -p 30000:30000 \
+  -v ~/.swan/models/meta-llama/Llama-3.1-8B-Instruct:/models \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server --model-path /models --host 0.0.0.0 --port 30000
+```
+
+### Benefits
+
+- **Verified weights**: Every file is SHA256 hash-verified against the Swan registry
+- **Resume support**: Interrupted downloads resume automatically (matching files are skipped)
+- **No HuggingFace auth**: Downloads from Swan's public S3 bucket, no tokens needed
+- **Consistent source**: All providers use the same canonical weights
+
 ## vLLM Alternative
 
 If SGLang doesn't work for your setup, vLLM is a reliable alternative:
