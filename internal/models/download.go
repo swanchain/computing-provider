@@ -37,6 +37,48 @@ type VerifyResult struct {
 	Actual   string
 }
 
+// CatalogModel represents a model available in the Swan Model Repository.
+type CatalogModel struct {
+	ModelID        string `json:"model_id"`
+	Name           string `json:"name"`
+	Category       string `json:"category"`
+	FileCount      int    `json:"file_count"`
+	TotalSizeBytes int64  `json:"total_size_bytes"`
+	WeightSourceURL string `json:"weight_source_url,omitempty"`
+}
+
+// CatalogResponse is the response from GET /api/v1/models/catalog.
+type CatalogResponse struct {
+	Models []CatalogModel `json:"models"`
+	Total  int            `json:"total"`
+}
+
+// FetchCatalog calls the swan-inference API to get the list of available models.
+func FetchCatalog(serviceURL string) (*CatalogResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/models/catalog", serviceURL)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch catalog: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var wrapper struct {
+		Data CatalogResponse `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &wrapper.Data, nil
+}
+
 // FetchModelFiles calls the swan-inference API to get the file manifest for a model.
 func FetchModelFiles(serviceURL, modelID string) (*ModelFilesResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/models/%s/files", serviceURL, modelID)

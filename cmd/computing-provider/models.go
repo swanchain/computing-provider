@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ var modelsCmd = &cli.Command{
 	Name:  "models",
 	Usage: "Manage model weights from the Swan Model Repository",
 	Subcommands: []*cli.Command{
+		modelsCatalogCmd,
 		modelsDownloadCmd,
 		modelsVerifyCmd,
 		modelsListCmd,
@@ -31,6 +33,93 @@ func defaultModelsDir() string {
 		return filepath.Join(".", ".swan", "models")
 	}
 	return filepath.Join(home, ".swan", "models")
+}
+
+var modelsCatalogCmd = &cli.Command{
+	Name:  "catalog",
+	Usage: "List models available for download from the Swan Model Repository",
+	Description: `Shows all models that have been ingested into the Swan Model Repository.
+Indicates which models are already downloaded locally.
+
+Examples:
+  computing-provider models catalog
+  computing-provider models catalog --json`,
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:  "service-url",
+			Usage: "Swan Inference API URL",
+		},
+		&cli.BoolFlag{
+			Name:  "json",
+			Usage: "Output in JSON format",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		serviceURL := cctx.String("service-url")
+		if serviceURL == "" {
+			serviceURL = getModelsServiceURL(cctx)
+		}
+
+		catalog, err := models.FetchCatalog(serviceURL)
+		if err != nil {
+			return fmt.Errorf("failed to fetch catalog: %v", err)
+		}
+
+		if len(catalog.Models) == 0 {
+			fmt.Println("No models available in the Swan Model Repository yet.")
+			return nil
+		}
+
+		// JSON output
+		if cctx.Bool("json") {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(catalog)
+		}
+
+		// Check local download status
+		modelsDir := defaultModelsDir()
+
+		fmt.Printf("Available models in Swan Model Repository (%d):\n\n", catalog.Total)
+
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Model ID", "Category", "Files", "Size", "Status"})
+		table.SetAutoWrapText(false)
+		table.SetColumnAlignment([]int{
+			tablewriter.ALIGN_LEFT,
+			tablewriter.ALIGN_CENTER,
+			tablewriter.ALIGN_RIGHT,
+			tablewriter.ALIGN_RIGHT,
+			tablewriter.ALIGN_CENTER,
+		})
+
+		for _, m := range catalog.Models {
+			status := color.YellowString("not downloaded")
+			localDir := filepath.Join(modelsDir, m.ModelID)
+			if info, err := os.Stat(localDir); err == nil && info.IsDir() {
+				localFiles := countFiles(localDir)
+				if localFiles >= m.FileCount && m.FileCount > 0 {
+					status = color.GreenString("downloaded")
+				} else {
+					status = color.CyanString(fmt.Sprintf("partial (%d/%d)", localFiles, m.FileCount))
+				}
+			}
+
+			table.Append([]string{
+				m.ModelID,
+				m.Category,
+				fmt.Sprintf("%d", m.FileCount),
+				humanSizeCP(m.TotalSizeBytes),
+				status,
+			})
+		}
+
+		table.Render()
+		fmt.Println()
+		fmt.Println("Download a model:  computing-provider models download <model-id>")
+
+		return nil
+	},
 }
 
 var modelsDownloadCmd = &cli.Command{
