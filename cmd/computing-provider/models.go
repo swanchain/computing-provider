@@ -182,10 +182,11 @@ Examples:
 		color.Green("Download complete!")
 		fmt.Println()
 		fmt.Println("To use with SGLang:")
-		fmt.Printf("  docker run -d --gpus all -p 30000:30000 \\\n")
+		fmt.Printf("  docker run -d --gpus all -p 30000:30000 --ipc=host \\\n")
 		fmt.Printf("    -v %s:/models \\\n", destDir)
 		fmt.Printf("    lmsysorg/sglang:latest \\\n")
-		fmt.Printf("    python3 -m sglang.launch_server --model-path /models --host 0.0.0.0 --port 30000\n")
+		fmt.Printf("    python3 -m sglang.launch_server --model-path /models --host 0.0.0.0 --port 30000 \\\n")
+		fmt.Printf("    --served-model-name %s\n", modelID)
 		fmt.Println()
 
 		return nil
