@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,7 +18,9 @@ import (
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/mitchellh/go-homedir"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/models"
 )
 
 // Inference WebSocket Protocol Types
@@ -53,6 +57,21 @@ type HardwareInfo struct {
 	CUDAVersion       string `json:"cuda_version"`
 }
 
+// ModelInfo contains model identification and verification hash
+type ModelInfo struct {
+	ModelID    string `json:"model_id"`
+	WeightHash string `json:"weight_hash,omitempty"` // Composite SHA256 of all weight files
+	HashAlgo   string `json:"hash_algo,omitempty"`   // Hash algorithm, e.g. "sha256"
+}
+
+// VerifyResponsePayload is returned after processing a verification challenge
+type VerifyResponsePayload struct {
+	ChallengeID string          `json:"challenge_id"`
+	Success     bool            `json:"success"`
+	Response    json.RawMessage `json:"response"`
+	Error       string          `json:"error,omitempty"`
+}
+
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
 	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
@@ -62,6 +81,7 @@ type RegisterPayload struct {
 	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
 	Signature    string        `json:"signature,omitempty"`
 	Models       []string      `json:"models"`
+	ModelHashes  []ModelInfo   `json:"model_hashes,omitempty"`       // Per-model composite hashes for verification
 	Capabilities []string      `json:"capabilities"`
 	Hardware     *HardwareInfo `json:"hardware,omitempty"`
 }
@@ -97,6 +117,7 @@ type HeartbeatPayload struct {
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
+	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
 }
 
 // AckPayload for acknowledgments
@@ -207,6 +228,9 @@ type InferenceClient struct {
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
+	// Cached hardware info (detected once at registration)
+	hardware *HardwareInfo
+
 	// Metrics tracking
 	metrics      *InferenceMetrics
 	gpuCollector *GPUMetricsCollector
@@ -279,13 +303,18 @@ func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]stri
 
 // ProviderStatusResponse represents the status check response from Swan Inference
 type ProviderStatusResponse struct {
-	ProviderID  string   `json:"provider_id"`
-	Name        string   `json:"name"`
-	Status      string   `json:"status"`
-	CanConnect  bool     `json:"can_connect"`
-	APIKeyValid bool     `json:"api_key_valid"`
-	Message     string   `json:"message"`
-	NextSteps   []string `json:"next_steps,omitempty"`
+	ProviderID      string   `json:"provider_id"`
+	Name            string   `json:"name"`
+	Status          string   `json:"status"`
+	CanConnect      bool     `json:"can_connect"`
+	APIKeyValid     bool     `json:"api_key_valid"`
+	Message         string   `json:"message"`
+	Warning         string   `json:"warning,omitempty"`
+	NextSteps       []string `json:"next_steps,omitempty"`
+	Step            int      `json:"step"`
+	TotalSteps      int      `json:"total_steps"`
+	StepLabel       string   `json:"step_label"`
+	EarningsEnabled bool     `json:"earnings_enabled"`
 }
 
 // checkProviderStatus verifies the provider is approved before connecting
@@ -360,7 +389,7 @@ func (c *InferenceClient) Start() error {
 
 		if !status.CanConnect {
 			logs.GetLogger().Warn("===========================================")
-			logs.GetLogger().Warn("PROVIDER NOT YET APPROVED")
+			logs.GetLogger().Warn("PROVIDER CANNOT CONNECT")
 			logs.GetLogger().Warn("===========================================")
 			logs.GetLogger().Warnf("Status: %s", status.Status)
 			logs.GetLogger().Warnf("Message: %s", status.Message)
@@ -372,10 +401,21 @@ func (c *InferenceClient) Start() error {
 			}
 			logs.GetLogger().Warn("===========================================")
 			logs.GetLogger().Warn("Run 'computing-provider inference status' to check approval status")
-			return fmt.Errorf("provider not approved: %s (status: %s)", status.Message, status.Status)
+			return fmt.Errorf("provider cannot connect: %s (status: %s)", status.Message, status.Status)
 		}
 
-		logs.GetLogger().Infof("Provider status: %s (can_connect: %v)", status.Status, status.CanConnect)
+		// Display informational warning for non-active providers that can connect
+		if status.Status != "active" && status.CanConnect {
+			logs.GetLogger().Warn("===========================================")
+			logs.GetLogger().Warnf("PROVIDER STATUS: %s", strings.ToUpper(status.Status))
+			logs.GetLogger().Warn("Earnings are DISABLED until admin approval.")
+			if status.Status == "pending" {
+				logs.GetLogger().Warn("Run 'computing-provider inference request-approval' to request approval.")
+			}
+			logs.GetLogger().Warn("===========================================")
+		}
+
+		logs.GetLogger().Infof("Provider status: %s (can_connect: %v, earnings: %v)", status.Status, status.CanConnect, status.EarningsEnabled)
 	}
 
 	if err := c.connect(); err != nil {
@@ -460,9 +500,16 @@ func (c *InferenceClient) reconnect() {
 	}
 }
 
-// detectGPUHardware detects GPU hardware information using nvidia-smi
+// detectGPUHardware detects GPU hardware information
 func detectGPUHardware() *HardwareInfo {
-	// Run nvidia-smi to get GPU info
+	if runtime.GOOS == "darwin" {
+		return detectAppleSiliconHardware()
+	}
+	return detectNvidiaHardware()
+}
+
+// detectNvidiaHardware detects NVIDIA GPU hardware using nvidia-smi
+func detectNvidiaHardware() *HardwareInfo {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader,nounits")
 	output, err := cmd.Output()
 	if err != nil {
@@ -504,30 +551,76 @@ func detectGPUHardware() *HardwareInfo {
 		gpuType = strings.Replace(gpuModel, "NVIDIA ", "", 1)
 	}
 
-	// Get CUDA version
-	cudaVersion := ""
+	// Get compute capability
+	computeCap := ""
 	cudaCmd := exec.Command("nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader")
 	if cudaOutput, err := cudaCmd.Output(); err == nil {
-		cudaVersion = strings.TrimSpace(string(cudaOutput))
+		computeCap = strings.TrimSpace(string(cudaOutput))
 	}
 
 	hardware := &HardwareInfo{
 		GPUType:           gpuType,
 		GPUModel:          gpuModel,
 		VRAMGB:            vramGB,
-		GPUCount:          len(lines), // Count of GPUs
-		ComputeCapability: cudaVersion,
+		GPUCount:          len(lines),
+		ComputeCapability: computeCap,
 		DriverVersion:     driverVersion,
-		CUDAVersion:       "", // nvidia-smi doesn't directly expose CUDA version
 	}
 
 	logs.GetLogger().Infof("Detected GPU hardware: %s (%dGB VRAM x%d)", gpuType, vramGB, len(lines))
 	return hardware
 }
 
+// detectAppleSiliconHardware detects Apple Silicon GPU hardware
+func detectAppleSiliconHardware() *HardwareInfo {
+	// Detect chip model via sysctl
+	gpuModel := "Apple Silicon"
+	gpuType := "apple_silicon"
+
+	chipCmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
+	if chipOutput, err := chipCmd.Output(); err == nil {
+		chip := strings.TrimSpace(string(chipOutput))
+		if chip != "" {
+			gpuModel = chip
+			// Extract chip type for gpu_type (e.g., "Apple M3 Max" -> "m3_max")
+			chipLower := strings.ToLower(chip)
+			chipLower = strings.ReplaceAll(chipLower, "apple ", "")
+			chipLower = strings.ReplaceAll(chipLower, " ", "_")
+			gpuType = chipLower
+		}
+	}
+
+	// Get total system memory (unified memory on Apple Silicon)
+	vramGB := 0
+	memCmd := exec.Command("sysctl", "-n", "hw.memsize")
+	if memOutput, err := memCmd.Output(); err == nil {
+		memBytes, _ := strconv.ParseInt(strings.TrimSpace(string(memOutput)), 10, 64)
+		if memBytes > 0 {
+			vramGB = int(memBytes / (1024 * 1024 * 1024))
+		}
+	}
+	if vramGB == 0 {
+		vramGB = 8 // Conservative fallback
+	}
+
+	hardware := &HardwareInfo{
+		GPUType:  gpuType,
+		GPUModel: gpuModel,
+		VRAMGB:   vramGB,
+		GPUCount: 1,
+	}
+
+	logs.GetLogger().Infof("Detected Apple Silicon hardware: %s (%dGB unified memory)", gpuModel, vramGB)
+	return hardware
+}
+
 func (c *InferenceClient) register() error {
-	// Detect GPU hardware
+	// Detect GPU hardware and cache it for heartbeat messages
 	hardware := detectGPUHardware()
+	c.hardware = hardware
+
+	// Load hash manifests for each model
+	modelHashes := c.loadModelHashes()
 
 	payload := RegisterPayload{
 		NodeID:       c.nodeID,   // Local node ID for routing
@@ -536,6 +629,7 @@ func (c *InferenceClient) register() error {
 		OwnerAddr:    c.ownerAddr,
 		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
 		Models:       c.models,
+		ModelHashes:  modelHashes,
 		Capabilities: []string{"inference", "verification"},
 		Hardware:     hardware,
 	}
@@ -684,6 +778,7 @@ func (c *InferenceClient) sendHeartbeat() {
 		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
+		Hardware:   c.hardware, // Include cached hardware info for periodic updates
 	}
 
 	// Include model health in heartbeat as backup for health update messages
@@ -1000,11 +1095,165 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 }
 
 func (c *InferenceClient) handleVerification(requestID string, payload VerifyPayload) {
-	logs.GetLogger().Infof("Processing verification request %s for model %s", requestID, payload.ModelID)
+	logs.GetLogger().Infof("Processing verification request %s for model %s (type: %s)", requestID, payload.ModelID, payload.ChallengeType)
 
-	// Verification implementation would go here
-	// For now, just acknowledge
-	c.sendAck(requestID, true, "verification completed")
+	switch payload.ChallengeType {
+	case "fingerprint":
+		c.handleFingerprintChallenge(requestID, payload)
+	default:
+		logs.GetLogger().Warnf("Unsupported challenge type: %s", payload.ChallengeType)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "unsupported challenge type: "+payload.ChallengeType)
+	}
+}
+
+// FingerprintChallengeData represents the fingerprint challenge from the server
+type FingerprintChallengeData struct {
+	Files []FingerprintChallengeFile `json:"files"`
+}
+
+// FingerprintChallengeFile is a single file in a fingerprint challenge
+type FingerprintChallengeFile struct {
+	Filename     string `json:"filename"`
+	ExpectedHash string `json:"expected_hash"`
+}
+
+// FingerprintResponseData is the response sent back for a fingerprint challenge
+type FingerprintResponseData struct {
+	Files []FingerprintResponseFile `json:"files"`
+}
+
+// FingerprintResponseFile is a single file result in a fingerprint response
+type FingerprintResponseFile struct {
+	Filename string `json:"filename"`
+	Hash     string `json:"hash"`
+	Status   string `json:"status"` // "pass", "fail", "missing"
+}
+
+func (c *InferenceClient) handleFingerprintChallenge(requestID string, payload VerifyPayload) {
+	// Parse the challenge
+	var challenge FingerprintChallengeData
+	if err := json.Unmarshal(payload.Challenge, &challenge); err != nil {
+		logs.GetLogger().Errorf("Failed to parse fingerprint challenge: %v", err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "failed to parse challenge")
+		return
+	}
+
+	// Determine the local model directory
+	modelDir := c.getModelDir(payload.ModelID)
+
+	// Try to load existing hash manifest
+	manifest, err := models.LoadHashManifest(modelDir)
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", payload.ModelID, err)
+	}
+
+	// Build a hash lookup from manifest
+	manifestHashes := make(map[string]string)
+	if manifest != nil {
+		for _, f := range manifest.Files {
+			manifestHashes[f.Filename] = f.Hash
+		}
+	}
+
+	// Verify each challenged file
+	response := FingerprintResponseData{
+		Files: make([]FingerprintResponseFile, 0, len(challenge.Files)),
+	}
+
+	for _, cf := range challenge.Files {
+		result := FingerprintResponseFile{
+			Filename: cf.Filename,
+		}
+
+		// First try manifest lookup (fast)
+		if hash, ok := manifestHashes[cf.Filename]; ok {
+			result.Hash = hash
+			if hash == cf.ExpectedHash {
+				result.Status = "pass"
+			} else {
+				result.Status = "fail"
+			}
+		} else {
+			// No manifest entry — file may not be locally accessible
+			result.Status = "missing"
+		}
+
+		response.Files = append(response.Files, result)
+	}
+
+	// Determine overall success
+	allPass := true
+	for _, f := range response.Files {
+		if f.Status != "pass" {
+			allPass = false
+			break
+		}
+	}
+
+	responseData, _ := json.Marshal(response)
+	c.sendVerifyResponse(requestID, payload.ChallengeID, allPass, responseData, "")
+	logs.GetLogger().Infof("Fingerprint verification %s completed: success=%v", requestID, allPass)
+}
+
+func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, success bool, responseData json.RawMessage, errMsg string) {
+	payload := VerifyResponsePayload{
+		ChallengeID: challengeID,
+		Success:     success,
+		Response:    responseData,
+		Error:       errMsg,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeVerify,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	select {
+	case c.send <- msgBytes:
+	default:
+		logs.GetLogger().Warn("Send buffer full, dropping verify response")
+	}
+}
+
+// loadModelHashes loads hash manifests for all configured models
+func (c *InferenceClient) loadModelHashes() []ModelInfo {
+	hashes := make([]ModelInfo, 0, len(c.models))
+
+	for _, modelID := range c.models {
+		info := ModelInfo{
+			ModelID: modelID,
+		}
+
+		modelDir := c.getModelDir(modelID)
+		manifest, err := models.LoadHashManifest(modelDir)
+		if err != nil {
+			logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
+			hashes = append(hashes, info)
+			continue
+		}
+
+		if manifest != nil {
+			info.WeightHash = manifest.CompositeHash
+			info.HashAlgo = manifest.Algorithm
+			logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, manifest.CompositeHash[:16]+"...")
+		}
+
+		hashes = append(hashes, info)
+	}
+
+	return hashes
+}
+
+// getModelDir returns the local directory for a model's weight files
+func (c *InferenceClient) getModelDir(modelID string) string {
+	home, err := homedir.Dir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".swan", "models", modelID)
 }
 
 func (c *InferenceClient) handleWarmup(requestID string, payload WarmupPayload) {

@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -120,44 +121,32 @@ func (c *GPUMetricsCollector) getGPUProcessCount(gpuIndex int) int {
 // collectAppleSiliconMetrics collects metrics for Apple Silicon (M1/M2/M3/M4)
 // Note: Apple Silicon doesn't have nvidia-smi, so we return basic info from system
 func (c *GPUMetricsCollector) collectAppleSiliconMetrics() []GPUMetrics {
-	// Try to get GPU info using system_profiler
-	cmd := exec.Command("system_profiler", "SPDisplaysDataType", "-json")
-	output, err := cmd.Output()
-	if err != nil {
-		logs.GetLogger().Debugf("Failed to get Apple Silicon GPU info: %v", err)
-		return nil
-	}
-
-	// For Apple Silicon, we can't get real-time utilization metrics
-	// Return a basic GPU entry with placeholder values
 	gpuName := "Apple Silicon GPU"
 
-	// Try to parse the output to get GPU name
-	outputStr := string(output)
-	if strings.Contains(outputStr, "Apple M1") {
-		gpuName = "Apple M1 GPU"
-	} else if strings.Contains(outputStr, "Apple M2") {
-		gpuName = "Apple M2 GPU"
-	} else if strings.Contains(outputStr, "Apple M3") {
-		gpuName = "Apple M3 GPU"
-	} else if strings.Contains(outputStr, "Apple M4") {
-		gpuName = "Apple M4 GPU"
+	// Detect chip model via sysctl
+	chipCmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
+	if chipOutput, err := chipCmd.Output(); err == nil {
+		chip := strings.TrimSpace(string(chipOutput))
+		if chip != "" {
+			gpuName = fmt.Sprintf("%s GPU", chip)
+		}
+	}
+
+	// Get total unified memory
+	var memTotalMB float64
+	memCmd := exec.Command("sysctl", "-n", "hw.memsize")
+	if memOutput, err := memCmd.Output(); err == nil {
+		memBytes, _ := strconv.ParseInt(strings.TrimSpace(string(memOutput)), 10, 64)
+		if memBytes > 0 {
+			memTotalMB = float64(memBytes) / (1024 * 1024)
+		}
 	}
 
 	return []GPUMetrics{
 		{
-			Index:            0,
-			Name:             gpuName,
-			UUID:             "",
-			UtilizationPct:   0, // Not available on Apple Silicon
-			MemoryUsedMB:     0, // Shared memory, not directly measurable
-			MemoryTotalMB:    0,
-			MemoryUsagePct:   0,
-			TemperatureC:     0, // Not directly accessible
-			PowerDrawW:       0,
-			PowerLimitW:      0,
-			FanSpeedPct:      0,
-			ComputeProcesses: 0,
+			Index:         0,
+			Name:          gpuName,
+			MemoryTotalMB: memTotalMB,
 		},
 	}
 }

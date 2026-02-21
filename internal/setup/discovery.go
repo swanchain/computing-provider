@@ -32,17 +32,18 @@ var modelNormalizationAliases = map[string]string{
 // model names to Swan Inference model IDs
 var swanModelAliases = map[string]string{
 	// === Llama Family ===
-	"llama-3-1-8b":           "llama-3.1-8b",
-	"llama-3-2-3b":           "llama-3.2-3b",
-	"llama-3-2-1b":           "llama-3.2-1b",
+	"llama-3-1-8b":           "meta-llama/Llama-3.1-8B-Instruct",
+	"llama-3-2-3b":           "meta-llama/Llama-3.2-3B-Instruct",
+	"llama-3-2-1b":           "meta-llama/Llama-3.2-1B-Instruct",
 	"llama-3-3-70b":          "meta-llama/Llama-3.3-70B-Instruct",
 	"llama-3-3-70b-instruct": "meta-llama/Llama-3.3-70B-Instruct",
+	"lumimaid-8b":            "NeverSleep/Llama-3-Lumimaid-8B-v0.1",
 
 	// === Qwen Family ===
-	"qwen-2-5-7b":         "qwen-2.5-7b",
-	"qwen-2-5-14b":        "qwen-2.5-14b",
-	"qwen-2-5-32b":        "qwen-2.5-32b",
-	"qwen-2-5-72b":        "qwen-2.5-72b",
+	"qwen-2-5-7b":         "Qwen/Qwen2.5-7B-Instruct",
+	"qwen-2-5-14b":        "Qwen/Qwen2.5-14B-Instruct",
+	"qwen-2-5-32b":        "Qwen/Qwen2.5-32B-Instruct",
+	"qwen-2-5-72b":        "Qwen/Qwen2.5-72B-Instruct",
 	"qwen-3-235b":         "Qwen/Qwen3-235B-A22B-Instruct-2507",
 	"qwen-3-embedding-8b": "Qwen/Qwen3-Embedding-8B",
 
@@ -62,8 +63,8 @@ var swanModelAliases = map[string]string{
 	// === Image Models ===
 	"flux-1-schnell":       "black-forest-labs/FLUX.1-schnell",
 	"flux-schnell":         "black-forest-labs/FLUX.1-schnell",
-	"sd-1-5":               "sd-1.5",
-	"stable-diffusion-1-5": "sd-1.5",
+	"sd-1-5":               "stable-diffusion-v1-5/stable-diffusion-v1-5",
+	"stable-diffusion-1-5": "stable-diffusion-v1-5/stable-diffusion-v1-5",
 	"dreamshaper-8":        "Lykon/dreamshaper-8",
 
 	// === Audio Models ===
@@ -498,6 +499,7 @@ func DetectModelCategory(modelName string) string {
 // SwanModel represents a model from Swan Inference API
 type SwanModel struct {
 	ID       string `json:"id"`
+	Slug     string `json:"slug"`
 	Name     string `json:"name"`
 	Category string `json:"category"`
 	Active   bool   `json:"active"`
@@ -565,6 +567,18 @@ func MatchModels(localModels []string, swanModels []SwanModel) []ModelMatch {
 
 // findBestMatch finds the best Swan model match for a local model name
 func findBestMatch(localModel string, swanModels []SwanModel) *ModelMatch {
+	// Fast path: direct HF ID match (SGLang/vLLM report HF repo IDs directly)
+	for _, swan := range swanModels {
+		if localModel == swan.ID {
+			return &ModelMatch{
+				LocalModel:    localModel,
+				SwanModelID:   swan.ID,
+				SwanModelName: swan.Name,
+				Confidence:    1.0,
+			}
+		}
+	}
+
 	normalizedLocal := normalizeModelName(localModel)
 
 	// Check alias first for exact mapping (Ollama/HuggingFace -> Swan ID)
