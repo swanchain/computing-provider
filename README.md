@@ -23,23 +23,28 @@ git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
 make clean && make mainnet && sudo make install
 
-# 2. Start an inference server (example: Qwen 2.5 7B with SGLang)
-docker run -d --gpus all -p 30000:30000 --name sglang \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  --shm-size 32g --ipc=host \
-  lmsysorg/sglang:latest \
-  python3 -m sglang.launch_server \
-    --model-path Qwen/Qwen2.5-7B \
-    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-7b
+# 2. Browse available models from the Swan Model Repository
+computing-provider models catalog
 
-# 3. Run the setup wizard (handles auth, config, and model discovery)
+# 3. Download verified model weights (e.g., Qwen 2.5 7B)
+computing-provider models download Qwen/Qwen2.5-7B-Instruct
+
+# 4. Start SGLang with the downloaded model
+docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
+  -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server --model-path /models \
+    --host 0.0.0.0 --port 30000 \
+    --served-model-name Qwen/Qwen2.5-7B-Instruct
+
+# 5. Run the setup wizard (handles auth, config, and model discovery)
 computing-provider setup
 
-# 4. Run the provider
+# 6. Run the provider
 computing-provider run
 ```
 
-That's it! The setup wizard will:
+The `models download` command downloads pre-verified weights from the Swan Model Repository with SHA256 hash checks. The setup wizard will:
 - Check prerequisites (Docker, GPU)
 - Create/login to your Swan Inference account
 - Auto-discover your running model servers
