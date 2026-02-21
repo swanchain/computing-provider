@@ -1350,7 +1350,11 @@ func updateEcpTaskStatus() {
 		return
 	}
 
-	containerStatus, err := NewDockerService().GetContainerStatus()
+	dockerSvc := NewDockerService()
+	if dockerSvc == nil {
+		return
+	}
+	containerStatus, err := dockerSvc.GetContainerStatus()
 	if err != nil {
 		return
 	}
@@ -1372,7 +1376,9 @@ func CronTaskForEcp() {
 		go func() {
 			ticker := time.NewTicker(2 * time.Hour)
 			for range ticker.C {
-				NewDockerService().CleanResourceForDocker(false)
+				if ds := NewDockerService(); ds != nil {
+					ds.CleanResourceForDocker(false)
+				}
 			}
 		}()
 	}
