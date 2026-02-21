@@ -19,8 +19,8 @@ sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.ta
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 
 # 1. Clone and build
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider && git checkout releases
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 2. Start an inference server (example: Qwen 2.5 7B with SGLang)
@@ -56,8 +56,8 @@ ollama pull qwen2.5:7b
 
 # 2. Install Computing Provider
 brew install go
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider && git checkout releases
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 3. Run the setup wizard
@@ -234,7 +234,9 @@ Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
 ```bash
 computing-provider setup                     # Interactive setup wizard (recommended)
 computing-provider run                       # Start provider
-computing-provider dashboard                 # Web UI
+computing-provider inference status          # Check status on Swan Inference
+computing-provider inference config          # Show inference config
+computing-provider dashboard                 # Web UI (port 3005)
 computing-provider task list --ecp           # List tasks
 ```
 
@@ -315,7 +317,7 @@ computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=
 ## Getting Help
 
 - [Discord](https://discord.gg/3uQUWzaS7U) - Community support
-- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues) - Bug reports
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues) - Bug reports
 - [Documentation](https://docs.swanchain.io) - Full docs
 
 ## License

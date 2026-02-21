@@ -26,8 +26,8 @@ go version  # Should show go1.22.0 or higher
 
 ```bash
 # 1. Clone and build
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet && sudo make install
 
 # 2. Start your inference backend (Ollama, SGLang, vLLM, etc.)
@@ -129,8 +129,8 @@ ollama pull llama3.2:3b
 brew install go
 
 # Clone and build
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 make clean && make mainnet
 sudo make install
 ```
@@ -368,7 +368,7 @@ docker logs <container_name>
 ### Getting Help
 
 - [Discord Community](https://discord.gg/swanchain)
-- [GitHub Issues](https://github.com/swanchain/computing-provider-v2/issues)
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues)
 - [Troubleshooting Guide](troubleshooting.md)
 
 ## Next Steps

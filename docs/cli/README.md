@@ -23,6 +23,13 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 - [`info`](info.md) - Display provider information
 - [`state`](state.md) - Show provider state
 
+### Inference Commands
+- `inference status` - Check provider status on Swan Inference
+- `inference config` - Show current inference configuration
+
+### Monitoring
+- `dashboard` - Start the inference dashboard web UI
+
 ### Account Management
 - [`account`](account.md) - Manage provider account settings
 - [`wallet`](wallet.md) - Manage wallet operations
@@ -97,15 +104,16 @@ computing-provider task list --help
 
 ### Setup Commands
 - `init` - Initialize provider repository
-- `config` - Configuration management
 
 ### Runtime Commands
 - `run` - Start provider service (Inference or ZK-Proof mode)
+- `dashboard` - Start the inference dashboard web UI
 
 ### Information Commands
 - `info` - Provider information
 - `state` - Provider state
-- `status` - Service status
+- `inference status` - Check status on Swan Inference
+- `inference config` - Show inference configuration
 
 ### Management Commands
 - `account` - Account management
@@ -157,6 +165,47 @@ The CLI reads configuration from:
 2. Environment variables
 3. Configuration file (`config.toml`)
 4. Default values
+
+## Inference Commands
+
+### `inference status`
+
+Check your provider's status on Swan Inference. Validates your API key and shows registration status.
+
+```bash
+# Check status (human-readable)
+computing-provider inference status
+
+# JSON output (for scripting)
+computing-provider inference status --json
+```
+
+### `inference config`
+
+Display the current inference configuration (API key is masked).
+
+```bash
+computing-provider inference config
+```
+
+## Dashboard
+
+### `dashboard`
+
+Start the inference dashboard web UI for real-time monitoring.
+
+```bash
+# Start on default port 3005
+computing-provider dashboard
+
+# Custom port
+computing-provider dashboard --port 8080
+
+# Custom API server address
+computing-provider dashboard --api http://localhost:8085
+```
+
+Features: real-time metrics, GPU status, model management, request controls.
 
 ## Security Considerations
 

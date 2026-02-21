@@ -65,8 +65,8 @@ ollama --version
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/swanchain/computing-provider-v2.git
-cd computing-provider-v2
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 ```
 
 ### 2. Build the Binary
