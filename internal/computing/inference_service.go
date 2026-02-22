@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -304,7 +305,10 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
 		if !mapOk {
-			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
+			return nil, &ModelServerError{
+				StatusCode: 404,
+				Message:    fmt.Sprintf("model %s not deployed on this provider", payload.ModelID),
+			}
 		}
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
@@ -318,11 +322,54 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
 	response, err := s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel)
 	if err != nil {
+		// Preserve ModelServerError type for status code extraction
+		var modelErr *ModelServerError
+		if errors.As(err, &modelErr) {
+			return nil, modelErr
+		}
 		return nil, fmt.Errorf("inference failed: %w", err)
 	}
 	return &InferenceResponse{
 		Response: response,
 	}, nil
+}
+
+// checkForOpenAIError detects error responses returned with HTTP 200 by some model servers.
+// Some servers (e.g., certain Ollama versions) return errors in the response body with 200 status.
+func checkForOpenAIError(response json.RawMessage) error {
+	if len(response) == 0 {
+		return &ModelServerError{
+			StatusCode: 502,
+			Message:    "empty response from model server",
+		}
+	}
+
+	var errBody struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    interface{} `json:"code"` // Can be string or int
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response, &errBody); err == nil && errBody.Error.Message != "" {
+		statusCode := 500
+		// Try to extract numeric code
+		switch v := errBody.Error.Code.(type) {
+		case float64:
+			statusCode = int(v)
+		case string:
+			if v == "model_not_found" {
+				statusCode = 404
+			}
+		}
+		return &ModelServerError{
+			StatusCode: statusCode,
+			Body:       response,
+			Message:    errBody.Error.Message,
+		}
+	}
+
+	return nil
 }
 
 // forwardToDockerModel forwards inference request to a Docker container endpoint
@@ -335,6 +382,11 @@ func (s *InferenceService) forwardToDockerModel(endpoint string, request json.Ra
 	var response json.RawMessage
 	if err := httpClient.PostJSON("/v1/chat/completions", modifiedRequest, &response); err != nil {
 		return nil, fmt.Errorf("failed to forward request to Docker model: %w", err)
+	}
+
+	// Check for error responses returned with HTTP 200
+	if err := checkForOpenAIError(response); err != nil {
+		return nil, err
 	}
 
 	return response, nil
@@ -433,7 +485,10 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
 		if !mapOk {
-			return &StreamResult{Error: fmt.Errorf("model %s not deployed on this provider", payload.ModelID)}
+			return &StreamResult{Error: &ModelServerError{
+				StatusCode: 404,
+				Message:    fmt.Sprintf("model %s not deployed on this provider", payload.ModelID),
+			}}
 		}
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
@@ -486,15 +541,12 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		"max_tokens": 1, // Minimal response to save resources
 	}
 
-	reqBytes, err := json.Marshal(warmupRequest)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create warmup request: %w", err)
-	}
-
-	// Forward to model endpoint
+	// Pass the map directly to PostJSON which handles marshaling.
+	// Previously we marshaled to []byte first, causing double-encoding
+	// (json.Marshal encodes []byte as base64).
 	httpClient := NewHttpClient(endpoint, nil)
 	var response json.RawMessage
-	if err := httpClient.PostJSON("/v1/chat/completions", reqBytes, &response); err != nil {
+	if err := httpClient.PostJSON("/v1/chat/completions", warmupRequest, &response); err != nil {
 		return nil, fmt.Errorf("warmup request failed: %w", err)
 	}
 
@@ -551,7 +603,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		result.Error = fmt.Errorf("model returned error: %s", string(body))
+		result.Error = parseModelServerError(resp.StatusCode, body)
 		return result
 	}
 
