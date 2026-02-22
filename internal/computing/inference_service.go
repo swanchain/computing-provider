@@ -372,6 +372,102 @@ func checkForOpenAIError(response json.RawMessage) error {
 	return nil
 }
 
+// stripMarkdownJSONFences removes markdown code fences from JSON content.
+// Models sometimes return ```json\n{...}\n``` instead of raw JSON when
+// response_format.type == "json_object" is set.
+func stripMarkdownJSONFences(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "```") {
+		return content
+	}
+	// Remove opening fence (```json or ```)
+	idx := strings.Index(trimmed, "\n")
+	if idx < 0 {
+		return content
+	}
+	trimmed = trimmed[idx+1:]
+	// Remove closing fence
+	if strings.HasSuffix(strings.TrimSpace(trimmed), "```") {
+		trimmed = strings.TrimSpace(trimmed)
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimRight(trimmed, "\n\r ")
+	}
+	return trimmed
+}
+
+// postProcessResponse applies provider-side fixes to model responses:
+// 1. Strips markdown fences from json_object responses
+// 2. Ensures prompt_tokens_details exists in usage (prevents nil dereference in clients)
+func postProcessResponse(request json.RawMessage, response json.RawMessage) json.RawMessage {
+	var reqMap map[string]interface{}
+	if err := json.Unmarshal(request, &reqMap); err != nil {
+		return response
+	}
+
+	// Check if response_format.type == "json_object"
+	needsJSONFix := false
+	if rf, ok := reqMap["response_format"].(map[string]interface{}); ok {
+		if rfType, ok := rf["type"].(string); ok && (rfType == "json_object" || rfType == "json_schema") {
+			needsJSONFix = true
+		}
+	}
+
+	var respMap map[string]interface{}
+	if err := json.Unmarshal(response, &respMap); err != nil {
+		return response
+	}
+
+	modified := false
+
+	// Fix 1: Strip markdown fences from json_object/json_schema responses
+	if needsJSONFix {
+		if choices, ok := respMap["choices"].([]interface{}); ok {
+			for i, choice := range choices {
+				choiceMap, ok := choice.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				message, ok := choiceMap["message"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				content, ok := message["content"].(string)
+				if !ok {
+					continue
+				}
+				stripped := stripMarkdownJSONFences(content)
+				if stripped != content {
+					message["content"] = stripped
+					choiceMap["message"] = message
+					choices[i] = choiceMap
+					modified = true
+				}
+			}
+		}
+	}
+
+	// Fix 2: Ensure prompt_tokens_details exists in usage
+	if usage, ok := respMap["usage"].(map[string]interface{}); ok {
+		if _, exists := usage["prompt_tokens_details"]; !exists {
+			usage["prompt_tokens_details"] = map[string]interface{}{
+				"cached_tokens": 0,
+			}
+			respMap["usage"] = usage
+			modified = true
+		}
+	}
+
+	if !modified {
+		return response
+	}
+
+	result, err := json.Marshal(respMap)
+	if err != nil {
+		return response
+	}
+	return result
+}
+
 // forwardToDockerModel forwards inference request to a Docker container endpoint
 func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage, modelID, localModel string) (json.RawMessage, error) {
 	// Substitute model name if local_model is configured
@@ -388,6 +484,9 @@ func (s *InferenceService) forwardToDockerModel(endpoint string, request json.Ra
 	if err := checkForOpenAIError(response); err != nil {
 		return nil, err
 	}
+
+	// Post-process: strip markdown fences from JSON responses, ensure prompt_tokens_details
+	response = postProcessResponse(modifiedRequest, response)
 
 	return response, nil
 }
@@ -640,16 +739,33 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 			break
 		}
 
-		// Try to extract usage information from the chunk (OpenAI returns usage in last content chunk)
-		var chunkData struct {
-			Usage *struct {
-				PromptTokens     int64 `json:"prompt_tokens"`
-				CompletionTokens int64 `json:"completion_tokens"`
-			} `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(data), &chunkData); err == nil && chunkData.Usage != nil {
-			result.TokensInput = chunkData.Usage.PromptTokens
-			result.TokensOutput = chunkData.Usage.CompletionTokens
+		// Parse chunk for filtering and post-processing
+		var chunkMap map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &chunkMap); err == nil {
+			// Fix: Skip chunks with empty choices array (causes "list index out of range" in clients)
+			if choices, ok := chunkMap["choices"].([]interface{}); ok && len(choices) == 0 {
+				continue
+			}
+
+			// Extract usage information (OpenAI returns usage in last content chunk)
+			if usage, ok := chunkMap["usage"].(map[string]interface{}); ok && usage != nil {
+				if pt, ok := usage["prompt_tokens"].(float64); ok {
+					result.TokensInput = int64(pt)
+				}
+				if ct, ok := usage["completion_tokens"].(float64); ok {
+					result.TokensOutput = int64(ct)
+				}
+				// Fix: Ensure prompt_tokens_details exists in streaming usage
+				if _, exists := usage["prompt_tokens_details"]; !exists {
+					usage["prompt_tokens_details"] = map[string]interface{}{
+						"cached_tokens": 0,
+					}
+					chunkMap["usage"] = usage
+					if modified, err := json.Marshal(chunkMap); err == nil {
+						data = string(modified)
+					}
+				}
+			}
 		}
 
 		// Forward the chunk data
