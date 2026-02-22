@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,51 @@ import (
 	"strings"
 	"time"
 )
+
+// ModelServerError represents a non-2xx HTTP response from the model server.
+// It preserves the original status code and body so callers can propagate
+// meaningful error codes (e.g. 400, 404, 429, 503) to Swan Inference.
+type ModelServerError struct {
+	StatusCode int    // HTTP status code from the model server
+	Body       []byte // Raw response body
+	Message    string // Parsed error message (from OpenAI error format or raw body)
+}
+
+func (e *ModelServerError) Error() string {
+	return fmt.Sprintf("model server returned HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+// parseModelServerError attempts to extract a human-readable error message
+// from the model server response body, trying OpenAI error format first.
+func parseModelServerError(statusCode int, body []byte) *ModelServerError {
+	mse := &ModelServerError{
+		StatusCode: statusCode,
+		Body:       body,
+	}
+
+	// Try OpenAI-compatible error format: {"error":{"message":"...","type":"..."}}
+	var openAIErr struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &openAIErr); err == nil && openAIErr.Error.Message != "" {
+		mse.Message = openAIErr.Error.Message
+		return mse
+	}
+
+	// Fall back to raw body (truncated)
+	msg := string(body)
+	if len(msg) > 200 {
+		msg = msg[:200] + "..."
+	}
+	if msg == "" {
+		msg = http.StatusText(statusCode)
+	}
+	mse.Message = msg
+	return mse
+}
 
 type HttpClient struct {
 	host   string
@@ -81,6 +127,11 @@ func (c *HttpClient) Request(method string, api string, body io.Reader, dest any
 	bd, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return
+	}
+
+	// Check for non-2xx status codes from the model server
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return parseModelServerError(resp.StatusCode, bd)
 	}
 
 	if err = json.Unmarshal(bd, dest); err != nil {

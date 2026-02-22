@@ -3,6 +3,7 @@ package computing
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,10 +97,11 @@ type InferencePayload struct {
 
 // InferenceResponse is returned by provider
 type InferenceResponse struct {
-	RequestID string          `json:"request_id"`
-	Response  json.RawMessage `json:"response"`
-	Error     string          `json:"error,omitempty"`
-	Latency   int64           `json:"latency_ms"`
+	RequestID  string          `json:"request_id"`
+	Response   json.RawMessage `json:"response"`
+	Error      string          `json:"error,omitempty"`
+	StatusCode int             `json:"status_code,omitempty"` // HTTP status code for Swan Inference to map to proper responses
+	Latency    int64           `json:"latency_ms"`
 }
 
 // VerifyPayload is sent to provider for model verification
@@ -147,6 +149,7 @@ type StreamEndPayload struct {
 	Latency      int64  `json:"latency_ms"`
 	TokensInput  int64  `json:"tokens_input,omitempty"`
 	TokensOutput int64  `json:"tokens_output,omitempty"`
+	StatusCode   int    `json:"status_code,omitempty"` // HTTP status code for error responses
 	Error        string `json:"error,omitempty"`
 }
 
@@ -983,12 +986,22 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	latencyFloat := float64(latency)
 
 	if err != nil {
+		// Extract HTTP status code from ModelServerError if available
+		statusCode := 502 // Default to Bad Gateway
+		var modelErr *ModelServerError
+		if errors.As(err, &modelErr) {
+			statusCode = modelErr.StatusCode
+		} else if strings.Contains(err.Error(), "not deployed") {
+			statusCode = 404
+		}
+
 		// Record failed request
 		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, 0, 0, false, err.Error())
 		response = &InferenceResponse{
-			RequestID: requestID,
-			Error:     err.Error(),
-			Latency:   latency,
+			RequestID:  requestID,
+			Error:      err.Error(),
+			StatusCode: statusCode,
+			Latency:    latency,
 		}
 	} else {
 		// Extract token counts from response if available
@@ -1029,6 +1042,18 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 		err = result.Error
 	}
 
+	// Extract HTTP status code from ModelServerError if available
+	statusCode := 0
+	if err != nil {
+		statusCode = 502 // Default to Bad Gateway for errors
+		var modelErr *ModelServerError
+		if errors.As(err, &modelErr) {
+			statusCode = modelErr.StatusCode
+		} else if strings.Contains(err.Error(), "not deployed") {
+			statusCode = 404
+		}
+	}
+
 	// Record metrics for streaming request
 	if err != nil {
 		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), false, err.Error())
@@ -1036,7 +1061,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), true, "")
 	}
 
-	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, err)
+	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, statusCode, err)
 }
 
 // sendStreamChunk sends a streaming chunk to Swan Inference
@@ -1066,18 +1091,21 @@ func (c *InferenceClient) sendStreamChunk(requestID string, chunk []byte, done b
 	select {
 	case c.send <- msgBytes:
 		return nil
-	default:
-		return fmt.Errorf("send buffer full")
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("send buffer full: timed out after 5s")
+	case <-c.stopCh:
+		return fmt.Errorf("client stopped")
 	}
 }
 
 // sendStreamEnd sends the end of stream message with token usage
-func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, tokensIn, tokensOut int64, err error) {
+func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, tokensIn, tokensOut int64, statusCode int, err error) {
 	payload := StreamEndPayload{
 		RequestID:    requestID,
 		Latency:      latencyMs,
 		TokensInput:  tokensIn,
 		TokensOutput: tokensOut,
+		StatusCode:   statusCode,
 	}
 	if err != nil {
 		payload.Error = err.Error()
@@ -1091,7 +1119,13 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 	}
 
 	msgBytes, _ := json.Marshal(msg)
-	c.send <- msgBytes
+	select {
+	case c.send <- msgBytes:
+	case <-time.After(10 * time.Second):
+		logs.GetLogger().Errorf("Failed to send stream_end for %s: timed out after 10s", requestID)
+	case <-c.stopCh:
+		logs.GetLogger().Warnf("Client stopped while sending stream_end for %s", requestID)
+	}
 }
 
 func (c *InferenceClient) handleVerification(requestID string, payload VerifyPayload) {
