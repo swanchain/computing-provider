@@ -48,11 +48,7 @@ var swanModelAliases = map[string]string{
 	"qwen-3-embedding-8b": "Qwen/Qwen3-Embedding-8B",
 
 	// === Mistral Family ===
-	"mistral-7b":          "mistral-7b",
-	"mistral-7b-instruct": "mistral-7b",
-	"mistral-nemo":        "mistral-nemo-instruct-2407",
-	"mistral-nemo-12b":    "mistral-nemo-instruct-2407",
-	"mistral-small-24b":   "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+	"mistral-small-24b": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
 
 	// === DeepSeek Family ===
 	"deepseek-r-1":      "deepseek-ai/DeepSeek-R1-0528",
@@ -595,6 +591,18 @@ func findBestMatch(localModel string, swanModels []SwanModel) *ModelMatch {
 		}
 	}
 
+	// Slug fallback: if normalized local name matches a Swan model's slug, exact match
+	for _, swan := range swanModels {
+		if swan.Slug != "" && strings.EqualFold(normalizedLocal, normalizeModelName(swan.Slug)) {
+			return &ModelMatch{
+				LocalModel:    localModel,
+				SwanModelID:   swan.ID,
+				SwanModelName: swan.Name,
+				Confidence:    1.0,
+			}
+		}
+	}
+
 	// Fall back to score-based matching
 	var bestMatch *ModelMatch
 	var bestScore float64
@@ -602,6 +610,15 @@ func findBestMatch(localModel string, swanModels []SwanModel) *ModelMatch {
 	for _, swan := range swanModels {
 		normalizedSwan := normalizeModelName(swan.ID)
 		score := calculateMatchScore(normalizedLocal, normalizedSwan, localModel, swan.ID)
+
+		// Also score against slug and take the higher score
+		if swan.Slug != "" {
+			normalizedSlug := normalizeModelName(swan.Slug)
+			slugScore := calculateMatchScore(normalizedLocal, normalizedSlug, localModel, swan.Slug)
+			if slugScore > score {
+				score = slugScore
+			}
+		}
 
 		if score > bestScore && score >= 0.5 { // Minimum 50% match
 			bestScore = score

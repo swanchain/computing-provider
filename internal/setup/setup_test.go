@@ -244,12 +244,12 @@ func TestExtractModelInfoV2(t *testing.T) {
 func TestModelMatchingOllamaToSwan(t *testing.T) {
 	// Simulate Swan models
 	swanModels := []SwanModel{
-		{ID: "llama-3.2-3b", Name: "Llama 3.2 3B", Active: true},
-		{ID: "llama-3.2-1b", Name: "Llama 3.2 1B", Active: true},
-		{ID: "qwen-2.5-7b", Name: "Qwen 2.5 7B", Active: true},
-		{ID: "mistral-7b", Name: "Mistral 7B", Active: true},
-		{ID: "phi-3-mini", Name: "Phi 3 Mini", Active: true},
-		{ID: "deepseek-v2-7b", Name: "DeepSeek V2 7B", Active: true},
+		{ID: "llama-3.2-3b", Slug: "llama-3.2-3b", Name: "Llama 3.2 3B", Active: true},
+		{ID: "llama-3.2-1b", Slug: "llama-3.2-1b", Name: "Llama 3.2 1B", Active: true},
+		{ID: "qwen-2.5-7b", Slug: "qwen-2.5-7b", Name: "Qwen 2.5 7B", Active: true},
+		{ID: "mistral-7b", Slug: "mistral-7b", Name: "Mistral 7B", Active: true},
+		{ID: "phi-3-mini", Slug: "phi-3-mini", Name: "Phi 3 Mini", Active: true},
+		{ID: "deepseek-v2-7b", Slug: "deepseek-v2-7b", Name: "DeepSeek V2 7B", Active: true},
 	}
 
 	tests := []struct {
@@ -300,8 +300,8 @@ func TestModelMatchingOllamaToSwan(t *testing.T) {
 func TestModelMatchingCaseInsensitiveHFID(t *testing.T) {
 	// Swan models use HuggingFace-style IDs with mixed case
 	swanModels := []SwanModel{
-		{ID: "meta-llama/Llama-3.1-8B-Instruct", Name: "Llama 3.1 8B Instruct", Active: true},
-		{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen 2.5 7B Instruct", Active: true},
+		{ID: "meta-llama/Llama-3.1-8B-Instruct", Slug: "llama-3.1-8b-instruct", Name: "Llama 3.1 8B Instruct", Active: true},
+		{ID: "Qwen/Qwen2.5-7B-Instruct", Slug: "qwen2.5-7b-instruct", Name: "Qwen 2.5 7B Instruct", Active: true},
 	}
 
 	tests := []struct {
@@ -369,8 +369,8 @@ func TestContainmentScoreWithFamilyValidation(t *testing.T) {
 	// Test that containment without family match gets lower score
 	// "phi" should not get high score for "dolphin-phi"
 	swanModels := []SwanModel{
-		{ID: "phi-3-mini", Name: "Phi 3 Mini", Active: true},
-		{ID: "dolphin-phi-2", Name: "Dolphin Phi 2", Active: true},
+		{ID: "phi-3-mini", Slug: "phi-3-mini", Name: "Phi 3 Mini", Active: true},
+		{ID: "dolphin-phi-2", Slug: "dolphin-phi-2", Name: "Dolphin Phi 2", Active: true},
 	}
 
 	// "phi3:mini" should match "phi-3-mini" with high confidence
@@ -380,5 +380,42 @@ func TestContainmentScoreWithFamilyValidation(t *testing.T) {
 	}
 	if matches[0].SwanModelID != "phi-3-mini" {
 		t.Errorf("phi3:mini should match phi-3-mini, got %s", matches[0].SwanModelID)
+	}
+}
+
+func TestModelMatchingSlugFallback(t *testing.T) {
+	// Swan models where the HF ID won't normalize to match, but the slug will
+	swanModels := []SwanModel{
+		{ID: "mistralai/Mistral-Small-3.2-24B-Instruct-2506", Slug: "mistral-small-24b", Name: "Mistral Small 24B", Active: true},
+		{ID: "deepseek-ai/DeepSeek-R1-0528", Slug: "deepseek-r1", Name: "DeepSeek R1", Active: true},
+		{ID: "black-forest-labs/FLUX.1-schnell", Slug: "flux-1-schnell", Name: "FLUX.1 Schnell", Active: true},
+	}
+
+	tests := []struct {
+		localModel     string
+		expectedSwanID string
+		minConfidence  float64
+		description    string
+	}{
+		// Slug matches that wouldn't work via HF ID normalization alone
+		{"mistral-small:24b", "mistralai/Mistral-Small-3.2-24B-Instruct-2506", 1.0, "ollama mistral-small matches slug"},
+		{"deepseek-r1", "deepseek-ai/DeepSeek-R1-0528", 1.0, "deepseek-r1 matches slug"},
+		{"flux-1-schnell", "black-forest-labs/FLUX.1-schnell", 1.0, "flux-1-schnell matches slug"},
+	}
+
+	for _, tt := range tests {
+		matches := MatchModels([]string{tt.localModel}, swanModels)
+		if len(matches) == 0 {
+			t.Errorf("[%s] Expected %q to match, got no matches", tt.description, tt.localModel)
+			continue
+		}
+		if matches[0].SwanModelID != tt.expectedSwanID {
+			t.Errorf("[%s] MatchModels(%q) = %q, expected %q",
+				tt.description, tt.localModel, matches[0].SwanModelID, tt.expectedSwanID)
+		}
+		if matches[0].Confidence < tt.minConfidence {
+			t.Errorf("[%s] MatchModels(%q) confidence = %.2f, expected >= %.2f",
+				tt.description, tt.localModel, matches[0].Confidence, tt.minConfidence)
+		}
 	}
 }
