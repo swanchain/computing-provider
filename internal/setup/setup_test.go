@@ -297,6 +297,45 @@ func TestModelMatchingOllamaToSwan(t *testing.T) {
 	}
 }
 
+func TestModelMatchingCaseInsensitiveHFID(t *testing.T) {
+	// Swan models use HuggingFace-style IDs with mixed case
+	swanModels := []SwanModel{
+		{ID: "meta-llama/Llama-3.1-8B-Instruct", Name: "Llama 3.1 8B Instruct", Active: true},
+		{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen 2.5 7B Instruct", Active: true},
+	}
+
+	tests := []struct {
+		localModel     string
+		expectedSwanID string
+		description    string
+	}{
+		// Exact case — baseline
+		{"meta-llama/Llama-3.1-8B-Instruct", "meta-llama/Llama-3.1-8B-Instruct", "exact match"},
+		// All lowercase — the main bug scenario
+		{"meta-llama/llama-3.1-8b-instruct", "meta-llama/Llama-3.1-8B-Instruct", "all lowercase"},
+		// All uppercase
+		{"META-LLAMA/LLAMA-3.1-8B-INSTRUCT", "meta-llama/Llama-3.1-8B-Instruct", "all uppercase"},
+		// Qwen mixed case
+		{"qwen/qwen2.5-7b-instruct", "Qwen/Qwen2.5-7B-Instruct", "qwen lowercase"},
+	}
+
+	for _, tt := range tests {
+		matches := MatchModels([]string{tt.localModel}, swanModels)
+		if len(matches) == 0 {
+			t.Errorf("[%s] Expected %q to match, got no matches", tt.description, tt.localModel)
+			continue
+		}
+		if matches[0].SwanModelID != tt.expectedSwanID {
+			t.Errorf("[%s] MatchModels(%q) = %q, expected %q",
+				tt.description, tt.localModel, matches[0].SwanModelID, tt.expectedSwanID)
+		}
+		if matches[0].Confidence < 1.0 {
+			t.Errorf("[%s] MatchModels(%q) confidence = %.2f, expected 1.0 for direct HF ID match",
+				tt.description, tt.localModel, matches[0].Confidence)
+		}
+	}
+}
+
 func TestEstimateGPUMemoryWithQuantization(t *testing.T) {
 	tests := []struct {
 		model       string

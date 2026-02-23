@@ -567,9 +567,9 @@ func MatchModels(localModels []string, swanModels []SwanModel) []ModelMatch {
 
 // findBestMatch finds the best Swan model match for a local model name
 func findBestMatch(localModel string, swanModels []SwanModel) *ModelMatch {
-	// Fast path: direct HF ID match (SGLang/vLLM report HF repo IDs directly)
+	// Fast path: direct HF ID match (SGLang/vLLM report HF repo IDs directly, case-insensitive)
 	for _, swan := range swanModels {
-		if localModel == swan.ID {
+		if strings.EqualFold(localModel, swan.ID) {
 			return &ModelMatch{
 				LocalModel:    localModel,
 				SwanModelID:   swan.ID,
@@ -584,7 +584,7 @@ func findBestMatch(localModel string, swanModels []SwanModel) *ModelMatch {
 	// Check alias first for exact mapping (Ollama/HuggingFace -> Swan ID)
 	if aliasID, ok := swanModelAliases[normalizedLocal]; ok {
 		for _, swan := range swanModels {
-			if swan.ID == aliasID {
+			if strings.EqualFold(swan.ID, aliasID) {
 				return &ModelMatch{
 					LocalModel:    localModel,
 					SwanModelID:   swan.ID,
