@@ -742,13 +742,11 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 		// Parse chunk for filtering and post-processing
 		var chunkMap map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &chunkMap); err == nil {
-			// Fix: Skip chunks with empty choices array (causes "list index out of range" in clients)
-			if choices, ok := chunkMap["choices"].([]interface{}); ok && len(choices) == 0 {
-				continue
-			}
+			hasUsage := false
 
-			// Extract usage information (OpenAI returns usage in last content chunk)
+			// Extract usage information (OpenAI/SGLang sends usage in a chunk with empty choices)
 			if usage, ok := chunkMap["usage"].(map[string]interface{}); ok && usage != nil {
+				hasUsage = true
 				if pt, ok := usage["prompt_tokens"].(float64); ok {
 					result.TokensInput = int64(pt)
 				}
@@ -764,6 +762,14 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 					if modified, err := json.Marshal(chunkMap); err == nil {
 						data = string(modified)
 					}
+				}
+			}
+
+			// Fix: Skip chunks with empty choices array (causes "list index out of range" in clients)
+			// But preserve usage-only chunks (SGLang sends usage with choices: [])
+			if !hasUsage {
+				if choices, ok := chunkMap["choices"].([]interface{}); ok && len(choices) == 0 {
+					continue
 				}
 			}
 		}
