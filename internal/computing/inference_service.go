@@ -42,11 +42,13 @@ var streamingHttpClient = &http.Client{
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
-	Container  string `json:"container"`
-	Endpoint   string `json:"endpoint"`
-	GPUMemory  int    `json:"gpu_memory"`
-	Category   string `json:"category"`
-	LocalModel string `json:"local_model"` // Actual model name for local inference server (e.g., Ollama model name)
+	Container    string `json:"container"`
+	Endpoint     string `json:"endpoint"`
+	GPUMemory    int    `json:"gpu_memory"`
+	Category     string `json:"category"`
+	LocalModel   string `json:"local_model"`             // Actual model name for local inference server (e.g., Ollama model name)
+	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
+	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -105,10 +107,12 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		func(model *RegisteredModel) {
 			// On model added
 			s.modelMappings[model.ID] = ModelMapping{
-				Container: model.Container,
-				Endpoint:  model.Endpoint,
-				GPUMemory: model.GPUMemory,
-				Category:  model.Category,
+				Container:    model.Container,
+				Endpoint:     model.Endpoint,
+				GPUMemory:    model.GPUMemory,
+				Category:     model.Category,
+				Format:       model.Format,
+				Quantization: model.Quantization,
 			}
 			s.updateClientModels()
 		},
@@ -120,10 +124,12 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		func(model *RegisteredModel) {
 			// On model updated
 			s.modelMappings[model.ID] = ModelMapping{
-				Container: model.Container,
-				Endpoint:  model.Endpoint,
-				GPUMemory: model.GPUMemory,
-				Category:  model.Category,
+				Container:    model.Container,
+				Endpoint:     model.Endpoint,
+				GPUMemory:    model.GPUMemory,
+				Category:     model.Category,
+				Format:       model.Format,
+				Quantization: model.Quantization,
 			}
 		},
 	)
@@ -198,6 +204,11 @@ func (s *InferenceService) Start() error {
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 	s.client.SetWarmupHandler(s.handleWarmup)
+
+	// Set up model mappings provider for format/quantization and engine detection
+	s.client.SetModelMappingsProvider(func() map[string]ModelMapping {
+		return s.modelMappings
+	})
 
 	// Set up model health provider for heartbeats (backup for health update messages)
 	s.client.SetModelHealthProvider(func() map[string]string {

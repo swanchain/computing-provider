@@ -56,13 +56,16 @@ type HardwareInfo struct {
 	ComputeCapability string `json:"compute_capability"`
 	DriverVersion     string `json:"driver_version"`
 	CUDAVersion       string `json:"cuda_version"`
+	ServingEngine     string `json:"serving_engine,omitempty"` // "vllm", "sglang", "llamacpp", "ollama", "tgi", "unknown"
 }
 
 // ModelInfo contains model identification and verification hash
 type ModelInfo struct {
-	ModelID    string `json:"model_id"`
-	WeightHash string `json:"weight_hash,omitempty"` // Composite SHA256 of all weight files
-	HashAlgo   string `json:"hash_algo,omitempty"`   // Hash algorithm, e.g. "sha256"
+	ModelID      string `json:"model_id"`
+	WeightHash   string `json:"weight_hash,omitempty"`   // Composite SHA256 of all weight files
+	HashAlgo     string `json:"hash_algo,omitempty"`     // Hash algorithm, e.g. "sha256"
+	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
+	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 }
 
 // VerifyResponsePayload is returned after processing a verification challenge
@@ -227,7 +230,8 @@ type InferenceClient struct {
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
 	warmupHandler             WarmupHandler
-	modelHealthProvider       func() map[string]string // Returns current model health for heartbeat
+	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
+	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -302,6 +306,11 @@ func (c *InferenceClient) SetWarmupHandler(handler WarmupHandler) {
 // SetModelHealthProvider sets the function that provides current model health for heartbeats
 func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]string) {
 	c.modelHealthProvider = provider
+}
+
+// SetModelMappingsProvider sets the function that returns model mappings for format/quantization
+func (c *InferenceClient) SetModelMappingsProvider(provider func() map[string]ModelMapping) {
+	c.modelMappingsProvider = provider
 }
 
 // ProviderStatusResponse represents the status check response from Swan Inference
@@ -617,10 +626,98 @@ func detectAppleSiliconHardware() *HardwareInfo {
 	return hardware
 }
 
+// detectServingEngine probes model endpoints to identify the inference engine.
+// Returns one of: "sglang", "vllm", "ollama", "llamacpp", "tgi", "unknown".
+func (c *InferenceClient) detectServingEngine() string {
+	var mappings map[string]ModelMapping
+	if c.modelMappingsProvider != nil {
+		mappings = c.modelMappingsProvider()
+	}
+	if len(mappings) == 0 {
+		return "unknown"
+	}
+
+	// Collect unique endpoints
+	endpoints := make(map[string]bool)
+	for _, m := range mappings {
+		if m.Endpoint != "" {
+			endpoints[m.Endpoint] = true
+		}
+	}
+
+	httpClient := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	// Count detected engine types across endpoints
+	engineCounts := make(map[string]int)
+	for endpoint := range endpoints {
+		engine := probeEndpointEngine(httpClient, endpoint)
+		engineCounts[engine]++
+	}
+
+	// Return the most common engine
+	bestEngine := "unknown"
+	bestCount := 0
+	for engine, count := range engineCounts {
+		if count > bestCount && engine != "unknown" {
+			bestEngine = engine
+			bestCount = count
+		}
+	}
+
+	logs.GetLogger().Infof("Detected serving engine: %s", bestEngine)
+	return bestEngine
+}
+
+// probeEndpointEngine detects the inference engine type for a given endpoint.
+func probeEndpointEngine(client *http.Client, endpoint string) string {
+	// Try SGLang-specific endpoint
+	if resp, err := client.Get(endpoint + "/get_server_args"); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return "sglang"
+		}
+	}
+
+	// Try vLLM version endpoint
+	if resp, err := client.Get(endpoint + "/version"); err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			var version struct {
+				Version string `json:"version"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&version) == nil {
+				if strings.Contains(strings.ToLower(version.Version), "vllm") {
+					return "vllm"
+				}
+			}
+		}
+	}
+
+	// Try Ollama API
+	if resp, err := client.Get(endpoint + "/api/tags"); err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return "ollama"
+		}
+	}
+
+	return "unknown"
+}
+
 func (c *InferenceClient) register() error {
 	// Detect GPU hardware and cache it for heartbeat messages
 	hardware := detectGPUHardware()
 	c.hardware = hardware
+
+	// Detect serving engine from model endpoints
+	if hardware != nil {
+		hardware.ServingEngine = c.detectServingEngine()
+	}
 
 	// Load hash manifests for each model
 	modelHashes := c.loadModelHashes()
@@ -1256,9 +1353,21 @@ func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, succ
 func (c *InferenceClient) loadModelHashes() []ModelInfo {
 	hashes := make([]ModelInfo, 0, len(c.models))
 
+	// Get model mappings for format/quantization
+	var mappings map[string]ModelMapping
+	if c.modelMappingsProvider != nil {
+		mappings = c.modelMappingsProvider()
+	}
+
 	for _, modelID := range c.models {
 		info := ModelInfo{
 			ModelID: modelID,
+		}
+
+		// Populate format/quantization from model mappings
+		if mapping, ok := mappings[modelID]; ok {
+			info.Format = mapping.Format
+			info.Quantization = mapping.Quantization
 		}
 
 		modelDir := c.getModelDir(modelID)
