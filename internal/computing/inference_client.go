@@ -1231,6 +1231,8 @@ func (c *InferenceClient) handleVerification(requestID string, payload VerifyPay
 	switch payload.ChallengeType {
 	case "fingerprint":
 		c.handleFingerprintChallenge(requestID, payload)
+	case "deterministic":
+		c.handleDeterministicChallenge(requestID, payload)
 	default:
 		logs.GetLogger().Warnf("Unsupported challenge type: %s", payload.ChallengeType)
 		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "unsupported challenge type: "+payload.ChallengeType)
@@ -1258,6 +1260,19 @@ type FingerprintResponseFile struct {
 	Filename string `json:"filename"`
 	Hash     string `json:"hash"`
 	Status   string `json:"status"` // "pass", "fail", "missing"
+}
+
+// DeterministicChallengeData represents a deterministic inference challenge from the server
+type DeterministicChallengeData struct {
+	Prompt    string `json:"prompt"`
+	Seed      int    `json:"seed"`
+	MaxTokens int    `json:"max_tokens"`
+}
+
+// DeterministicResponseData is the response sent back for a deterministic challenge
+type DeterministicResponseData struct {
+	Tokens []string `json:"tokens"`
+	Text   string   `json:"text"`
 }
 
 func (c *InferenceClient) handleFingerprintChallenge(requestID string, payload VerifyPayload) {
@@ -1324,6 +1339,104 @@ func (c *InferenceClient) handleFingerprintChallenge(requestID string, payload V
 	responseData, _ := json.Marshal(response)
 	c.sendVerifyResponse(requestID, payload.ChallengeID, allPass, responseData, "")
 	logs.GetLogger().Infof("Fingerprint verification %s completed: success=%v", requestID, allPass)
+}
+
+func (c *InferenceClient) handleDeterministicChallenge(requestID string, payload VerifyPayload) {
+	// Parse the challenge
+	var challenge DeterministicChallengeData
+	if err := json.Unmarshal(payload.Challenge, &challenge); err != nil {
+		logs.GetLogger().Errorf("Failed to parse deterministic challenge: %v", err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "failed to parse challenge")
+		return
+	}
+
+	if c.inferenceHandler == nil {
+		logs.GetLogger().Errorf("No inference handler configured for deterministic challenge %s", requestID)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "no inference handler configured")
+		return
+	}
+
+	// Build OpenAI-compatible chat completion request with deterministic settings
+	reqBody := map[string]interface{}{
+		"model": payload.ModelID,
+		"messages": []map[string]string{
+			{"role": "user", "content": challenge.Prompt},
+		},
+		"temperature":  0,
+		"seed":         challenge.Seed,
+		"max_tokens":   challenge.MaxTokens,
+		"logprobs":     true,
+		"top_logprobs": 1,
+		"stream":       false,
+	}
+
+	requestJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		logs.GetLogger().Errorf("Failed to marshal deterministic request: %v", err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "failed to build request")
+		return
+	}
+
+	// Reuse the existing inference path
+	inferPayload := InferencePayload{
+		ModelID: payload.ModelID,
+		Request: json.RawMessage(requestJSON),
+		Stream:  false,
+	}
+
+	resp, err := c.inferenceHandler(inferPayload)
+	if err != nil {
+		logs.GetLogger().Errorf("Deterministic inference failed for %s: %v", requestID, err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "inference failed: "+err.Error())
+		return
+	}
+
+	// Parse the OpenAI response to extract tokens and text
+	var openAIResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Logprobs *struct {
+				Content []struct {
+					Token string `json:"token"`
+				} `json:"content"`
+			} `json:"logprobs"`
+		} `json:"choices"`
+	}
+
+	if err := json.Unmarshal(resp.Response, &openAIResp); err != nil {
+		logs.GetLogger().Errorf("Failed to parse inference response for deterministic challenge %s: %v", requestID, err)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "failed to parse inference response")
+		return
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		logs.GetLogger().Errorf("No choices in inference response for deterministic challenge %s", requestID)
+		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "no choices in inference response")
+		return
+	}
+
+	text := openAIResp.Choices[0].Message.Content
+
+	// Extract tokens: prefer logprobs for exact token boundaries, fall back to word-split
+	var tokens []string
+	if openAIResp.Choices[0].Logprobs != nil && len(openAIResp.Choices[0].Logprobs.Content) > 0 {
+		for _, lp := range openAIResp.Choices[0].Logprobs.Content {
+			tokens = append(tokens, lp.Token)
+		}
+	} else {
+		tokens = strings.Fields(text)
+	}
+
+	result := DeterministicResponseData{
+		Tokens: tokens,
+		Text:   text,
+	}
+
+	responseData, _ := json.Marshal(result)
+	c.sendVerifyResponse(requestID, payload.ChallengeID, true, responseData, "")
+	logs.GetLogger().Infof("Deterministic verification %s completed: %d tokens extracted", requestID, len(tokens))
 }
 
 func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, success bool, responseData json.RawMessage, errMsg string) {
