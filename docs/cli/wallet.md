@@ -320,6 +320,4 @@ computing-provider network status
 
 ## Related Commands
 
-- [`account`](account.md) - Account management
-- [`collateral`](collateral.md) - Collateral management
-- [`network`](network.md) - Network configuration 
+- [`task`](task.md) - Task management

@@ -19,9 +19,9 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 ## Commands Overview
 
 ### Core Commands
-- [`init`](init.md) - Initialize a new computing provider repository
-- [`info`](info.md) - Display provider information
-- [`state`](state.md) - Show provider state
+- `init` - Initialize a new computing provider repository
+- `info` - Display provider information
+- `state` - Show provider state
 
 ### Inference Commands
 - `inference status` - Check provider status on Swan Inference
@@ -31,23 +31,23 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 - `dashboard` - Start the inference dashboard web UI
 
 ### Account Management
-- [`account`](account.md) - Manage provider account settings
+- `account` - Manage provider account settings
 - [`wallet`](wallet.md) - Manage wallet operations
 
 ### Task Management
 - [`task`](task.md) - Manage computing tasks
-- [`ubi-task`](ubi-task.md) - Manage UBI tasks
+- `ubi-task` - Manage UBI tasks
 
 ### Financial Operations
-- [`collateral`](collateral.md) - Manage provider collateral
-- [`price`](price.md) - Manage pricing settings
+- `collateral` - Manage provider collateral
+- `price` - Manage pricing settings
 
 ### Network Operations
-- [`network`](network.md) - Network configuration and management
-- [`sequencer`](sequencer.md) - Sequencer operations
+- `network` - Network configuration and management
+- `sequencer` - Sequencer operations
 
 ### Contract Operations
-- [`contract`](contract.md) - Smart contract interactions
+- `contract` - Smart contract interactions
 
 ## Environment Variables
 
@@ -215,7 +215,5 @@ Features: real-time metrics, GPU status, model management, request controls.
 
 ## Next Steps
 
-- [Initialize your provider](init.md)
-- [Configure your account](account.md)
 - [Set up your wallet](wallet.md)
-- [Start managing tasks](task.md) 
+- [Start managing tasks](task.md)

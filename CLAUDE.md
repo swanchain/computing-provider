@@ -119,7 +119,7 @@ docker run -d --gpus all -p 30000:30000 --name sglang \
     --served-model-name meta-llama/Llama-3.2-3B-Instruct
 ```
 
-> **Performance:** See [SGLang Performance Tuning Best Practices](docs/best-practices.md) for GPU-specific configs, memory tuning, and multi-GPU TP settings.
+> **Performance:** See [SGLang Performance Tuning Best Practices](docs/sglang-best-practices.md) for GPU-specific configs, memory tuning, and multi-GPU TP settings.
 
 ## Testing
 

@@ -40,7 +40,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 
 ### Provider Modes
 - [Edge Computing Provider](ecp/README.md) - Inference and ZK-Proof mode setup
-- [UBI Tasks](ubi/README.md) - ZK proof task management
+- [UBI Tasks](ubi/architecture.md) - ZK proof task management
 
 ### Operations
 - [Command Line Interface](cli/README.md) - Complete CLI reference
@@ -57,7 +57,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 
 ### Advanced Topics
 - [SGLang Deployment](sglang-deployment.md) - Deploy SGLang for inference
-- [SGLang Performance Tuning](best-practices.md) - GPU configs, memory tuning, latency optimization
+- [SGLang Performance Tuning](sglang-best-practices.md) - GPU configs, memory tuning, latency optimization
 - [Swan Inference Design](swan-inference-design.md) - Architecture overview
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
 - [Security Best Practices](security.md) - Security guidelines
