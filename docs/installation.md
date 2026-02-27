@@ -102,18 +102,6 @@ chmod +x install.sh
 ./install.sh
 ```
 
-## Docker Installation (Alternative)
-
-If you prefer using Docker:
-
-```bash
-# Build the Docker image
-docker build -t computing-provider .
-
-# Run the container
-docker run -it --rm computing-provider --help
-```
-
 ## Verification
 
 After installation, verify that everything is working:
