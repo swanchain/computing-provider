@@ -169,4 +169,4 @@ docker ps -a
 
 ## Related Commands
 
-- [`wallet`](wallet.md) - Wallet management
+- `wallet` - Wallet management (`computing-provider wallet --help`)

@@ -45,7 +45,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 ### Operations
 - [Command Line Interface](cli/README.md) - Complete CLI reference
 - [Task Management](cli/task.md) - Managing computing tasks
-- [Wallet Management](cli/wallet.md) - Wallet operations and security
+- Wallet Management - `computing-provider wallet --help`
 - `computing-provider inference status` - Check provider status on Swan Inference
 - `computing-provider inference config` - Show inference configuration
 - `computing-provider dashboard` - Web-based monitoring UI (port 3005)
@@ -60,7 +60,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 - [SGLang Performance Tuning](sglang-best-practices.md) - GPU configs, memory tuning, latency optimization
 - [Swan Inference Design](swan-inference-design.md) - Architecture overview
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
-- [Security Best Practices](security.md) - Security guidelines
+
 
 ## Getting Help
 

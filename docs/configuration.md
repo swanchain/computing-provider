@@ -270,6 +270,5 @@ computing-provider state
 
 After configuring your Computing Provider:
 
-1. [Set up your wallet](cli/wallet.md)
-2. [Start the provider](getting-started.md)
-3. [Monitor tasks](cli/task.md)
+1. [Start the provider](getting-started.md)
+2. [Monitor tasks](cli/task.md)

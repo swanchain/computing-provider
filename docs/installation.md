@@ -134,8 +134,7 @@ computing-provider init
 After successful installation:
 
 1. [Configure your environment](configuration.md)
-2. [Set up your wallet](wallet.md)
-3. [Choose your provider type](getting-started.md)
+2. [Choose your provider type](getting-started.md)
 
 ## Troubleshooting
 

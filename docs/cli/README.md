@@ -32,7 +32,7 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 
 ### Account Management
 - `account` - Manage provider account settings
-- [`wallet`](wallet.md) - Manage wallet operations
+- `wallet` - Manage wallet operations
 
 ### Task Management
 - [`task`](task.md) - Manage computing tasks
@@ -215,5 +215,4 @@ Features: real-time metrics, GPU status, model management, request controls.
 
 ## Next Steps
 
-- [Set up your wallet](wallet.md)
 - [Start managing tasks](task.md)
