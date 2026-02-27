@@ -42,20 +42,18 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 - `collateral` - Manage provider collateral
 - `price` - Manage pricing settings
 
-### Network Operations
-- `network` - Network configuration and management
+### Other Operations
 - `sequencer` - Sequencer operations
-
-### Contract Operations
 - `contract` - Smart contract interactions
+- `collateral` - Collateral management
 
 ## Environment Variables
 
 The CLI respects the following environment variables:
 
-- `CP_PATH`: Repository directory path
-- `CP_NETWORK`: Network configuration
-- `CP_WALLET`: Wallet configuration
+- `CP_PATH`: Repository directory path (default: `~/.swan/computing`)
+- `INFERENCE_API_KEY`: Provider API key (overrides config)
+- `INFERENCE_WS_URL`: WebSocket URL (useful for local dev)
 
 ## Examples
 
@@ -134,37 +132,6 @@ computing-provider task list
 ```bash
 computing-provider task list --tail 10
 ```
-
-## Error Handling
-
-The CLI provides clear error messages and exit codes:
-
-- `0`: Success
-- `1`: General error
-- `2`: Configuration error
-- `3`: Network error
-- `4`: Permission error
-
-## Logging
-
-Enable debug logging:
-
-```bash
-# Set log level
-export CP_LOG_LEVEL=debug
-
-# Or use flag
-computing-provider --log-level debug run
-```
-
-## Configuration
-
-The CLI reads configuration from:
-
-1. Command line flags
-2. Environment variables
-3. Configuration file (`config.toml`)
-4. Default values
 
 ## Inference Commands
 

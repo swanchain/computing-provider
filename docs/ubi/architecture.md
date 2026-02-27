@@ -252,7 +252,7 @@ computing-provider ubi list --show-failed
 
 ### List ECP Tasks (Inference/Mining)
 ```bash
-computing-provider task list --ecp
+computing-provider task list
 ```
 
 ### Sequencer Management
