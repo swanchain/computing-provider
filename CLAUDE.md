@@ -111,11 +111,15 @@ The wizard handles:
 **Start SGLang server:**
 ```bash
 docker run -d --gpus all -p 30000:30000 --name sglang \
+  --shm-size 4g --ipc=host \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path meta-llama/Llama-3.2-3B-Instruct \
-    --host 0.0.0.0 --port 30000
+    --host 0.0.0.0 --port 30000 \
+    --served-model-name meta-llama/Llama-3.2-3B-Instruct
 ```
+
+> **Performance:** See [SGLang Performance Tuning Best Practices](docs/best-practices.md) for GPU-specific configs, memory tuning, and multi-GPU TP settings.
 
 ## Testing
 

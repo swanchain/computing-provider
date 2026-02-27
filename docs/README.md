@@ -57,6 +57,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 
 ### Advanced Topics
 - [SGLang Deployment](sglang-deployment.md) - Deploy SGLang for inference
+- [SGLang Performance Tuning](best-practices.md) - GPU configs, memory tuning, latency optimization
 - [Swan Inference Design](swan-inference-design.md) - Architecture overview
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
 - [Security Best Practices](security.md) - Security guidelines
