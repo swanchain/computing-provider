@@ -238,6 +238,10 @@ type InferenceClient struct {
 	// Cached hardware info (detected once at registration)
 	hardware *HardwareInfo
 
+	// Heartbeat ack tracking
+	lastHeartbeatAck time.Time // Last time we received an ack for a heartbeat
+	missedAcks       int       // Consecutive heartbeats without ack response
+
 	// Metrics tracking
 	metrics      *InferenceMetrics
 	gpuCollector *GPUMetricsCollector
@@ -806,7 +810,15 @@ func (c *InferenceClient) readPump() {
 
 func (c *InferenceClient) writePump() {
 	ticker := time.NewTicker(pingPeriod)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		// Close connection so readPump detects failure immediately
+		c.mu.Lock()
+		if c.conn != nil {
+			c.conn.Close()
+		}
+		c.mu.Unlock()
+	}()
 
 	for {
 		select {
@@ -868,6 +880,20 @@ func (c *InferenceClient) heartbeatPump() {
 			}
 
 			c.sendHeartbeat()
+
+			c.mu.Lock()
+			c.missedAcks++
+			missed := c.missedAcks
+			c.mu.Unlock()
+
+			if missed >= 3 {
+				logs.GetLogger().Warnf("No heartbeat ack received for %d intervals, forcing reconnect", missed)
+				c.mu.Lock()
+				if c.conn != nil {
+					c.conn.Close()
+				}
+				c.mu.Unlock()
+			}
 		}
 	}
 }
@@ -1010,6 +1036,8 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		if payload.Success {
 			c.mu.Lock()
 			c.registered = true
+			c.lastHeartbeatAck = time.Now()
+			c.missedAcks = 0
 			c.mu.Unlock()
 			logs.GetLogger().Infof("Registration successful: %s", payload.Message)
 		} else {
@@ -1615,11 +1643,15 @@ func (c *InferenceClient) sendInferenceResponse(response *InferenceResponse) {
 	c.send <- msgBytes
 }
 
-// IsConnected returns whether the client is connected and registered
+// IsConnected returns whether the client is connected, registered, and healthy.
+// A connection is considered unhealthy if 3+ consecutive heartbeats went unacknowledged.
 func (c *InferenceClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.conn != nil && c.registered
+	if c.conn == nil || !c.registered {
+		return false
+	}
+	return c.missedAcks < 3
 }
 
 // GetNodeID returns the local node ID
