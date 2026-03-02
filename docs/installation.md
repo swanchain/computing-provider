@@ -102,18 +102,6 @@ chmod +x install.sh
 ./install.sh
 ```
 
-## Docker Installation (Alternative)
-
-If you prefer using Docker:
-
-```bash
-# Build the Docker image
-docker build -t computing-provider .
-
-# Run the container
-docker run -it --rm computing-provider --help
-```
-
 ## Verification
 
 After installation, verify that everything is working:
@@ -134,8 +122,7 @@ computing-provider init
 After successful installation:
 
 1. [Configure your environment](configuration.md)
-2. [Set up your wallet](wallet.md)
-3. [Choose your provider type](getting-started.md)
+2. [Choose your provider type](getting-started.md)
 
 ## Troubleshooting
 

@@ -62,7 +62,7 @@ Password = ""
 Enable = true                                        # Inference mode is enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"     # Swan Inference WebSocket endpoint
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: Provider API key from https://inference.swanchain.io
-Models = ["llama-3.2-3b"]                            # Models this provider serves (must match models.json)
+Models = ["meta-llama/Llama-3.2-3B-Instruct"]         # Models this provider serves (must match models.json keys)
 ServiceURL = ""                                      # Optional: HTTP API URL (auto-derived from WebSocketURL if empty)
 ```
 
@@ -162,14 +162,11 @@ SWAN_CHAIN_RPC = "https://testnet-rpc.swanchain.io"
 
 ## Pricing Configuration
 
-Resource pricing is configured in `$CP_PATH/price.toml`:
+Resource pricing is configured in `$CP_PATH/price.toml`. Generate and manage with CLI commands:
 
-```toml
-[pricing]
-cpu_per_hour = "0.01"           # Price per CPU core per hour
-memory_per_hour = "0.005"       # Price per GB RAM per hour
-gpu_per_hour = "0.50"           # Price per GPU per hour
-storage_per_hour = "0.001"      # Price per GB storage per hour
+```bash
+computing-provider price generate   # Generate default pricing config
+computing-provider price view       # View current pricing
 ```
 
 ## Inference Mode Configuration
@@ -185,7 +182,7 @@ PortRange = ["40000-40050", "40060"]
 Enable = true                                        # Enabled by default
 WebSocketURL = "wss://inference-ws.swanchain.io"     # Production
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: your provider API key
-Models = ["llama-3.2-3b"]                            # Models this provider serves
+Models = ["meta-llama/Llama-3.2-3B-Instruct"]         # Models this provider serves
 ```
 
 To verify your configuration:
@@ -270,6 +267,5 @@ computing-provider state
 
 After configuring your Computing Provider:
 
-1. [Set up your wallet](cli/wallet.md)
-2. [Start the provider](getting-started.md)
-3. [Monitor tasks](cli/task.md)
+1. [Start the provider](getting-started.md)
+2. [Monitor tasks](cli/task.md)

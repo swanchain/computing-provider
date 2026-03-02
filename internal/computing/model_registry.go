@@ -45,7 +45,9 @@ type RegisteredModel struct {
 	Endpoint     string       `json:"endpoint"`
 	GPUMemory    int          `json:"gpu_memory"`
 	Category     string       `json:"category"`
-	LocalModel   string       `json:"local_model,omitempty"` // Actual model name for local inference server
+	LocalModel   string       `json:"local_model,omitempty"`   // Actual model name for local inference server
+	Format       string       `json:"format,omitempty"`        // Weight format: fp16, awq, gptq, gguf, etc.
+	Quantization string       `json:"quantization,omitempty"`  // Quantization detail: q4_k_m, q8_0, w4a16, etc.
 	State        ModelState   `json:"state"`
 	StateString  string       `json:"state_string"`
 	Health       ModelHealth  `json:"health"`
@@ -204,13 +206,17 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.Container != mapping.Container ||
 				existingModel.GPUMemory != mapping.GPUMemory ||
 				existingModel.Category != mapping.Category ||
-				existingModel.LocalModel != mapping.LocalModel {
+				existingModel.LocalModel != mapping.LocalModel ||
+				existingModel.Format != mapping.Format ||
+				existingModel.Quantization != mapping.Quantization {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
 				existingModel.GPUMemory = mapping.GPUMemory
 				existingModel.Category = mapping.Category
 				existingModel.LocalModel = mapping.LocalModel
+				existingModel.Format = mapping.Format
+				existingModel.Quantization = mapping.Quantization
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
@@ -239,6 +245,8 @@ func (r *ModelRegistry) loadConfig() error {
 				GPUMemory:    mapping.GPUMemory,
 				Category:     mapping.Category,
 				LocalModel:   mapping.LocalModel,
+				Format:       mapping.Format,
+				Quantization: mapping.Quantization,
 				State:        ModelStateLoading,
 				StateString:  ModelStateLoading.String(),
 				Health:       ModelHealthUnknown,

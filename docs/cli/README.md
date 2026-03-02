@@ -19,9 +19,9 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 ## Commands Overview
 
 ### Core Commands
-- [`init`](init.md) - Initialize a new computing provider repository
-- [`info`](info.md) - Display provider information
-- [`state`](state.md) - Show provider state
+- `init` - Initialize a new computing provider repository
+- `info` - Display provider information
+- `state` - Show provider state
 
 ### Inference Commands
 - `inference status` - Check provider status on Swan Inference
@@ -31,31 +31,29 @@ computing-provider [global-flags] <command> [command-flags] [arguments]
 - `dashboard` - Start the inference dashboard web UI
 
 ### Account Management
-- [`account`](account.md) - Manage provider account settings
-- [`wallet`](wallet.md) - Manage wallet operations
+- `account` - Manage provider account settings
+- `wallet` - Manage wallet operations
 
 ### Task Management
 - [`task`](task.md) - Manage computing tasks
-- [`ubi-task`](ubi-task.md) - Manage UBI tasks
+- `ubi-task` - Manage UBI tasks
 
 ### Financial Operations
-- [`collateral`](collateral.md) - Manage provider collateral
-- [`price`](price.md) - Manage pricing settings
+- `collateral` - Manage provider collateral
+- `price` - Manage pricing settings
 
-### Network Operations
-- [`network`](network.md) - Network configuration and management
-- [`sequencer`](sequencer.md) - Sequencer operations
-
-### Contract Operations
-- [`contract`](contract.md) - Smart contract interactions
+### Other Operations
+- `sequencer` - Sequencer operations
+- `contract` - Smart contract interactions
+- `collateral` - Collateral management
 
 ## Environment Variables
 
 The CLI respects the following environment variables:
 
-- `CP_PATH`: Repository directory path
-- `CP_NETWORK`: Network configuration
-- `CP_WALLET`: Wallet configuration
+- `CP_PATH`: Repository directory path (default: `~/.swan/computing`)
+- `INFERENCE_API_KEY`: Provider API key (overrides config)
+- `INFERENCE_WS_URL`: WebSocket URL (useful for local dev)
 
 ## Examples
 
@@ -135,37 +133,6 @@ computing-provider task list
 computing-provider task list --tail 10
 ```
 
-## Error Handling
-
-The CLI provides clear error messages and exit codes:
-
-- `0`: Success
-- `1`: General error
-- `2`: Configuration error
-- `3`: Network error
-- `4`: Permission error
-
-## Logging
-
-Enable debug logging:
-
-```bash
-# Set log level
-export CP_LOG_LEVEL=debug
-
-# Or use flag
-computing-provider --log-level debug run
-```
-
-## Configuration
-
-The CLI reads configuration from:
-
-1. Command line flags
-2. Environment variables
-3. Configuration file (`config.toml`)
-4. Default values
-
 ## Inference Commands
 
 ### `inference status`
@@ -215,7 +182,4 @@ Features: real-time metrics, GPU status, model management, request controls.
 
 ## Next Steps
 
-- [Initialize your provider](init.md)
-- [Configure your account](account.md)
-- [Set up your wallet](wallet.md)
-- [Start managing tasks](task.md) 
+- [Start managing tasks](task.md)

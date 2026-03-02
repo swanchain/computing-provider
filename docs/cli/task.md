@@ -169,6 +169,4 @@ docker ps -a
 
 ## Related Commands
 
-- [`ubi-task`](ubi-task.md) - Manage UBI tasks
-- [`info`](info.md) - Provider information
-- [`state`](state.md) - Provider state
+- `wallet` - Wallet management (`computing-provider wallet --help`)

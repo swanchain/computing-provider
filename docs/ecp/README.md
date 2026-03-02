@@ -103,7 +103,7 @@ docker info | grep -i nvidia
 ### 3. Run Setup Script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/swanchain/computing-provider/releases/ubi/setup.sh | bash
 ```
 
 ### 4. Download v28 Parameters (for ZK-FIL tasks)
@@ -113,18 +113,18 @@ curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/rel
 export PARENT_PATH="<V28_PARAMS_PATH>"
 
 # 512MiB parameters
-curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+curl -fsSL https://raw.githubusercontent.com/swanchain/computing-provider/releases/ubi/fetch-param-512.sh | bash
 
 # 32GiB parameters
-curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-32.sh | bash
+curl -fsSL https://raw.githubusercontent.com/swanchain/computing-provider/releases/ubi/fetch-param-32.sh | bash
 ```
 
 ### 5. Build Computing Provider
 
 ```bash
 # Clone repository
-git clone https://github.com/swanchain/go-computing-provider.git
-cd go-computing-provider
+git clone https://github.com/swanchain/computing-provider.git
+cd computing-provider
 git checkout releases
 
 # Build for mainnet
@@ -290,7 +290,7 @@ nohup computing-provider run >> cp.log 2>&1 &
 
 ```bash
 # List ECP tasks
-computing-provider task list --ecp
+computing-provider task list
 
 # List UBI (ZK proof) tasks
 computing-provider ubi list
@@ -308,7 +308,7 @@ tail -f cp.log
 
 ```bash
 # List ECP tasks (inference/mining)
-computing-provider task list --ecp
+computing-provider task list
 
 # List UBI tasks (ZK proofs)
 computing-provider ubi list
@@ -376,7 +376,7 @@ TASK ID  TASK CONTRACT                                 TASK TYPE  ZK TYPE  STATU
 4. **v28 Parameters Missing**
    ```bash
    export PARENT_PATH="<path>"
-   curl -fsSL https://raw.githubusercontent.com/swanchain/go-computing-provider/releases/ubi/fetch-param-512.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/swanchain/computing-provider/releases/ubi/fetch-param-512.sh | bash
    ```
 
 5. **CP Account Not Created**
@@ -452,7 +452,7 @@ computing-provider collateral withdraw --ecp --owner <OWNER_ADDRESS> --account <
 ## Support
 
 - [Discord Community](https://discord.gg/Jd2BFSVCKw)
-- [GitHub Issues](https://github.com/swanchain/go-computing-provider/issues)
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues)
 - [Swan Chain Documentation](https://docs.swanchain.io)
 - [Sequencer Documentation](https://docs.swanchain.io/bulders/market-provider/web3-zk-computing-market/sequencer)
 

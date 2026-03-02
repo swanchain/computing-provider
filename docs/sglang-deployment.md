@@ -292,7 +292,7 @@ Edit `~/.swan/computing/config.toml`:
 [Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
-Models = ["qwen-2.5-7b", "qwen-2.5-72b"]
+Models = ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-72B-Instruct"]
 ```
 
 ### Model-to-Container Mapping
@@ -301,28 +301,28 @@ Create a mapping file `~/.swan/computing/models.json`:
 
 ```json
 {
-  "qwen-2.5-3b": {
-    "container": "lmsysorg/sglang:latest",
+  "Qwen/Qwen2.5-3B-Instruct": {
     "endpoint": "http://localhost:30000",
     "gpu_memory": 8000,
-    "category": "text-generation"
+    "category": "text-generation",
+    "local_model": "qwen-2.5-3b"
   },
-  "qwen-2.5-7b": {
-    "container": "lmsysorg/sglang:latest",
+  "Qwen/Qwen2.5-7B-Instruct": {
     "endpoint": "http://localhost:30001",
     "gpu_memory": 16000,
-    "category": "text-generation"
+    "category": "text-generation",
+    "local_model": "qwen-2.5-7b"
   },
-  "qwen-2.5-72b": {
-    "container": "lmsysorg/sglang:latest",
+  "Qwen/Qwen2.5-72B-Instruct": {
     "endpoint": "http://localhost:30002",
     "gpu_memory": 160000,
-    "category": "text-generation"
+    "category": "text-generation",
+    "local_model": "qwen-2.5-72b"
   }
 }
 ```
 
-> **Note:** The `endpoint` URL points to your local SGLang server. The CP forwards inference requests to this endpoint.
+> **Note:** Model IDs use HuggingFace repo IDs as keys. The `local_model` field maps to the `--served-model-name` used in your SGLang server. The `endpoint` URL points to your local SGLang server.
 
 ### Start Inference Daemon
 

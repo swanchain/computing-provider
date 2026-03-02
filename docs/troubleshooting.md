@@ -55,8 +55,8 @@ computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=
 # Check configuration file
 cat ~/.swan/computing/config.toml
 
-# Regenerate configuration if corrupted
-cp config.toml.sample ~/.swan/computing/config.toml
+# Reinitialize if config is corrupted
+computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
 ```
 
 **Check Permissions**
@@ -261,7 +261,7 @@ lspci | grep -i nvidia
 **Task Failures**
 ```bash
 # Check task details
-computing-provider task get <job_uuid> --ecp
+computing-provider task get <job_uuid>
 
 # Check system logs
 tail -f cp.log

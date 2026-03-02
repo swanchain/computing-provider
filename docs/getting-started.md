@@ -78,7 +78,7 @@ docker run -d --gpus all -p 30000:30000 --name sglang \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server \
     --model-path Qwen/Qwen2.5-3B-Instruct \
-    --host 0.0.0.0 --port 30000 --served-model-name qwen-2.5-3b
+    --host 0.0.0.0 --port 30000 --served-model-name Qwen/Qwen2.5-3B-Instruct
 ```
 
 ### 3. Run Setup Wizard
@@ -143,7 +143,7 @@ computing-provider setup
 
 The wizard will:
 - Detect Ollama and your pulled models
-- Auto-match models to Swan Inference IDs (e.g., `llama3.2:3b` → `llama-3.2-3b`)
+- Auto-match models to Swan Inference IDs (e.g., `llama3.2:3b` → `meta-llama/Llama-3.2-3B-Instruct`)
 - Create your Swan Inference account
 - Generate all config files
 

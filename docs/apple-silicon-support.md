@@ -103,7 +103,7 @@ The wizard will:
 1. Check prerequisites (Ollama, Docker)
 2. Create or login to your Swan Inference account
 3. Auto-discover your Ollama models
-4. Auto-match them to Swan Inference model IDs (e.g., `llama3.2:3b` → `llama-3.2-3b`)
+4. Auto-match them to Swan Inference model IDs (e.g., `llama3.2:3b` → `meta-llama/Llama-3.2-3B-Instruct`)
 5. Generate `config.toml` and `models.json`
 
 ### Step 5: Start the Provider
@@ -138,7 +138,7 @@ computing-provider init --node-name=my-mac-provider
 # Create models.json manually
 cat > ~/.swan/computing/models.json << 'EOF'
 {
-  "llama-3.2-3b": {
+  "meta-llama/Llama-3.2-3B-Instruct": {
     "endpoint": "http://localhost:11434",
     "gpu_memory": 4000,
     "category": "text-generation",
@@ -150,7 +150,7 @@ EOF
 # Edit config.toml to add your API key and models
 ```
 
-> **Note:** The `local_model` field maps Swan Inference model IDs to Ollama model names.
+> **Note:** Model IDs use HuggingFace repo IDs (e.g., `meta-llama/Llama-3.2-3B-Instruct`). The `local_model` field maps to Ollama's local model name.
 
 ## Alternative: llama.cpp
 
@@ -201,10 +201,11 @@ SwanChainRPC = "https://mainnet-rpc.swanchain.io"
 
 ```json
 {
-  "llama-3.2-3b": {
+  "meta-llama/Llama-3.2-3B-Instruct": {
     "endpoint": "http://localhost:11434",
     "gpu_memory": 4000,
-    "category": "text-generation"
+    "category": "text-generation",
+    "local_model": "llama3.2:3b"
   }
 }
 ```

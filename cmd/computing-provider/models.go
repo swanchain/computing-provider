@@ -154,11 +154,6 @@ Examples:
 			serviceURL = getModelsServiceURL(cctx)
 		}
 
-		destDir := cctx.String("dest")
-		if destDir == "" {
-			destDir = filepath.Join(defaultModelsDir(), modelID)
-		}
-
 		fmt.Printf("Fetching file manifest for %s...\n", modelID)
 		manifest, err := models.FetchModelFiles(serviceURL, modelID)
 		if err != nil {
@@ -167,6 +162,12 @@ Examples:
 
 		if manifest.FileCount == 0 {
 			return fmt.Errorf("no files found for model %s. Has it been ingested?", modelID)
+		}
+
+		// Use canonical model ID from manifest for directory name (ensures correct casing)
+		destDir := cctx.String("dest")
+		if destDir == "" {
+			destDir = filepath.Join(defaultModelsDir(), manifest.ModelID)
 		}
 
 		fmt.Printf("Model: %s\n", manifest.ModelID)
