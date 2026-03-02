@@ -80,6 +80,7 @@ type VerifyResponsePayload struct {
 type RegisterPayload struct {
 	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
 	ProviderID   string        `json:"provider_id,omitempty"`        // Deprecated: use NodeID
+	NodeName     string        `json:"node_name,omitempty"`          // Human-readable provider name from config
 	WorkerAddr   string        `json:"worker_addr"`
 	OwnerAddr    string        `json:"owner_addr"`
 	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
@@ -729,6 +730,7 @@ func (c *InferenceClient) register() error {
 	payload := RegisterPayload{
 		NodeID:       c.nodeID,   // Local node ID for routing
 		ProviderID:   c.nodeID,   // Deprecated: kept for backward compatibility
+		NodeName:     conf.GetConfig().API.NodeName,
 		WorkerAddr:   c.workerAddr,
 		OwnerAddr:    c.ownerAddr,
 		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
