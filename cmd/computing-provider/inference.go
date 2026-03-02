@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +31,7 @@ var inferenceCmd = &cli.Command{
 		inferenceRequestApprovalCmd,
 		inferenceDepositCmd,
 		inferenceRecommendModelsCmd,
+		inferenceSelectModelCmd,
 	},
 }
 
@@ -805,71 +806,52 @@ var inferenceConfigCmd = &cli.Command{
 	},
 }
 
-// --- recommend-models types ---
+// --- recommend-models / select-model types ---
 
-// modelListResponse is the response from GET /api/v1/models
-type modelListResponse struct {
+// modelDemandResponse is the response from GET /api/v1/stats/model-demand
+type modelDemandResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		Total int          `json:"total"`
-		List  []modelEntry `json:"list"`
+		Models []modelDemandAPIEntry `json:"models"`
 	} `json:"data"`
 }
 
-type modelEntry struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name"`
-	Category        string  `json:"category"`
-	Specs           string  `json:"specs"`        // JSON string
-	Requirements    string  `json:"requirements"` // JSON string
-	InputPrice      float64 `json:"input_price"`
-	OutputPrice     float64 `json:"output_price"`
-	OnlineProviders int     `json:"online_providers"`
+type modelDemandAPIEntry struct {
+	ModelID          string  `json:"model_id"`
+	ModelName        string  `json:"model_name"`
+	Category         string  `json:"category"`
+	InputPrice       float64 `json:"input_price"`
+	OutputPrice      float64 `json:"output_price"`
+	Tier             string  `json:"tier"`
+	OnlineProviders  int     `json:"online_providers"`
+	Requests24h      int     `json:"requests_24h"`
+	Tokens24h        int64   `json:"tokens_24h"`
+	Revenue24h       float64 `json:"revenue_24h"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
+	DemandTrend      string  `json:"demand_trend"`       // "up", "down", "stable"
+	DemandChangePct  float64 `json:"demand_change_pct"`
+	EstDailyEarnings float64 `json:"est_daily_earnings"`
+	MinVRAMGB        int     `json:"min_vram_gb"`
 }
 
-// parsed from the specs JSON string
-type modelSpecsParsed struct {
-	Pricing struct {
-		Prompt     float64 `json:"prompt"`
-		Completion float64 `json:"completion"`
-	} `json:"pricing"`
-}
-
-// parsed from the requirements JSON string
-type modelReqsParsed struct {
-	MinGPUMemoryGB int `json:"min_gpu_memory_gb"`
-	MinGPUCount    int `json:"min_gpu_count"`
-}
-
-// utilizationResponse is the response from GET /api/v1/stats/utilization
-type utilizationResponse struct {
-	Models []modelUtilization `json:"models"`
-}
-
-type modelUtilization struct {
-	ModelID        string  `json:"model_id"`
-	Requests24h    int     `json:"requests_24h"`
-	Tokens24h      int64   `json:"tokens_24h"`
-	AvgLatencyMs   float64 `json:"avg_latency_ms"`
-	UtilizationPct float64 `json:"utilization_pct"`
-}
-
-// modelDemandEntry combines model info with utilization data
+// modelDemandEntry is the display/output struct for recommend-models and select-model
 type modelDemandEntry struct {
-	ModelID         string  `json:"model_id"`
-	Name            string  `json:"name"`
-	Category        string  `json:"category"`
-	InputPrice      float64 `json:"input_price"`
-	OutputPrice     float64 `json:"output_price"`
-	OnlineProviders int     `json:"online_providers"`
-	Requests24h     int     `json:"requests_24h"`
-	Tokens24h       int64   `json:"tokens_24h"`
-	AvgLatencyMs    float64 `json:"avg_latency_ms"`
-	UtilizationPct  float64 `json:"utilization_pct"`
-	MinVRAMGB       int     `json:"min_vram_gb"`
-	Compatible      bool    `json:"compatible"`
-	EstDailyEarning float64 `json:"est_daily_earning"`
+	ModelID          string  `json:"model_id"`
+	Name             string  `json:"name"`
+	Category         string  `json:"category"`
+	InputPrice       float64 `json:"input_price"`
+	OutputPrice      float64 `json:"output_price"`
+	OnlineProviders  int     `json:"online_providers"`
+	Requests24h      int     `json:"requests_24h"`
+	Tokens24h        int64   `json:"tokens_24h"`
+	Revenue24h       float64 `json:"revenue_24h"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
+	DemandTrend      string  `json:"demand_trend"`
+	DemandChangePct  float64 `json:"demand_change_pct"`
+	MinVRAMGB        int     `json:"min_vram_gb"`
+	Compatible       bool    `json:"compatible"`
+	EstDailyEarnings float64 `json:"est_daily_earnings"`
 }
 
 var inferenceRecommendModelsCmd = &cli.Command{
@@ -953,148 +935,10 @@ Examples:
 			}
 		}
 
-		// Fetch models and utilization concurrently
-		client := &http.Client{Timeout: 15 * time.Second}
-
-		type modelsResult struct {
-			data modelListResponse
-			err  error
-		}
-		type utilResult struct {
-			data utilizationResponse
-			err  error
-		}
-
-		modelsCh := make(chan modelsResult, 1)
-		utilCh := make(chan utilResult, 1)
-
-		go func() {
-			resp, err := client.Get(serviceURL + "/api/v1/models?page_size=200")
-			if err != nil {
-				modelsCh <- modelsResult{err: fmt.Errorf("failed to fetch models: %v", err)}
-				return
-			}
-			defer resp.Body.Close()
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				modelsCh <- modelsResult{err: fmt.Errorf("failed to read models response: %v", err)}
-				return
-			}
-			if resp.StatusCode != http.StatusOK {
-				modelsCh <- modelsResult{err: fmt.Errorf("models API returned HTTP %d: %s", resp.StatusCode, string(body))}
-				return
-			}
-			var result modelListResponse
-			if err := json.Unmarshal(body, &result); err != nil {
-				modelsCh <- modelsResult{err: fmt.Errorf("failed to parse models response: %v", err)}
-				return
-			}
-			modelsCh <- modelsResult{data: result}
-		}()
-
-		go func() {
-			resp, err := client.Get(serviceURL + "/api/v1/stats/utilization")
-			if err != nil {
-				utilCh <- utilResult{err: fmt.Errorf("failed to fetch utilization: %v", err)}
-				return
-			}
-			defer resp.Body.Close()
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				utilCh <- utilResult{err: fmt.Errorf("failed to read utilization response: %v", err)}
-				return
-			}
-			if resp.StatusCode != http.StatusOK {
-				// Utilization endpoint may not exist yet - treat as empty
-				utilCh <- utilResult{}
-				return
-			}
-			var result utilizationResponse
-			if err := json.Unmarshal(body, &result); err != nil {
-				utilCh <- utilResult{err: fmt.Errorf("failed to parse utilization response: %v", err)}
-				return
-			}
-			utilCh <- utilResult{data: result}
-		}()
-
-		modelsRes := <-modelsCh
-		utilRes := <-utilCh
-
-		if modelsRes.err != nil {
-			return modelsRes.err
-		}
-		// Utilization errors are non-fatal
-		if utilRes.err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: %v (demand data unavailable)\n", utilRes.err)
-		}
-
-		// Build utilization lookup
-		utilMap := make(map[string]*modelUtilization)
-		for i := range utilRes.data.Models {
-			u := &utilRes.data.Models[i]
-			utilMap[u.ModelID] = u
-		}
-
-		// Merge and filter
-		categoryFilter := cctx.String("category")
-		compatibleOnly := cctx.Bool("compatible-only")
-		var entries []modelDemandEntry
-
-		for _, m := range modelsRes.data.Data.List {
-			if categoryFilter != "" && !strings.EqualFold(m.Category, categoryFilter) {
-				continue
-			}
-
-			// Parse specs and requirements from JSON strings
-			var specs modelSpecsParsed
-			json.Unmarshal([]byte(m.Specs), &specs)
-
-			var reqs modelReqsParsed
-			json.Unmarshal([]byte(m.Requirements), &reqs)
-
-			// Use pricing from specs; fall back to top-level fields
-			inputPrice := specs.Pricing.Prompt
-			outputPrice := specs.Pricing.Completion
-			if inputPrice == 0 && m.InputPrice != 0 {
-				inputPrice = m.InputPrice
-			}
-			if outputPrice == 0 && m.OutputPrice != 0 {
-				outputPrice = m.OutputPrice
-			}
-
-			minVRAM := reqs.MinGPUMemoryGB
-
-			compatible := vramPerGPU == 0 || minVRAM == 0 || minVRAM <= totalVRAM
-			if compatibleOnly && !compatible {
-				continue
-			}
-
-			entry := modelDemandEntry{
-				ModelID:         m.ID,
-				Name:            m.Name,
-				Category:        m.Category,
-				InputPrice:      inputPrice,
-				OutputPrice:     outputPrice,
-				OnlineProviders: m.OnlineProviders,
-				MinVRAMGB:       minVRAM,
-				Compatible:      compatible,
-			}
-
-			if u, ok := utilMap[m.ID]; ok {
-				entry.Requests24h = u.Requests24h
-				entry.Tokens24h = u.Tokens24h
-				entry.AvgLatencyMs = u.AvgLatencyMs
-				entry.UtilizationPct = u.UtilizationPct
-			}
-
-			// Estimate daily earnings: (output_price * tokens_24h / 1M) / max(providers, 1)
-			if entry.Tokens24h > 0 {
-				revenue24h := entry.OutputPrice * float64(entry.Tokens24h) / 1_000_000
-				providers := math.Max(float64(entry.OnlineProviders), 1)
-				entry.EstDailyEarning = revenue24h / providers
-			}
-
-			entries = append(entries, entry)
+		// Fetch model demand data
+		entries, err := fetchModelDemand(serviceURL, cctx.String("category"), vramPerGPU, totalVRAM, cctx.Bool("compatible-only"))
+		if err != nil {
+			return err
 		}
 
 		// Sort
@@ -1108,7 +952,7 @@ Examples:
 			case "vram":
 				return entries[i].MinVRAMGB < entries[j].MinVRAMGB
 			default: // "earnings"
-				return entries[i].EstDailyEarning > entries[j].EstDailyEarning
+				return entries[i].EstDailyEarnings > entries[j].EstDailyEarnings
 			}
 		})
 
@@ -1151,7 +995,7 @@ Examples:
 
 		if len(entries) == 0 {
 			color.Yellow("No models found matching your criteria.")
-			if compatibleOnly {
+			if cctx.Bool("compatible-only") {
 				fmt.Println("Try removing --compatible-only to see all models.")
 			}
 			return nil
@@ -1159,7 +1003,7 @@ Examples:
 
 		// Table output
 		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"MODEL", "VRAM", "PRICE (IN/OUT)", "24H REQ", "PROVIDERS", "EST $/DAY", "FIT"})
+		table.SetHeader([]string{"MODEL", "VRAM", "PRICE (IN/OUT)", "24H REQ", "PROVIDERS", "TREND", "EST $/DAY", "FIT"})
 		table.SetAutoFormatHeaders(false)
 		table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
 		table.SetAlignment(tablewriter.ALIGN_LEFT)
@@ -1186,9 +1030,11 @@ Examples:
 			reqStr := fmt.Sprintf("%d", e.Requests24h)
 			provStr := fmt.Sprintf("%d", e.OnlineProviders)
 
+			trendStr := demandTrendSymbol(e.DemandTrend)
+
 			earningStr := "-"
-			if e.EstDailyEarning > 0 {
-				earningStr = fmt.Sprintf("$%.2f", e.EstDailyEarning)
+			if e.EstDailyEarnings > 0 {
+				earningStr = fmt.Sprintf("$%.2f", e.EstDailyEarnings)
 			}
 
 			// Truncate model ID for display
@@ -1199,12 +1045,12 @@ Examples:
 
 			colors := []tablewriter.Colors{}
 			if e.Compatible {
-				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {tablewriter.FgGreenColor}}
+				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {}, {tablewriter.FgGreenColor}}
 			} else {
-				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {tablewriter.FgRedColor}}
+				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {}, {tablewriter.FgRedColor}}
 			}
 
-			table.Rich([]string{modelDisplay, vramStr, priceStr, reqStr, provStr, earningStr, fit}, colors)
+			table.Rich([]string{modelDisplay, vramStr, priceStr, reqStr, provStr, trendStr, earningStr, fit}, colors)
 		}
 
 		table.Render()
@@ -1216,9 +1062,310 @@ Examples:
 		}
 		fmt.Printf("Showing %d of %d models (sorted by %s)\n", len(entries), totalModels, sortLabel)
 
-		if !compatibleOnly && vramPerGPU > 0 {
+		if !cctx.Bool("compatible-only") && vramPerGPU > 0 {
 			fmt.Println("Tip: Use --compatible-only to show only models that fit your hardware")
 		}
+		fmt.Println("Tip: Use 'inference select-model' to interactively pick and configure a model")
+		fmt.Println()
+
+		return nil
+	},
+}
+
+// fetchModelDemand fetches model demand data from the API and returns filtered entries.
+func fetchModelDemand(serviceURL, categoryFilter string, vramPerGPU, totalVRAM int, compatibleOnly bool) ([]modelDemandEntry, error) {
+	reqURL := serviceURL + "/api/v1/stats/model-demand"
+	if categoryFilter != "" {
+		reqURL += "?category=" + categoryFilter
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch model demand data: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("model-demand API returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result modelDemandResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse model demand response: %v", err)
+	}
+
+	var entries []modelDemandEntry
+	for _, m := range result.Data.Models {
+		compatible := vramPerGPU == 0 || m.MinVRAMGB == 0 || m.MinVRAMGB <= totalVRAM
+		if compatibleOnly && !compatible {
+			continue
+		}
+
+		entries = append(entries, modelDemandEntry{
+			ModelID:          m.ModelID,
+			Name:             m.ModelName,
+			Category:         m.Category,
+			InputPrice:       m.InputPrice,
+			OutputPrice:      m.OutputPrice,
+			OnlineProviders:  m.OnlineProviders,
+			Requests24h:      m.Requests24h,
+			Tokens24h:        m.Tokens24h,
+			Revenue24h:       m.Revenue24h,
+			AvgLatencyMs:     m.AvgLatencyMs,
+			DemandTrend:      m.DemandTrend,
+			DemandChangePct:  m.DemandChangePct,
+			MinVRAMGB:        m.MinVRAMGB,
+			Compatible:       compatible,
+			EstDailyEarnings: m.EstDailyEarnings,
+		})
+	}
+
+	return entries, nil
+}
+
+// demandTrendSymbol returns an arrow symbol for the demand trend.
+func demandTrendSymbol(trend string) string {
+	switch trend {
+	case "up":
+		return "\u2191"
+	case "down":
+		return "\u2193"
+	default:
+		return "\u2192"
+	}
+}
+
+var inferenceSelectModelCmd = &cli.Command{
+	Name:  "select-model",
+	Usage: "Interactively pick a model from the marketplace and add it to your config",
+	Aliases: []string{"select"},
+	Description: `Browse the Swan Inference model marketplace, pick a model that fits your
+hardware, and automatically configure it in models.json and config.toml.
+The running provider will hot-reload the new model via fsnotify.
+
+Examples:
+  # Interactive model selection
+  computing-provider inference select-model
+
+  # Pre-filter by category
+  computing-provider inference select-model --category text-generation
+
+  # Skip prompts with flags
+  computing-provider inference select-model --endpoint http://localhost:30000
+
+  # Override detected VRAM
+  computing-provider inference select-model --vram 24`,
+	Flags: []cli.Flag{
+		&cli.IntFlag{
+			Name:  "vram",
+			Usage: "Override auto-detected per-GPU VRAM in GB",
+		},
+		&cli.StringFlag{
+			Name:  "endpoint",
+			Usage: "Model server endpoint URL (skip prompt)",
+		},
+		&cli.StringFlag{
+			Name:  "category",
+			Usage: "Filter by category (e.g., text-generation, image-generation, embedding)",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
+
+		cfg := conf.GetConfig()
+		serviceURL := getServiceURL(cfg)
+
+		// Detect GPU hardware
+		hardware := computing.DetectGPUHardware()
+		vramPerGPU := 0
+		totalVRAM := 0
+		if hardware != nil {
+			vramPerGPU = hardware.VRAMGB
+			totalVRAM = hardware.VRAMGB * hardware.GPUCount
+		}
+		if cctx.IsSet("vram") {
+			vramPerGPU = cctx.Int("vram")
+			if hardware != nil {
+				totalVRAM = vramPerGPU * hardware.GPUCount
+			} else {
+				totalVRAM = vramPerGPU
+			}
+		}
+
+		setup.PrintHeader("Swan Inference - Model Selection")
+
+		if hardware != nil {
+			gpuLabel := hardware.GPUModel
+			if hardware.GPUCount > 1 {
+				fmt.Printf("Hardware: %dx %s (%d GB each, %d GB total)\n", hardware.GPUCount, gpuLabel, vramPerGPU, totalVRAM)
+			} else {
+				fmt.Printf("Hardware: %s (%d GB)\n", gpuLabel, vramPerGPU)
+			}
+		} else if vramPerGPU > 0 {
+			fmt.Printf("Hardware: VRAM override %d GB\n", vramPerGPU)
+		} else {
+			color.Yellow("Hardware: Not detected (use --vram to specify)")
+		}
+		fmt.Println()
+
+		// Fetch model demand data (compatible only when VRAM is known)
+		compatibleOnly := vramPerGPU > 0
+		entries, err := fetchModelDemand(serviceURL, cctx.String("category"), vramPerGPU, totalVRAM, compatibleOnly)
+		if err != nil {
+			return err
+		}
+
+		if len(entries) == 0 {
+			color.Yellow("No compatible models found.")
+			if compatibleOnly {
+				fmt.Println("Try using --vram with a higher value, or remove it to see all models.")
+			}
+			return nil
+		}
+
+		// Sort by estimated earnings (best first)
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].EstDailyEarnings > entries[j].EstDailyEarnings
+		})
+
+		// Build selection options
+		options := make([]setup.SelectionOption, len(entries))
+		for i, e := range entries {
+			vramStr := "?"
+			if e.MinVRAMGB > 0 {
+				vramStr = fmt.Sprintf("%dGB", e.MinVRAMGB)
+			}
+			earningStr := "-"
+			if e.EstDailyEarnings > 0 {
+				earningStr = fmt.Sprintf("$%.2f/day", e.EstDailyEarnings)
+			}
+			trendStr := demandTrendSymbol(e.DemandTrend)
+
+			options[i] = setup.SelectionOption{
+				Label:       e.ModelID,
+				Description: fmt.Sprintf("VRAM: %s | %s (in/out): $%.2f/$%.2f | %d req/24h | %d providers | %s est | %s", vramStr, e.Category, e.InputPrice, e.OutputPrice, e.Requests24h, e.OnlineProviders, earningStr, trendStr),
+			}
+		}
+
+		prompter := setup.NewPrompter()
+
+		fmt.Printf("Found %d compatible models:\n\n", len(entries))
+		idx, err := prompter.AskSelection("Select a model to serve:", options)
+		if err != nil {
+			return fmt.Errorf("selection failed: %v", err)
+		}
+
+		selected := entries[idx]
+		fmt.Println()
+		setup.PrintSuccess(fmt.Sprintf("Selected: %s", selected.ModelID))
+
+		// Ask for endpoint
+		endpoint := cctx.String("endpoint")
+		if endpoint == "" {
+			endpoint, err = prompter.AskString("Model server endpoint URL", "http://localhost:30000")
+			if err != nil {
+				return fmt.Errorf("failed to read endpoint: %v", err)
+			}
+		}
+
+		// Determine GPU memory in MB
+		gpuMemoryMB := 0
+		if selected.MinVRAMGB > 0 {
+			gpuMemoryMB = selected.MinVRAMGB * 1000
+		} else if vramPerGPU > 0 {
+			gpuMemoryMB = vramPerGPU * 1000
+		}
+
+		gpuMemStr, err := prompter.AskString("GPU memory for this model (MB)", strconv.Itoa(gpuMemoryMB))
+		if err != nil {
+			return fmt.Errorf("failed to read GPU memory: %v", err)
+		}
+		gpuMemoryMB, err = strconv.Atoi(gpuMemStr)
+		if err != nil {
+			return fmt.Errorf("invalid GPU memory value: %v", err)
+		}
+
+		// Load existing models.json
+		models, err := conf.LoadModelsJson(cpRepoPath)
+		if err != nil {
+			return fmt.Errorf("failed to load models.json: %v", err)
+		}
+
+		// Check for duplicate
+		if _, exists := models[selected.ModelID]; exists {
+			overwrite, err := prompter.AskYesNo(fmt.Sprintf("Model %s already exists in models.json. Overwrite?", selected.ModelID), false)
+			if err != nil {
+				return fmt.Errorf("failed to read confirmation: %v", err)
+			}
+			if !overwrite {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+		}
+
+		// Add model entry
+		category := selected.Category
+		if category == "" {
+			category = "text-generation"
+		}
+		models[selected.ModelID] = conf.ModelConfig{
+			Endpoint:  endpoint,
+			GPUMemory: gpuMemoryMB,
+			Category:  category,
+		}
+
+		// Write models.json (atomic write triggers fsnotify hot-reload)
+		if err := conf.WriteModelsJson(cpRepoPath, models); err != nil {
+			return fmt.Errorf("failed to write models.json: %v", err)
+		}
+		setup.PrintSuccess("Updated models.json")
+
+		// Update config.toml Models list
+		existingModels := cfg.Inference.Models
+		found := false
+		for _, m := range existingModels {
+			if m == selected.ModelID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			updatedModels := append(existingModels, selected.ModelID)
+			if err := conf.UpdateInferenceConfig(cpRepoPath, "", updatedModels); err != nil {
+				color.Yellow("Warning: Could not update config.toml Models list: %v", err)
+				fmt.Printf("Please manually add \"%s\" to the Models list in config.toml\n", selected.ModelID)
+			} else {
+				setup.PrintSuccess("Updated config.toml")
+			}
+		}
+
+		// Success summary
+		fmt.Println()
+		setup.PrintHeader("Model Added Successfully")
+		setup.PrintKeyValue("Model", selected.ModelID)
+		setup.PrintKeyValue("Category", category)
+		setup.PrintKeyValue("Endpoint", endpoint)
+		setup.PrintKeyValue("GPU Memory", fmt.Sprintf("%d MB", gpuMemoryMB))
+		if selected.EstDailyEarnings > 0 {
+			setup.PrintKeyValue("Est. Earnings", fmt.Sprintf("$%.2f/day", selected.EstDailyEarnings))
+		}
+		fmt.Println()
+
+		fmt.Println("Next steps:")
+		setup.PrintBullet(fmt.Sprintf("Ensure your model server is running at %s", endpoint))
+		setup.PrintBullet("If the provider is running, the model will be hot-reloaded automatically")
+		setup.PrintBullet("Otherwise start it: computing-provider run")
 		fmt.Println()
 
 		return nil
