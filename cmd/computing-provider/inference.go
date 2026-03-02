@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/mitchellh/go-homedir"
+	"github.com/olekukonko/tablewriter"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/setup"
 	"github.com/urfave/cli/v2"
 )
@@ -26,6 +30,7 @@ var inferenceCmd = &cli.Command{
 		inferenceKeygenCmd,
 		inferenceRequestApprovalCmd,
 		inferenceDepositCmd,
+		inferenceRecommendModelsCmd,
 	},
 }
 
@@ -796,6 +801,426 @@ var inferenceConfigCmd = &cli.Command{
 		}
 
 		fmt.Println()
+		return nil
+	},
+}
+
+// --- recommend-models types ---
+
+// modelListResponse is the response from GET /api/v1/models
+type modelListResponse struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Total int          `json:"total"`
+		List  []modelEntry `json:"list"`
+	} `json:"data"`
+}
+
+type modelEntry struct {
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Category        string  `json:"category"`
+	Specs           string  `json:"specs"`        // JSON string
+	Requirements    string  `json:"requirements"` // JSON string
+	InputPrice      float64 `json:"input_price"`
+	OutputPrice     float64 `json:"output_price"`
+	OnlineProviders int     `json:"online_providers"`
+}
+
+// parsed from the specs JSON string
+type modelSpecsParsed struct {
+	Pricing struct {
+		Prompt     float64 `json:"prompt"`
+		Completion float64 `json:"completion"`
+	} `json:"pricing"`
+}
+
+// parsed from the requirements JSON string
+type modelReqsParsed struct {
+	MinGPUMemoryGB int `json:"min_gpu_memory_gb"`
+	MinGPUCount    int `json:"min_gpu_count"`
+}
+
+// utilizationResponse is the response from GET /api/v1/stats/utilization
+type utilizationResponse struct {
+	Models []modelUtilization `json:"models"`
+}
+
+type modelUtilization struct {
+	ModelID        string  `json:"model_id"`
+	Requests24h    int     `json:"requests_24h"`
+	Tokens24h      int64   `json:"tokens_24h"`
+	AvgLatencyMs   float64 `json:"avg_latency_ms"`
+	UtilizationPct float64 `json:"utilization_pct"`
+}
+
+// modelDemandEntry combines model info with utilization data
+type modelDemandEntry struct {
+	ModelID         string  `json:"model_id"`
+	Name            string  `json:"name"`
+	Category        string  `json:"category"`
+	InputPrice      float64 `json:"input_price"`
+	OutputPrice     float64 `json:"output_price"`
+	OnlineProviders int     `json:"online_providers"`
+	Requests24h     int     `json:"requests_24h"`
+	Tokens24h       int64   `json:"tokens_24h"`
+	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+	UtilizationPct  float64 `json:"utilization_pct"`
+	MinVRAMGB       int     `json:"min_vram_gb"`
+	Compatible      bool    `json:"compatible"`
+	EstDailyEarning float64 `json:"est_daily_earning"`
+}
+
+var inferenceRecommendModelsCmd = &cli.Command{
+	Name:    "recommend-models",
+	Usage:   "Show model recommendations based on demand and your hardware",
+	Aliases: []string{"recommend"},
+	Description: `Query the Swan Inference model marketplace to find the most profitable models
+for your GPU hardware. Combines model pricing, demand data, and provider supply
+to estimate daily earnings.
+
+Examples:
+  # Show top 10 recommended models
+  computing-provider inference recommend-models
+
+  # Show only models compatible with your GPU
+  computing-provider inference recommend-models --compatible-only
+
+  # Override detected VRAM (e.g., for planning)
+  computing-provider inference recommend-models --vram 24
+
+  # Filter by category
+  computing-provider inference recommend-models --category text-generation
+
+  # Output as JSON
+  computing-provider inference recommend-models --json`,
+	Flags: []cli.Flag{
+		&cli.IntFlag{
+			Name:  "vram",
+			Usage: "Override auto-detected per-GPU VRAM in GB",
+		},
+		&cli.IntFlag{
+			Name:  "top",
+			Usage: "Number of models to show",
+			Value: 10,
+		},
+		&cli.StringFlag{
+			Name:  "category",
+			Usage: "Filter by category (e.g., text-generation, image-generation, embedding)",
+		},
+		&cli.BoolFlag{
+			Name:    "json",
+			Usage:   "Output in JSON format",
+			Aliases: []string{"j"},
+		},
+		&cli.BoolFlag{
+			Name:  "compatible-only",
+			Usage: "Show only models that fit your GPU VRAM",
+		},
+		&cli.StringFlag{
+			Name:  "sort",
+			Usage: "Sort by: earnings (default), requests, providers, vram",
+			Value: "earnings",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
+
+		cfg := conf.GetConfig()
+		serviceURL := getServiceURL(cfg)
+
+		// Detect GPU hardware
+		hardware := computing.DetectGPUHardware()
+		vramPerGPU := 0
+		totalVRAM := 0
+		if hardware != nil {
+			vramPerGPU = hardware.VRAMGB
+			totalVRAM = hardware.VRAMGB * hardware.GPUCount
+		}
+		if cctx.IsSet("vram") {
+			vramPerGPU = cctx.Int("vram")
+			if hardware != nil {
+				totalVRAM = vramPerGPU * hardware.GPUCount
+			} else {
+				totalVRAM = vramPerGPU
+			}
+		}
+
+		// Fetch models and utilization concurrently
+		client := &http.Client{Timeout: 15 * time.Second}
+
+		type modelsResult struct {
+			data modelListResponse
+			err  error
+		}
+		type utilResult struct {
+			data utilizationResponse
+			err  error
+		}
+
+		modelsCh := make(chan modelsResult, 1)
+		utilCh := make(chan utilResult, 1)
+
+		go func() {
+			resp, err := client.Get(serviceURL + "/api/v1/models?page_size=200")
+			if err != nil {
+				modelsCh <- modelsResult{err: fmt.Errorf("failed to fetch models: %v", err)}
+				return
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				modelsCh <- modelsResult{err: fmt.Errorf("failed to read models response: %v", err)}
+				return
+			}
+			if resp.StatusCode != http.StatusOK {
+				modelsCh <- modelsResult{err: fmt.Errorf("models API returned HTTP %d: %s", resp.StatusCode, string(body))}
+				return
+			}
+			var result modelListResponse
+			if err := json.Unmarshal(body, &result); err != nil {
+				modelsCh <- modelsResult{err: fmt.Errorf("failed to parse models response: %v", err)}
+				return
+			}
+			modelsCh <- modelsResult{data: result}
+		}()
+
+		go func() {
+			resp, err := client.Get(serviceURL + "/api/v1/stats/utilization")
+			if err != nil {
+				utilCh <- utilResult{err: fmt.Errorf("failed to fetch utilization: %v", err)}
+				return
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				utilCh <- utilResult{err: fmt.Errorf("failed to read utilization response: %v", err)}
+				return
+			}
+			if resp.StatusCode != http.StatusOK {
+				// Utilization endpoint may not exist yet - treat as empty
+				utilCh <- utilResult{}
+				return
+			}
+			var result utilizationResponse
+			if err := json.Unmarshal(body, &result); err != nil {
+				utilCh <- utilResult{err: fmt.Errorf("failed to parse utilization response: %v", err)}
+				return
+			}
+			utilCh <- utilResult{data: result}
+		}()
+
+		modelsRes := <-modelsCh
+		utilRes := <-utilCh
+
+		if modelsRes.err != nil {
+			return modelsRes.err
+		}
+		// Utilization errors are non-fatal
+		if utilRes.err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v (demand data unavailable)\n", utilRes.err)
+		}
+
+		// Build utilization lookup
+		utilMap := make(map[string]*modelUtilization)
+		for i := range utilRes.data.Models {
+			u := &utilRes.data.Models[i]
+			utilMap[u.ModelID] = u
+		}
+
+		// Merge and filter
+		categoryFilter := cctx.String("category")
+		compatibleOnly := cctx.Bool("compatible-only")
+		var entries []modelDemandEntry
+
+		for _, m := range modelsRes.data.Data.List {
+			if categoryFilter != "" && !strings.EqualFold(m.Category, categoryFilter) {
+				continue
+			}
+
+			// Parse specs and requirements from JSON strings
+			var specs modelSpecsParsed
+			json.Unmarshal([]byte(m.Specs), &specs)
+
+			var reqs modelReqsParsed
+			json.Unmarshal([]byte(m.Requirements), &reqs)
+
+			// Use pricing from specs; fall back to top-level fields
+			inputPrice := specs.Pricing.Prompt
+			outputPrice := specs.Pricing.Completion
+			if inputPrice == 0 && m.InputPrice != 0 {
+				inputPrice = m.InputPrice
+			}
+			if outputPrice == 0 && m.OutputPrice != 0 {
+				outputPrice = m.OutputPrice
+			}
+
+			minVRAM := reqs.MinGPUMemoryGB
+
+			compatible := vramPerGPU == 0 || minVRAM == 0 || minVRAM <= totalVRAM
+			if compatibleOnly && !compatible {
+				continue
+			}
+
+			entry := modelDemandEntry{
+				ModelID:         m.ID,
+				Name:            m.Name,
+				Category:        m.Category,
+				InputPrice:      inputPrice,
+				OutputPrice:     outputPrice,
+				OnlineProviders: m.OnlineProviders,
+				MinVRAMGB:       minVRAM,
+				Compatible:      compatible,
+			}
+
+			if u, ok := utilMap[m.ID]; ok {
+				entry.Requests24h = u.Requests24h
+				entry.Tokens24h = u.Tokens24h
+				entry.AvgLatencyMs = u.AvgLatencyMs
+				entry.UtilizationPct = u.UtilizationPct
+			}
+
+			// Estimate daily earnings: (output_price * tokens_24h / 1M) / max(providers, 1)
+			if entry.Tokens24h > 0 {
+				revenue24h := entry.OutputPrice * float64(entry.Tokens24h) / 1_000_000
+				providers := math.Max(float64(entry.OnlineProviders), 1)
+				entry.EstDailyEarning = revenue24h / providers
+			}
+
+			entries = append(entries, entry)
+		}
+
+		// Sort
+		sortField := cctx.String("sort")
+		sort.Slice(entries, func(i, j int) bool {
+			switch sortField {
+			case "requests":
+				return entries[i].Requests24h > entries[j].Requests24h
+			case "providers":
+				return entries[i].OnlineProviders < entries[j].OnlineProviders
+			case "vram":
+				return entries[i].MinVRAMGB < entries[j].MinVRAMGB
+			default: // "earnings"
+				return entries[i].EstDailyEarning > entries[j].EstDailyEarning
+			}
+		})
+
+		// Limit results
+		totalModels := len(entries)
+		top := cctx.Int("top")
+		if top > 0 && top < len(entries) {
+			entries = entries[:top]
+		}
+
+		// JSON output
+		if cctx.Bool("json") {
+			output, _ := json.MarshalIndent(entries, "", "  ")
+			fmt.Println(string(output))
+			return nil
+		}
+
+		// Print header
+		nodeName := cfg.API.NodeName
+		if nodeName == "" {
+			nodeName = "Unknown"
+		}
+
+		fmt.Println()
+		fmt.Printf("Swan Inference \u2014 Model Recommendations for %s\n", nodeName)
+		if hardware != nil {
+			gpuLabel := hardware.GPUModel
+			if hardware.GPUCount > 1 {
+				fmt.Printf("Hardware: %dx %s (%d GB each, %d GB total)\n", hardware.GPUCount, gpuLabel, vramPerGPU, totalVRAM)
+			} else {
+				fmt.Printf("Hardware: %s (%d GB)\n", gpuLabel, vramPerGPU)
+			}
+		} else if vramPerGPU > 0 {
+			fmt.Printf("Hardware: VRAM override %d GB\n", vramPerGPU)
+		} else {
+			color.Yellow("Hardware: Not detected (use --vram to specify)")
+		}
+		fmt.Println(strings.Repeat("\u2550", 70))
+		fmt.Println()
+
+		if len(entries) == 0 {
+			color.Yellow("No models found matching your criteria.")
+			if compatibleOnly {
+				fmt.Println("Try removing --compatible-only to see all models.")
+			}
+			return nil
+		}
+
+		// Table output
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"MODEL", "VRAM", "PRICE (IN/OUT)", "24H REQ", "PROVIDERS", "EST $/DAY", "FIT"})
+		table.SetAutoFormatHeaders(false)
+		table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+		table.SetAlignment(tablewriter.ALIGN_LEFT)
+		table.SetHeaderLine(false)
+		table.SetBorder(false)
+		table.SetCenterSeparator("")
+		table.SetColumnSeparator("")
+		table.SetRowSeparator("")
+		table.SetTablePadding("  ")
+		table.SetNoWhiteSpace(true)
+
+		for _, e := range entries {
+			fit := "\u2713"
+			if !e.Compatible {
+				fit = "\u2717"
+			}
+
+			vramStr := "-"
+			if e.MinVRAMGB > 0 {
+				vramStr = fmt.Sprintf("%d GB", e.MinVRAMGB)
+			}
+
+			priceStr := fmt.Sprintf("$%.2f/$%.2f", e.InputPrice, e.OutputPrice)
+			reqStr := fmt.Sprintf("%d", e.Requests24h)
+			provStr := fmt.Sprintf("%d", e.OnlineProviders)
+
+			earningStr := "-"
+			if e.EstDailyEarning > 0 {
+				earningStr = fmt.Sprintf("$%.2f", e.EstDailyEarning)
+			}
+
+			// Truncate model ID for display
+			modelDisplay := e.ModelID
+			if len(modelDisplay) > 40 {
+				modelDisplay = modelDisplay[:37] + "..."
+			}
+
+			colors := []tablewriter.Colors{}
+			if e.Compatible {
+				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {tablewriter.FgGreenColor}}
+			} else {
+				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {tablewriter.FgRedColor}}
+			}
+
+			table.Rich([]string{modelDisplay, vramStr, priceStr, reqStr, provStr, earningStr, fit}, colors)
+		}
+
+		table.Render()
+
+		fmt.Println()
+		sortLabel := sortField
+		if sortLabel == "" {
+			sortLabel = "earnings"
+		}
+		fmt.Printf("Showing %d of %d models (sorted by %s)\n", len(entries), totalModels, sortLabel)
+
+		if !compatibleOnly && vramPerGPU > 0 {
+			fmt.Println("Tip: Use --compatible-only to show only models that fit your hardware")
+		}
+		fmt.Println()
+
 		return nil
 	},
 }

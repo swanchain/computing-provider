@@ -517,8 +517,8 @@ func (c *InferenceClient) reconnect() {
 	}
 }
 
-// detectGPUHardware detects GPU hardware information
-func detectGPUHardware() *HardwareInfo {
+// DetectGPUHardware detects GPU hardware information
+func DetectGPUHardware() *HardwareInfo {
 	if runtime.GOOS == "darwin" {
 		return detectAppleSiliconHardware()
 	}
@@ -716,7 +716,7 @@ func probeEndpointEngine(client *http.Client, endpoint string) string {
 
 func (c *InferenceClient) register() error {
 	// Detect GPU hardware and cache it for heartbeat messages
-	hardware := detectGPUHardware()
+	hardware := DetectGPUHardware()
 	c.hardware = hardware
 
 	// Detect serving engine from model endpoints
