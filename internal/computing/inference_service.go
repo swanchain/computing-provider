@@ -49,6 +49,7 @@ type ModelMapping struct {
 	LocalModel   string `json:"local_model"`             // Actual model name for local inference server (e.g., Ollama model name)
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -113,6 +114,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Category:     model.Category,
 				Format:       model.Format,
 				Quantization: model.Quantization,
+				APIKey:       model.APIKey,
 			}
 			s.updateClientModels()
 		},
@@ -130,6 +132,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Category:     model.Category,
 				Format:       model.Format,
 				Quantization: model.Quantization,
+				APIKey:       model.APIKey,
 			}
 		},
 	)
@@ -308,10 +311,12 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string
 	var localModel string
+	var apiKey string
 
 	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
+		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -323,6 +328,7 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 		}
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
+		apiKey = mapping.APIKey
 	}
 
 	// Check model health before forwarding
@@ -331,7 +337,7 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
-	response, err := s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel)
+	response, err := s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey)
 	if err != nil {
 		// Preserve ModelServerError type for status code extraction
 		var modelErr *ModelServerError
@@ -480,11 +486,16 @@ func postProcessResponse(request json.RawMessage, response json.RawMessage) json
 }
 
 // forwardToDockerModel forwards inference request to a Docker container endpoint
-func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage, modelID, localModel string) (json.RawMessage, error) {
+func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage, modelID, localModel, apiKey string) (json.RawMessage, error) {
 	// Substitute model name if local_model is configured
 	modifiedRequest := s.substituteModelName(request, modelID, localModel)
 
-	httpClient := NewHttpClient(endpoint, nil)
+	var headers http.Header
+	if apiKey != "" {
+		headers = http.Header{}
+		headers.Set("Authorization", "Bearer "+apiKey)
+	}
+	httpClient := NewHttpClient(endpoint, headers)
 
 	var response json.RawMessage
 	if err := httpClient.PostJSON("/v1/chat/completions", modifiedRequest, &response); err != nil {
@@ -587,10 +598,12 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string
 	var localModel string
+	var apiKey string
 
 	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
+		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -602,6 +615,7 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 		}
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
+		apiKey = mapping.APIKey
 	}
 
 	// Check model health before forwarding
@@ -610,7 +624,7 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
-	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, sendChunk)
+	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
 }
 
 // handleWarmup processes model warmup requests from Swan Inference
@@ -620,10 +634,12 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string
 	var localModel string
+	var apiKey string
 
 	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
+		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -632,6 +648,7 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		}
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
+		apiKey = mapping.APIKey
 	}
 
 	logs.GetLogger().Infof("Warming up model %s at endpoint %s (local: %s)", payload.ModelID, endpoint, localModel)
@@ -654,7 +671,12 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 	// Pass the map directly to PostJSON which handles marshaling.
 	// Previously we marshaled to []byte first, causing double-encoding
 	// (json.Marshal encodes []byte as base64).
-	httpClient := NewHttpClient(endpoint, nil)
+	var headers http.Header
+	if apiKey != "" {
+		headers = http.Header{}
+		headers.Set("Authorization", "Bearer "+apiKey)
+	}
+	httpClient := NewHttpClient(endpoint, headers)
 	var response json.RawMessage
 	if err := httpClient.PostJSON("/v1/chat/completions", warmupRequest, &response); err != nil {
 		return nil, fmt.Errorf("warmup request failed: %w", err)
@@ -669,7 +691,7 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 }
 
 // streamFromDockerModel streams inference response from a model endpoint
-func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, modelID, localModel string, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, modelID, localModel, apiKey string, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	result := &StreamResult{}
 
 	// Ensure stream is set to true in the request and request usage
@@ -703,6 +725,9 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	resp, err := streamingHttpClient.Do(req)
 	if err != nil {

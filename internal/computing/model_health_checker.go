@@ -78,6 +78,7 @@ type ModelHealthChecker struct {
 	mu            sync.RWMutex
 	statuses      map[string]*ModelStatus
 	endpoints     map[string]string // modelID -> endpoint
+	apiKeys       map[string]string // modelID -> API key for authenticated endpoints
 	config        HealthCheckConfig
 	httpClient    *http.Client
 	stopCh        chan struct{}
@@ -90,6 +91,7 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 	return &ModelHealthChecker{
 		statuses:  make(map[string]*ModelStatus),
 		endpoints: make(map[string]string),
+		apiKeys:   make(map[string]string),
 		config:    config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -109,11 +111,16 @@ func (h *ModelHealthChecker) SetStatusChangeCallback(cb func(modelID string, old
 }
 
 // RegisterModel adds a model to health checking
-func (h *ModelHealthChecker) RegisterModel(modelID, endpoint string) {
+func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	h.endpoints[modelID] = endpoint
+	if apiKey != "" {
+		h.apiKeys[modelID] = apiKey
+	} else {
+		delete(h.apiKeys, modelID)
+	}
 	if _, exists := h.statuses[modelID]; !exists {
 		h.statuses[modelID] = &ModelStatus{
 			ModelID:      modelID,
@@ -133,6 +140,7 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	defer h.mu.Unlock()
 
 	delete(h.endpoints, modelID)
+	delete(h.apiKeys, modelID)
 	delete(h.statuses, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
 }
@@ -209,6 +217,7 @@ func (h *ModelHealthChecker) checkAllModels() {
 func (h *ModelHealthChecker) checkModel(modelID string) {
 	h.mu.RLock()
 	endpoint, exists := h.endpoints[modelID]
+	apiKey := h.apiKeys[modelID]
 	status := h.statuses[modelID]
 	circuitOpen := status != nil && status.CircuitOpen
 	circuitOpenedAt := time.Time{}
@@ -233,7 +242,7 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 
 	// Perform health check
 	start := time.Now()
-	err := h.probeEndpoint(endpoint)
+	err := h.probeEndpoint(endpoint, apiKey)
 	latency := time.Since(start)
 
 	h.mu.Lock()
@@ -306,7 +315,7 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 }
 
 // probeEndpoint performs the actual health check request
-func (h *ModelHealthChecker) probeEndpoint(endpoint string) error {
+func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), h.config.Timeout)
 	defer cancel()
 
@@ -315,6 +324,9 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err := h.httpClient.Do(req)
@@ -331,6 +343,9 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint string) error {
 	req, err = http.NewRequestWithContext(ctx, "GET", modelsURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
 	resp, err = h.httpClient.Do(req)

@@ -48,6 +48,7 @@ type RegisteredModel struct {
 	LocalModel   string       `json:"local_model,omitempty"`   // Actual model name for local inference server
 	Format       string       `json:"format,omitempty"`        // Weight format: fp16, awq, gptq, gguf, etc.
 	Quantization string       `json:"quantization,omitempty"`  // Quantization detail: q4_k_m, q8_0, w4a16, etc.
+	APIKey       string       `json:"api_key,omitempty"`       // API key for authenticated model endpoints
 	State        ModelState   `json:"state"`
 	StateString  string       `json:"state_string"`
 	Health       ModelHealth  `json:"health"`
@@ -208,7 +209,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.Category != mapping.Category ||
 				existingModel.LocalModel != mapping.LocalModel ||
 				existingModel.Format != mapping.Format ||
-				existingModel.Quantization != mapping.Quantization {
+				existingModel.Quantization != mapping.Quantization ||
+				existingModel.APIKey != mapping.APIKey {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
@@ -217,11 +219,12 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.LocalModel = mapping.LocalModel
 				existingModel.Format = mapping.Format
 				existingModel.Quantization = mapping.Quantization
+				existingModel.APIKey = mapping.APIKey
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
 				if r.healthChecker != nil {
-					r.healthChecker.RegisterModel(modelID, mapping.Endpoint)
+					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey)
 				}
 
 				logs.GetLogger().Infof("Updated model configuration: %s", modelID)
@@ -247,6 +250,7 @@ func (r *ModelRegistry) loadConfig() error {
 				LocalModel:   mapping.LocalModel,
 				Format:       mapping.Format,
 				Quantization: mapping.Quantization,
+				APIKey:       mapping.APIKey,
 				State:        ModelStateLoading,
 				StateString:  ModelStateLoading.String(),
 				Health:       ModelHealthUnknown,
@@ -259,7 +263,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 			// Register with health checker
 			if r.healthChecker != nil {
-				r.healthChecker.RegisterModel(modelID, mapping.Endpoint)
+				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey)
 			}
 
 			logs.GetLogger().Infof("Registered new model: %s -> %s (local: %s)", modelID, mapping.Endpoint, mapping.LocalModel)
@@ -520,6 +524,20 @@ func (r *ModelRegistry) GetLocalModelName(modelID string) string {
 	return model.LocalModel
 }
 
+// GetModelAPIKey returns the API key for a model endpoint
+// Returns empty string if not configured
+func (r *ModelRegistry) GetModelAPIKey(modelID string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, exists := r.models[modelID]
+	if !exists {
+		return ""
+	}
+
+	return model.APIKey
+}
+
 // EnableModel enables a model for serving
 func (r *ModelRegistry) EnableModel(modelID string) error {
 	r.mu.Lock()
@@ -574,6 +592,7 @@ func (r *ModelRegistry) GetModelMappings() map[string]ModelMapping {
 			Endpoint:  model.Endpoint,
 			GPUMemory: model.GPUMemory,
 			Category:  model.Category,
+			APIKey:    model.APIKey,
 		}
 	}
 	return mappings
