@@ -122,6 +122,7 @@ type HeartbeatPayload struct {
 	ProviderID  string             `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
 }
@@ -906,6 +907,7 @@ func (c *InferenceClient) sendHeartbeat() {
 		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
+		Models:     c.models,   // Include models so hub can rebuild routing map after restart
 		Hardware:   c.hardware, // Include cached hardware info for periodic updates
 	}
 
