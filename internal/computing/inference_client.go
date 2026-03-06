@@ -244,6 +244,10 @@ type InferenceClient struct {
 	lastHeartbeatAck time.Time // Last time we received an ack for a heartbeat
 	missedAcks       int       // Consecutive heartbeats without ack response
 
+	// Send buffer saturation tracking
+	sendFailures     int        // Consecutive send buffer full timeouts
+	sendFailuresMu   sync.Mutex // Protects sendFailures counter
+
 	// Metrics tracking
 	metrics      *InferenceMetrics
 	gpuCollector *GPUMetricsCollector
@@ -491,6 +495,9 @@ func (c *InferenceClient) reconnect() {
 	c.metrics.RecordConnectionState("reconnecting")
 	c.metrics.RecordReconnect()
 
+	// Reset send failure counter so reconnected state starts clean
+	c.resetSendFailures()
+
 	for {
 		select {
 		case <-c.stopCh:
@@ -510,12 +517,61 @@ func (c *InferenceClient) reconnect() {
 				continue
 			}
 
+			// Drain any stale messages from send buffer after reconnect
+			drainCount := 0
+		drainLoop:
+			for {
+				select {
+				case <-c.send:
+					drainCount++
+				default:
+					break drainLoop
+				}
+			}
+			if drainCount > 0 {
+				logs.GetLogger().Infof("Drained %d stale messages from send buffer after reconnect", drainCount)
+			}
+
 			// Restart pumps
 			go c.readPump()
 			go c.writePump()
 			return
 		}
 	}
+}
+
+// forceReconnect closes the WebSocket connection to trigger readPump's reconnect path.
+// This is called when send buffer saturation indicates the connection is unhealthy.
+func (c *InferenceClient) forceReconnect() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+
+	if conn != nil {
+		logs.GetLogger().Warn("Forcing connection close due to send buffer saturation — readPump will trigger reconnect")
+		conn.Close()
+	}
+}
+
+// trackSendFailure tracks consecutive send buffer full failures and triggers
+// a forced reconnect after 3 consecutive failures.
+func (c *InferenceClient) trackSendFailure() {
+	c.sendFailuresMu.Lock()
+	c.sendFailures++
+	failures := c.sendFailures
+	c.sendFailuresMu.Unlock()
+
+	if failures >= 3 {
+		logs.GetLogger().Errorf("Send buffer full %d consecutive times — forcing reconnect", failures)
+		c.forceReconnect()
+	}
+}
+
+// resetSendFailures resets the consecutive send failure counter on a successful send.
+func (c *InferenceClient) resetSendFailures() {
+	c.sendFailuresMu.Lock()
+	c.sendFailures = 0
+	c.sendFailuresMu.Unlock()
 }
 
 // DetectGPUHardware detects GPU hardware information
@@ -980,9 +1036,11 @@ func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
 
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 		logs.GetLogger().Infof("Sent model health update: %v", modelHealth)
 	default:
 		logs.GetLogger().Warn("Send buffer full, dropping health update")
+		c.trackSendFailure()
 	}
 }
 
@@ -1219,8 +1277,10 @@ func (c *InferenceClient) sendStreamChunk(requestID string, chunk []byte, done b
 
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 		return nil
 	case <-time.After(5 * time.Second):
+		c.trackSendFailure()
 		return fmt.Errorf("send buffer full: timed out after 5s")
 	case <-c.stopCh:
 		return fmt.Errorf("client stopped")
@@ -1250,8 +1310,10 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 	msgBytes, _ := json.Marshal(msg)
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 	case <-time.After(10 * time.Second):
 		logs.GetLogger().Errorf("Failed to send stream_end for %s: timed out after 10s", requestID)
+		c.trackSendFailure()
 	case <-c.stopCh:
 		logs.GetLogger().Warnf("Client stopped while sending stream_end for %s", requestID)
 	}
@@ -1489,8 +1551,10 @@ func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, succ
 	msgBytes, _ := json.Marshal(msg)
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 	default:
 		logs.GetLogger().Warn("Send buffer full, dropping verify response")
+		c.trackSendFailure()
 	}
 }
 
