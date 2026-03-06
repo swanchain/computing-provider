@@ -810,10 +810,12 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 			}
 		}
 
-		// Forward the chunk data
+		// Forward the chunk data — abort immediately on send failure to avoid
+		// flooding timeouts when the WebSocket send buffer is saturated
 		if err := sendChunk([]byte(data), false); err != nil {
-			logs.GetLogger().Warnf("Failed to send chunk: %v", err)
-			// Continue trying to send remaining chunks
+			logs.GetLogger().Warnf("Failed to send chunk for model %s, aborting stream: %v", modelID, err)
+			result.Error = fmt.Errorf("send buffer full, stream aborted: %w", err)
+			return result
 		}
 	}
 
