@@ -498,22 +498,32 @@ func (c *InferenceClient) reconnect() {
 	// Reset send failure counter so reconnected state starts clean
 	c.resetSendFailures()
 
+	attempt := 0
 	for {
 		select {
 		case <-c.stopCh:
 			return
 		default:
+			// Immediate first attempt, then exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+			if attempt > 0 {
+				delay := time.Duration(1<<uint(attempt-1)) * time.Second
+				if delay > 30*time.Second {
+					delay = 30 * time.Second
+				}
+				logs.GetLogger().Infof("Reconnect attempt %d, waiting %v...", attempt, delay)
+				time.Sleep(delay)
+			}
+			attempt++
+
 			logs.GetLogger().Info("Attempting to reconnect to Swan Inference...")
 			if err := c.connect(); err != nil {
 				logs.GetLogger().Errorf("Reconnection failed: %v", err)
-				time.Sleep(reconnectDelay)
 				continue
 			}
 
 			// Re-register after reconnection
 			if err := c.register(); err != nil {
 				logs.GetLogger().Errorf("Re-registration failed: %v", err)
-				time.Sleep(reconnectDelay)
 				continue
 			}
 
