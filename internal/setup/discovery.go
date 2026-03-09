@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/swanchain/computing-provider-v2/build"
 )
 
 // Common inference server ports to scan
@@ -504,7 +506,7 @@ type SwanModel struct {
 // FetchSwanModels fetches the list of supported models from Swan Inference API
 func FetchSwanModels(apiURL string) ([]SwanModel, error) {
 	if apiURL == "" {
-		apiURL = "https://inference-dev.swanchain.io/api/v1"
+		apiURL = build.DefaultInferenceAPIURL
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
