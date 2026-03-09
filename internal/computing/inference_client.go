@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/mitchellh/go-homedir"
+	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/models"
 )
@@ -273,7 +274,7 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 	serviceURL := config.Inference.ServiceURL
 	if serviceURL == "" {
 		// Derive from WebSocket URL if not configured
-		// e.g., wss://inference-ws-dev.swanchain.io -> https://inference-dev.swanchain.io
+		// Derive HTTP URL from WebSocket URL (e.g., wss://host/ws -> https://host)
 		serviceURL = wsURL
 		serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
 		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
@@ -353,7 +354,7 @@ func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error)
 			CanConnect:  false,
 			Message:     "No API key configured",
 			NextSteps: []string{
-				"1. Sign up at https://inference.swanchain.io or via API",
+				"1. Sign up at " + build.DefaultInferenceURL + " or via API",
 				"2. Add your API key to config.toml [Inference] section",
 				"3. Or set INFERENCE_API_KEY environment variable",
 			},

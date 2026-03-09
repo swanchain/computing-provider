@@ -15,6 +15,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/mitchellh/go-homedir"
 	"github.com/olekukonko/tablewriter"
+	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/setup"
@@ -99,7 +100,7 @@ func getServiceURL(cfg *conf.ComputeNode) string {
 	if serviceURL == "" {
 		wsURL := cfg.Inference.WebSocketURL
 		if wsURL == "" {
-			wsURL = "wss://inference.swanchain.io/ws"
+			wsURL = build.DefaultInferenceWSURL
 		}
 		serviceURL = strings.Replace(wsURL, "wss://", "https://", 1)
 		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
@@ -468,7 +469,7 @@ var inferenceStatusCmd = &cli.Command{
 			fmt.Println("  computing-provider inference keygen")
 			fmt.Println()
 			fmt.Println("Or manually:")
-			fmt.Println("  1. Sign up at https://inference.swanchain.io or via API")
+			fmt.Println("  1. Sign up at " + build.DefaultInferenceURL + " or via API")
 			fmt.Println("  2. Add your API key to config.toml [Inference] section")
 			fmt.Println("  3. Or set: export INFERENCE_API_KEY=sk-prov-xxxxxxxxxxxxxxxxxxxx")
 			fmt.Println()
