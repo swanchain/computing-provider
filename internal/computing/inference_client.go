@@ -553,13 +553,7 @@ func (c *InferenceClient) reconnect() {
 				continue
 			}
 
-			// Re-register after reconnection
-			if err := c.register(); err != nil {
-				logs.GetLogger().Errorf("Re-registration failed: %v", err)
-				continue
-			}
-
-			// Drain any stale messages from send buffer after reconnect
+			// Drain any stale messages from send buffer before starting new pumps
 			drainCount := 0
 		drainLoop:
 			for {
@@ -574,12 +568,27 @@ func (c *InferenceClient) reconnect() {
 				logs.GetLogger().Infof("Drained %d stale messages from send buffer after reconnect", drainCount)
 			}
 
-			// Restart pumps with current pumpDone channel
+			// Start pumps before registering so the writePump can send the registration message
 			c.mu.RLock()
 			done := c.pumpDone
 			c.mu.RUnlock()
 			go c.readPumpWithDone(done)
 			go c.writePumpWithDone(done)
+
+			// Re-register after reconnection
+			if err := c.register(); err != nil {
+				logs.GetLogger().Errorf("Re-registration failed: %v", err)
+				// Stop the pumps we just started before retrying
+				c.mu.Lock()
+				close(c.pumpDone)
+				c.pumpDone = make(chan struct{})
+				if c.conn != nil {
+					c.conn.Close()
+				}
+				c.mu.Unlock()
+				continue
+			}
+
 			return
 		}
 	}
