@@ -1156,11 +1156,22 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		}
 		if payload.Success {
 			c.mu.Lock()
+			wasRegistered := c.registered
 			c.registered = true
 			c.lastHeartbeatAck = time.Now()
 			c.missedAcks = 0
 			c.mu.Unlock()
 			logs.GetLogger().Infof("Registration successful: %s", payload.Message)
+
+			// Send current model health immediately after first registration so the hub
+			// has up-to-date health status. Without this, health updates that fired
+			// while the WebSocket was disconnected are lost and the hub keeps stale state.
+			if !wasRegistered && c.modelHealthProvider != nil {
+				if health := c.modelHealthProvider(); len(health) > 0 {
+					c.SendModelHealthUpdate(health)
+					logs.GetLogger().Infof("Sent post-registration health update for %d models", len(health))
+				}
+			}
 		} else {
 			logs.GetLogger().Warnf("Received failed ack: %s", payload.Message)
 		}
