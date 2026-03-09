@@ -249,6 +249,10 @@ type InferenceClient struct {
 	sendFailures     int        // Consecutive send buffer full timeouts
 	sendFailuresMu   sync.Mutex // Protects sendFailures counter
 
+	// Reconnect guard
+	reconnecting     bool       // True while a reconnect is in progress
+	reconnectMu      sync.Mutex // Protects reconnecting flag
+
 	// Metrics tracking
 	metrics      *InferenceMetrics
 	gpuCollector *GPUMetricsCollector
@@ -497,6 +501,20 @@ func (c *InferenceClient) connect() error {
 }
 
 func (c *InferenceClient) reconnect() {
+	// Guard against concurrent reconnects from readPump and heartbeatPump
+	c.reconnectMu.Lock()
+	if c.reconnecting {
+		c.reconnectMu.Unlock()
+		return
+	}
+	c.reconnecting = true
+	c.reconnectMu.Unlock()
+	defer func() {
+		c.reconnectMu.Lock()
+		c.reconnecting = false
+		c.reconnectMu.Unlock()
+	}()
+
 	c.metrics.RecordConnectionState("reconnecting")
 	c.metrics.RecordReconnect()
 
