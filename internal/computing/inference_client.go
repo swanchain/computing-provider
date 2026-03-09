@@ -228,6 +228,7 @@ type InferenceClient struct {
 	conn                      *websocket.Conn
 	send                      chan []byte
 	stopCh                    chan struct{}
+	pumpDone                  chan struct{} // Signals current readPump/writePump to stop on reconnect
 	registered                bool
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
@@ -293,6 +294,7 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 		serviceURL:   serviceURL,
 		send:         make(chan []byte, 256),
 		stopCh:       make(chan struct{}),
+		pumpDone:     make(chan struct{}),
 		metrics:      NewInferenceMetrics(),
 		gpuCollector: NewGPUMetricsCollector(),
 	}
@@ -445,8 +447,11 @@ func (c *InferenceClient) Start() error {
 	}
 
 	// Start read/write pumps
-	go c.readPump()
-	go c.writePump()
+	c.mu.RLock()
+	done := c.pumpDone
+	c.mu.RUnlock()
+	go c.readPumpWithDone(done)
+	go c.writePumpWithDone(done)
 	go c.heartbeatPump()
 
 	// Send registration
@@ -495,6 +500,15 @@ func (c *InferenceClient) reconnect() {
 	c.metrics.RecordConnectionState("reconnecting")
 	c.metrics.RecordReconnect()
 
+	// Stop old readPump/writePump goroutines by closing pumpDone, then create a new one
+	c.mu.Lock()
+	close(c.pumpDone)
+	c.pumpDone = make(chan struct{})
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.mu.Unlock()
+
 	// Reset send failure counter so reconnected state starts clean
 	c.resetSendFailures()
 
@@ -542,9 +556,12 @@ func (c *InferenceClient) reconnect() {
 				logs.GetLogger().Infof("Drained %d stale messages from send buffer after reconnect", drainCount)
 			}
 
-			// Restart pumps
-			go c.readPump()
-			go c.writePump()
+			// Restart pumps with current pumpDone channel
+			c.mu.RLock()
+			done := c.pumpDone
+			c.mu.RUnlock()
+			go c.readPumpWithDone(done)
+			go c.writePumpWithDone(done)
 			return
 		}
 	}
@@ -836,7 +853,7 @@ func (c *InferenceClient) register() error {
 	return nil
 }
 
-func (c *InferenceClient) readPump() {
+func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
 	defer func() {
 		c.mu.Lock()
 		if c.conn != nil {
@@ -856,9 +873,17 @@ func (c *InferenceClient) readPump() {
 		select {
 		case <-c.stopCh:
 			return
+		case <-done:
+			return
 		default:
 			_, message, err := c.conn.ReadMessage()
 			if err != nil {
+				// If pumpDone was closed, another goroutine is already reconnecting
+				select {
+				case <-done:
+					return
+				default:
+				}
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					logs.GetLogger().Errorf("WebSocket read error: %v", err)
 				}
@@ -877,21 +902,17 @@ func (c *InferenceClient) readPump() {
 	}
 }
 
-func (c *InferenceClient) writePump() {
+func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		// Close connection so readPump detects failure immediately
-		c.mu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
-		}
-		c.mu.Unlock()
 	}()
 
 	for {
 		select {
 		case <-c.stopCh:
+			return
+		case <-done:
 			return
 		case message := <-c.send:
 			c.mu.RLock()
