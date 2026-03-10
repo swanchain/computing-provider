@@ -309,21 +309,17 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 	}
 }
 
-// probeEndpoint performs the actual health check request
+// probeEndpoint performs the actual health check request.
+// Tries /v1/models first (lightweight, just lists models) then falls back to
+// /health. This avoids triggering expensive deep health checks on proxies like
+// LiteLLM, where GET /health sends a real inference request to every backend.
 func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
-	// Use a short timeout for /health since some proxies (e.g., LiteLLM) have slow health endpoints.
-	// This prevents a hanging /health from consuming the entire timeout budget.
-	healthTimeout := h.config.Timeout / 2
-	if healthTimeout < 3*time.Second {
-		healthTimeout = 3 * time.Second
-	}
+	// Try /v1/models first — lightweight on all known serving engines
+	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
+	defer modelsCancel()
 
-	// Try /health endpoint first (common health check endpoint)
-	healthCtx, healthCancel := context.WithTimeout(context.Background(), healthTimeout)
-	defer healthCancel()
-
-	healthURL := endpoint + "/health"
-	req, err := http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
+	modelsURL := endpoint + "/v1/models"
+	req, err := http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -340,12 +336,16 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 		resp.Body.Close()
 	}
 
-	// Try /v1/models endpoint (OpenAI-compatible) with its own timeout
-	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
-	defer modelsCancel()
+	// Fall back to /health (works for SGLang, vLLM, Ollama, etc.)
+	healthTimeout := h.config.Timeout / 2
+	if healthTimeout < 3*time.Second {
+		healthTimeout = 3 * time.Second
+	}
+	healthCtx, healthCancel := context.WithTimeout(context.Background(), healthTimeout)
+	defer healthCancel()
 
-	modelsURL := endpoint + "/v1/models"
-	req, err = http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
+	healthURL := endpoint + "/health"
+	req, err = http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
