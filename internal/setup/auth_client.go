@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/swanchain/computing-provider-v2/build"
 )
 
 // ValidateEVMAddress validates an EVM wallet address format
@@ -30,11 +32,6 @@ func ValidateEVMAddress(addr string) error {
 	return nil
 }
 
-const (
-	// DefaultInferenceAPIURL is the default Swan Inference API URL (dev environment)
-	DefaultInferenceAPIURL = "https://inference-dev.swanchain.io/api/v1"
-)
-
 // AuthClient handles authentication with Swan Inference API
 type AuthClient struct {
 	baseURL    string
@@ -44,7 +41,7 @@ type AuthClient struct {
 // NewAuthClient creates a new auth client
 func NewAuthClient(baseURL string) *AuthClient {
 	if baseURL == "" {
-		baseURL = DefaultInferenceAPIURL
+		baseURL = build.DefaultInferenceAPIURL
 	}
 	return &AuthClient{
 		baseURL: baseURL,

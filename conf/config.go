@@ -466,8 +466,8 @@ func generateDefaultConfig() ComputeNode {
 		},
 		Inference: Inference{
 			Enable:             true, // Inference mode is enabled by default
-			ServiceURL:         "https://inference-dev.swanchain.io",
-			WebSocketURL:       "wss://inference-ws-dev.swanchain.io",
+			ServiceURL:         build.DefaultInferenceURL,
+			WebSocketURL:       build.DefaultInferenceWSURL,
 			Models:             []string{},
 			ChainRPC:           "",
 			CollateralContract: "",

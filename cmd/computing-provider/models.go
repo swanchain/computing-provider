@@ -10,6 +10,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/mitchellh/go-homedir"
 	"github.com/olekukonko/tablewriter"
+	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/urfave/cli/v2"
@@ -140,7 +141,7 @@ Examples:
 		},
 		&cli.StringFlag{
 			Name:  "service-url",
-			Usage: "Swan Inference API URL (default: from config or https://inference.swanchain.io)",
+			Usage: "Swan Inference API URL (default: from config or " + build.DefaultInferenceURL + ")",
 		},
 	},
 	Action: func(cctx *cli.Context) error {
@@ -356,7 +357,7 @@ func getModelsServiceURL(cctx *cli.Context) string {
 		}
 	}
 
-	return "https://inference.swanchain.io"
+	return build.DefaultInferenceURL
 }
 
 func humanSizeCP(b int64) string {

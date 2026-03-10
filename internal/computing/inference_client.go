@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/mitchellh/go-homedir"
+	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/models"
 )
@@ -122,6 +123,7 @@ type HeartbeatPayload struct {
 	ProviderID  string             `json:"provider_id,omitempty"`        // Deprecated: use NodeID
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
+	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
 }
@@ -227,6 +229,7 @@ type InferenceClient struct {
 	conn                      *websocket.Conn
 	send                      chan []byte
 	stopCh                    chan struct{}
+	pumpDone                  chan struct{} // Signals current readPump/writePump to stop on reconnect
 	registered                bool
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
@@ -242,6 +245,14 @@ type InferenceClient struct {
 	// Heartbeat ack tracking
 	lastHeartbeatAck time.Time // Last time we received an ack for a heartbeat
 	missedAcks       int       // Consecutive heartbeats without ack response
+
+	// Send buffer saturation tracking
+	sendFailures     int        // Consecutive send buffer full timeouts
+	sendFailuresMu   sync.Mutex // Protects sendFailures counter
+
+	// Reconnect guard
+	reconnecting     bool       // True while a reconnect is in progress
+	reconnectMu      sync.Mutex // Protects reconnecting flag
 
 	// Metrics tracking
 	metrics      *InferenceMetrics
@@ -263,7 +274,7 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 	serviceURL := config.Inference.ServiceURL
 	if serviceURL == "" {
 		// Derive from WebSocket URL if not configured
-		// e.g., wss://inference-ws-dev.swanchain.io -> https://inference-dev.swanchain.io
+		// Derive HTTP URL from WebSocket URL (e.g., wss://host/ws -> https://host)
 		serviceURL = wsURL
 		serviceURL = strings.Replace(serviceURL, "wss://", "https://", 1)
 		serviceURL = strings.Replace(serviceURL, "ws://", "http://", 1)
@@ -288,6 +299,7 @@ func NewInferenceClient(nodeID, workerAddr, ownerAddr string) *InferenceClient {
 		serviceURL:   serviceURL,
 		send:         make(chan []byte, 256),
 		stopCh:       make(chan struct{}),
+		pumpDone:     make(chan struct{}),
 		metrics:      NewInferenceMetrics(),
 		gpuCollector: NewGPUMetricsCollector(),
 	}
@@ -342,7 +354,7 @@ func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error)
 			CanConnect:  false,
 			Message:     "No API key configured",
 			NextSteps: []string{
-				"1. Sign up at https://inference.swanchain.io or via API",
+				"1. Sign up at " + build.DefaultInferenceURL + " or via API",
 				"2. Add your API key to config.toml [Inference] section",
 				"3. Or set INFERENCE_API_KEY environment variable",
 			},
@@ -440,8 +452,11 @@ func (c *InferenceClient) Start() error {
 	}
 
 	// Start read/write pumps
-	go c.readPump()
-	go c.writePump()
+	c.mu.RLock()
+	done := c.pumpDone
+	c.mu.RUnlock()
+	go c.readPumpWithDone(done)
+	go c.writePumpWithDone(done)
 	go c.heartbeatPump()
 
 	// Send registration
@@ -487,38 +502,135 @@ func (c *InferenceClient) connect() error {
 }
 
 func (c *InferenceClient) reconnect() {
+	// Guard against concurrent reconnects from readPump and heartbeatPump
+	c.reconnectMu.Lock()
+	if c.reconnecting {
+		c.reconnectMu.Unlock()
+		return
+	}
+	c.reconnecting = true
+	c.reconnectMu.Unlock()
+	defer func() {
+		c.reconnectMu.Lock()
+		c.reconnecting = false
+		c.reconnectMu.Unlock()
+	}()
+
 	c.metrics.RecordConnectionState("reconnecting")
 	c.metrics.RecordReconnect()
 
+	// Stop old readPump/writePump goroutines by closing pumpDone, then create a new one
+	c.mu.Lock()
+	close(c.pumpDone)
+	c.pumpDone = make(chan struct{})
+	if c.conn != nil {
+		c.conn.Close()
+	}
+	c.mu.Unlock()
+
+	// Reset send failure counter so reconnected state starts clean
+	c.resetSendFailures()
+
+	attempt := 0
 	for {
 		select {
 		case <-c.stopCh:
 			return
 		default:
+			// Immediate first attempt, then exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+			if attempt > 0 {
+				delay := time.Duration(1<<uint(attempt-1)) * time.Second
+				if delay > 30*time.Second {
+					delay = 30 * time.Second
+				}
+				logs.GetLogger().Infof("Reconnect attempt %d, waiting %v...", attempt, delay)
+				time.Sleep(delay)
+			}
+			attempt++
+
 			logs.GetLogger().Info("Attempting to reconnect to Swan Inference...")
 			if err := c.connect(); err != nil {
 				logs.GetLogger().Errorf("Reconnection failed: %v", err)
-				time.Sleep(reconnectDelay)
 				continue
 			}
+
+			// Drain any stale messages from send buffer before starting new pumps
+			drainCount := 0
+		drainLoop:
+			for {
+				select {
+				case <-c.send:
+					drainCount++
+				default:
+					break drainLoop
+				}
+			}
+			if drainCount > 0 {
+				logs.GetLogger().Infof("Drained %d stale messages from send buffer after reconnect", drainCount)
+			}
+
+			// Start pumps before registering so the writePump can send the registration message
+			c.mu.RLock()
+			done := c.pumpDone
+			c.mu.RUnlock()
+			go c.readPumpWithDone(done)
+			go c.writePumpWithDone(done)
 
 			// Re-register after reconnection
 			if err := c.register(); err != nil {
 				logs.GetLogger().Errorf("Re-registration failed: %v", err)
-				time.Sleep(reconnectDelay)
+				// Stop the pumps we just started before retrying
+				c.mu.Lock()
+				close(c.pumpDone)
+				c.pumpDone = make(chan struct{})
+				if c.conn != nil {
+					c.conn.Close()
+				}
+				c.mu.Unlock()
 				continue
 			}
 
-			// Restart pumps
-			go c.readPump()
-			go c.writePump()
 			return
 		}
 	}
 }
 
-// detectGPUHardware detects GPU hardware information
-func detectGPUHardware() *HardwareInfo {
+// forceReconnect closes the WebSocket connection to trigger readPump's reconnect path.
+// This is called when send buffer saturation indicates the connection is unhealthy.
+func (c *InferenceClient) forceReconnect() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+
+	if conn != nil {
+		logs.GetLogger().Warn("Forcing connection close due to send buffer saturation — readPump will trigger reconnect")
+		conn.Close()
+	}
+}
+
+// trackSendFailure tracks consecutive send buffer full failures and triggers
+// a forced reconnect after 3 consecutive failures.
+func (c *InferenceClient) trackSendFailure() {
+	c.sendFailuresMu.Lock()
+	c.sendFailures++
+	failures := c.sendFailures
+	c.sendFailuresMu.Unlock()
+
+	if failures >= 3 {
+		logs.GetLogger().Errorf("Send buffer full %d consecutive times — forcing reconnect", failures)
+		c.forceReconnect()
+	}
+}
+
+// resetSendFailures resets the consecutive send failure counter on a successful send.
+func (c *InferenceClient) resetSendFailures() {
+	c.sendFailuresMu.Lock()
+	c.sendFailures = 0
+	c.sendFailuresMu.Unlock()
+}
+
+// DetectGPUHardware detects GPU hardware information
+func DetectGPUHardware() *HardwareInfo {
 	if runtime.GOOS == "darwin" {
 		return detectAppleSiliconHardware()
 	}
@@ -716,7 +828,7 @@ func probeEndpointEngine(client *http.Client, endpoint string) string {
 
 func (c *InferenceClient) register() error {
 	// Detect GPU hardware and cache it for heartbeat messages
-	hardware := detectGPUHardware()
+	hardware := DetectGPUHardware()
 	c.hardware = hardware
 
 	// Detect serving engine from model endpoints
@@ -769,7 +881,7 @@ func (c *InferenceClient) register() error {
 	return nil
 }
 
-func (c *InferenceClient) readPump() {
+func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
 	defer func() {
 		c.mu.Lock()
 		if c.conn != nil {
@@ -789,9 +901,17 @@ func (c *InferenceClient) readPump() {
 		select {
 		case <-c.stopCh:
 			return
+		case <-done:
+			return
 		default:
 			_, message, err := c.conn.ReadMessage()
 			if err != nil {
+				// If pumpDone was closed, another goroutine is already reconnecting
+				select {
+				case <-done:
+					return
+				default:
+				}
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					logs.GetLogger().Errorf("WebSocket read error: %v", err)
 				}
@@ -810,21 +930,17 @@ func (c *InferenceClient) readPump() {
 	}
 }
 
-func (c *InferenceClient) writePump() {
+func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		// Close connection so readPump detects failure immediately
-		c.mu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
-		}
-		c.mu.Unlock()
 	}()
 
 	for {
 		select {
 		case <-c.stopCh:
+			return
+		case <-done:
 			return
 		case message := <-c.send:
 			c.mu.RLock()
@@ -906,6 +1022,7 @@ func (c *InferenceClient) sendHeartbeat() {
 		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
+		Models:     c.models,   // Include models so hub can rebuild routing map after restart
 		Hardware:   c.hardware, // Include cached hardware info for periodic updates
 	}
 
@@ -978,9 +1095,11 @@ func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
 
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 		logs.GetLogger().Infof("Sent model health update: %v", modelHealth)
 	default:
 		logs.GetLogger().Warn("Send buffer full, dropping health update")
+		c.trackSendFailure()
 	}
 }
 
@@ -1037,11 +1156,22 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		}
 		if payload.Success {
 			c.mu.Lock()
+			wasRegistered := c.registered
 			c.registered = true
 			c.lastHeartbeatAck = time.Now()
 			c.missedAcks = 0
 			c.mu.Unlock()
 			logs.GetLogger().Infof("Registration successful: %s", payload.Message)
+
+			// Send current model health immediately after first registration so the hub
+			// has up-to-date health status. Without this, health updates that fired
+			// while the WebSocket was disconnected are lost and the hub keeps stale state.
+			if !wasRegistered && c.modelHealthProvider != nil {
+				if health := c.modelHealthProvider(); len(health) > 0 {
+					c.SendModelHealthUpdate(health)
+					logs.GetLogger().Infof("Sent post-registration health update for %d models", len(health))
+				}
+			}
 		} else {
 			logs.GetLogger().Warnf("Received failed ack: %s", payload.Message)
 		}
@@ -1217,8 +1347,10 @@ func (c *InferenceClient) sendStreamChunk(requestID string, chunk []byte, done b
 
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 		return nil
 	case <-time.After(5 * time.Second):
+		c.trackSendFailure()
 		return fmt.Errorf("send buffer full: timed out after 5s")
 	case <-c.stopCh:
 		return fmt.Errorf("client stopped")
@@ -1248,8 +1380,10 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 	msgBytes, _ := json.Marshal(msg)
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 	case <-time.After(10 * time.Second):
 		logs.GetLogger().Errorf("Failed to send stream_end for %s: timed out after 10s", requestID)
+		c.trackSendFailure()
 	case <-c.stopCh:
 		logs.GetLogger().Warnf("Client stopped while sending stream_end for %s", requestID)
 	}
@@ -1487,8 +1621,10 @@ func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, succ
 	msgBytes, _ := json.Marshal(msg)
 	select {
 	case c.send <- msgBytes:
+		c.resetSendFailures()
 	default:
 		logs.GetLogger().Warn("Send buffer full, dropping verify response")
+		c.trackSendFailure()
 	}
 }
 
