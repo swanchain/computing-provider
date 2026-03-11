@@ -195,59 +195,63 @@ func (h *ModelHealthChecker) runHealthCheckLoop() {
 // checkAllModels checks health of all registered models
 func (h *ModelHealthChecker) checkAllModels() {
 	h.mu.RLock()
-	modelIDs := make([]string, 0, len(h.endpoints))
-	for modelID := range h.endpoints {
-		modelIDs = append(modelIDs, modelID)
+	// Group models by endpoint to avoid redundant probes when multiple models
+	// share the same server (e.g., a LiteLLM proxy serving 65 models).
+	type endpointInfo struct {
+		apiKey   string
+		modelIDs []string
+	}
+	endpointGroups := make(map[string]*endpointInfo)
+	for modelID, endpoint := range h.endpoints {
+		if group, exists := endpointGroups[endpoint]; exists {
+			group.modelIDs = append(group.modelIDs, modelID)
+		} else {
+			endpointGroups[endpoint] = &endpointInfo{
+				apiKey:   h.apiKeys[modelID],
+				modelIDs: []string{modelID},
+			}
+		}
 	}
 	h.mu.RUnlock()
 
-	// Check models concurrently
+	// Probe each unique endpoint once, then apply results to all its models
 	var wg sync.WaitGroup
-	for _, modelID := range modelIDs {
+	for endpoint, group := range endpointGroups {
 		wg.Add(1)
-		go func(id string) {
+		go func(ep string, info *endpointInfo) {
 			defer wg.Done()
-			h.checkModel(id)
-		}(modelID)
+			err := h.probeEndpoint(ep, info.apiKey)
+			for _, modelID := range info.modelIDs {
+				h.applyProbeResult(modelID, ep, err)
+			}
+		}(endpoint, group)
 	}
 	wg.Wait()
 }
 
-// checkModel performs a health check on a single model
+// checkModel performs a health check on a single model (used by ForceCheck)
 func (h *ModelHealthChecker) checkModel(modelID string) {
 	h.mu.RLock()
 	endpoint, exists := h.endpoints[modelID]
 	apiKey := h.apiKeys[modelID]
-	status := h.statuses[modelID]
-	circuitOpen := status != nil && status.CircuitOpen
-	circuitOpenedAt := time.Time{}
-	if status != nil {
-		circuitOpenedAt = status.LastCheck
-	}
 	h.mu.RUnlock()
 
 	if !exists {
 		return
 	}
 
-	// Check if circuit is open and should stay open
-	if circuitOpen {
-		if time.Since(circuitOpenedAt) < h.config.CircuitOpenTime {
-			// Circuit still open, skip this check
-			return
-		}
-		// Circuit timeout expired, allow a test request (half-open)
-		logs.GetLogger().Infof("Circuit half-open for model %s, attempting health check", modelID)
-	}
-
-	// Perform health check
-	start := time.Now()
 	err := h.probeEndpoint(endpoint, apiKey)
-	latency := time.Since(start)
+	h.applyProbeResult(modelID, endpoint, err)
+}
 
+// applyProbeResult updates a model's health status based on a probe result.
+// This is called after probing an endpoint, allowing multiple models sharing
+// the same endpoint to reuse a single probe result.
+func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	status := h.statuses[modelID]
 	if status == nil {
 		status = &ModelStatus{
 			ModelID:  modelID,
@@ -259,20 +263,11 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 	oldHealth := status.Health
 	status.LastCheck = time.Now()
 	status.TotalChecks++
-	status.LatencyMs = float64(latency.Milliseconds())
 
-	// Update average latency using exponential moving average
-	if status.AvgLatencyMs == 0 {
-		status.AvgLatencyMs = status.LatencyMs
-	} else {
-		alpha := 0.3 // Smoothing factor
-		status.AvgLatencyMs = alpha*status.LatencyMs + (1-alpha)*status.AvgLatencyMs
-	}
-
-	if err != nil {
+	if probeErr != nil {
 		status.TotalFailures++
 		status.ConsecutiveFails++
-		status.LastError = err.Error()
+		status.LastError = probeErr.Error()
 
 		// Determine new health status
 		if status.ConsecutiveFails >= h.config.UnhealthyThreshold {
@@ -283,7 +278,7 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 		}
 
 		logs.GetLogger().Warnf("Health check failed for model %s: %v (consecutive: %d)",
-			modelID, err, status.ConsecutiveFails)
+			modelID, probeErr, status.ConsecutiveFails)
 	} else {
 		status.TotalSuccesses++
 		status.LastSuccess = time.Now()
@@ -314,21 +309,17 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 	}
 }
 
-// probeEndpoint performs the actual health check request
+// probeEndpoint performs the actual health check request.
+// Tries /v1/models first (lightweight, just lists models) then falls back to
+// /health. This avoids triggering expensive deep health checks on proxies like
+// LiteLLM, where GET /health sends a real inference request to every backend.
 func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
-	// Use a short timeout for /health since some proxies (e.g., LiteLLM) have slow health endpoints.
-	// This prevents a hanging /health from consuming the entire timeout budget.
-	healthTimeout := h.config.Timeout / 2
-	if healthTimeout < 3*time.Second {
-		healthTimeout = 3 * time.Second
-	}
+	// Try /v1/models first — lightweight on all known serving engines
+	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
+	defer modelsCancel()
 
-	// Try /health endpoint first (common health check endpoint)
-	healthCtx, healthCancel := context.WithTimeout(context.Background(), healthTimeout)
-	defer healthCancel()
-
-	healthURL := endpoint + "/health"
-	req, err := http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
+	modelsURL := endpoint + "/v1/models"
+	req, err := http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -345,12 +336,16 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 		resp.Body.Close()
 	}
 
-	// Try /v1/models endpoint (OpenAI-compatible) with its own timeout
-	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
-	defer modelsCancel()
+	// Fall back to /health (works for SGLang, vLLM, Ollama, etc.)
+	healthTimeout := h.config.Timeout / 2
+	if healthTimeout < 3*time.Second {
+		healthTimeout = 3 * time.Second
+	}
+	healthCtx, healthCancel := context.WithTimeout(context.Background(), healthTimeout)
+	defer healthCancel()
 
-	modelsURL := endpoint + "/v1/models"
-	req, err = http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
+	healthURL := endpoint + "/health"
+	req, err = http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
