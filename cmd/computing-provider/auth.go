@@ -83,7 +83,8 @@ func handleAuthentication(cpRepoPath string, prompter *setup.Prompter, providedA
 	}
 
 	// Ask if user has an account
-	hasAccount, err := prompter.AskYesNo("Do you have a Swan Inference account", false)
+	fmt.Println("\nA Swan Inference account is needed to connect your provider to the network.")
+	hasAccount, err := prompter.AskYesNo("Do you already have a Swan Inference account", false)
 	if err != nil {
 		return "", err
 	}
@@ -148,7 +149,8 @@ func handleLogin(cpRepoPath string, prompter *setup.Prompter, authClient *setup.
 // It automatically creates a new provider API key using the user's JWT token
 func handleExistingProviderLogin(cpRepoPath string, prompter *setup.Prompter, authClient *setup.AuthClient, token string) (string, error) {
 	fmt.Println()
-	fmt.Println("Creating a new provider API key for this device...")
+	fmt.Println("Creating a new API key for this device...")
+	fmt.Println("Each device needs its own API key to connect to Swan Inference.")
 
 	// Create a new provider key using the user's JWT token
 	keyResp, err := authClient.CreateProviderKey(token, "CLI Key")
@@ -188,9 +190,9 @@ func handleExistingProviderLogin(cpRepoPath string, prompter *setup.Prompter, au
 	}
 
 	apiKey := keyResp.ApiKey
-	setup.PrintSuccess("Provider API key created!")
+	setup.PrintSuccess("API key created for this device!")
 	fmt.Println()
-	setup.PrintWarning("IMPORTANT: Save this API key! It is only shown once.")
+	setup.PrintWarning("SAVE THIS API KEY - it connects your machine to Swan Inference and is only shown once.")
 	fmt.Printf("\n  API Key: %s\n\n", apiKey)
 
 	// Save credentials
@@ -208,7 +210,8 @@ func handleExistingProviderLogin(cpRepoPath string, prompter *setup.Prompter, au
 // handleUpgradeToProvider upgrades a user account to provider
 // Returns (apiKey, isAlreadyProvider, error)
 func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authClient *setup.AuthClient, token, email, nodeName string) (string, bool, error) {
-	fmt.Println("\nSet up your provider account")
+	fmt.Println("\nSet up your provider profile")
+	fmt.Println("This name identifies your provider on the Swan Inference network.")
 
 	providerName, err := prompter.AskString("Provider Name", nodeName)
 	if err != nil {
@@ -223,8 +226,9 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 		return "", false, err
 	}
 
-	fmt.Println("\nWallet address is optional but required for receiving rewards.")
-	fmt.Println("You can use any EVM-compatible address, or press Enter to skip.")
+	fmt.Println("\nA wallet address is where you'll receive SWAN token rewards.")
+	fmt.Println("Note: Rewards start after your provider is reviewed and approved.")
+	fmt.Println("You can use any EVM-compatible wallet (e.g. MetaMask), or skip for now.")
 	fmt.Println()
 
 	walletAddr, err := prompter.AskString("Wallet Address (optional, press Enter to skip)", "")
@@ -239,26 +243,26 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 			return "", false, err
 		}
 	} else {
-		setup.PrintInfo("No wallet address provided - you can add one later to receive rewards")
+		setup.PrintInfo("Skipped - you can add a wallet later to start earning rewards")
 	}
 
-	fmt.Println("\nUpgrading to provider...")
+	fmt.Println("\nRegistering your provider...")
 	resp, err := authClient.UpgradeToProvider(token, providerName, walletAddr)
 	if err != nil {
 		// Check if user is already a provider - don't show error, just return flag
 		if strings.Contains(err.Error(), "already a provider") {
 			return "", true, err
 		}
-		setup.PrintError(fmt.Sprintf("Upgrade failed: %v", err))
+		setup.PrintError(fmt.Sprintf("Registration failed: %v", err))
 		return "", false, err
 	}
 
 	apiKey := resp.ProviderApiKey
-	setup.PrintSuccess("Provider account created!")
+	setup.PrintSuccess("Provider registered!")
 	setup.PrintInfo(fmt.Sprintf("Provider ID: %s", resp.ProviderID))
-	setup.PrintInfo(fmt.Sprintf("Status: %s", resp.Status))
+	setup.PrintInfo(fmt.Sprintf("Status: %s (your provider will be reviewed before it can earn rewards)", resp.Status))
 	fmt.Println()
-	setup.PrintWarning("IMPORTANT: Save this API key! It is only shown once.")
+	setup.PrintWarning("SAVE THIS API KEY - it connects your machine to Swan Inference and is only shown once.")
 	fmt.Printf("\n  API Key: %s\n\n", apiKey)
 
 	// Save credentials
@@ -278,6 +282,7 @@ func handleUpgradeToProvider(cpRepoPath string, prompter *setup.Prompter, authCl
 // handleSignup handles the signup flow for new users
 func handleSignup(cpRepoPath string, prompter *setup.Prompter, authClient *setup.AuthClient, nodeName string) (string, error) {
 	fmt.Println("\nCreate a new Swan Inference account")
+	fmt.Println("This will register you on the Swan Inference network so your GPU can serve AI requests.")
 
 	email, err := prompter.AskString("Email", "")
 	if err != nil {
