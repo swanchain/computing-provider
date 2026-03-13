@@ -241,7 +241,7 @@ Commands are defined in `cmd/computing-provider/`:
 - `research.go` — hardware/GPU info and benchmarks
 - `dashboard.go` — web UI (port 3005)
 
-Global `--repo` flag sets `CP_PATH` (default `~/.swan/computing`).
+Global flags: `--repo` sets `CP_PATH` (default `~/.swan/computing`), `--help`/`-h` shows help for any command/subcommand, `--version` shows version info.
 
 ## REST API
 

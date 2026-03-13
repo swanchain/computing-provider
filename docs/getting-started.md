@@ -367,6 +367,19 @@ docker logs <container_name>
 
 ### Getting Help
 
+```bash
+# Show all available commands
+computing-provider --help
+
+# Help for a specific command
+computing-provider setup --help
+computing-provider inference --help
+
+# Help for a subcommand
+computing-provider task list --help
+```
+
+- [CLI Reference](cli/README.md)
 - [Discord Community](https://discord.gg/swanchain)
 - [GitHub Issues](https://github.com/swanchain/computing-provider/issues)
 - [Troubleshooting Guide](troubleshooting.md)
