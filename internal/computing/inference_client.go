@@ -249,6 +249,7 @@ type InferenceClient struct {
 	// Send buffer saturation tracking
 	sendFailures     int        // Consecutive send buffer full timeouts
 	sendFailuresMu   sync.Mutex // Protects sendFailures counter
+	connGeneration   uint64     // Incremented on each reconnect to invalidate stale forceReconnect calls
 
 	// Reconnect guard
 	reconnecting     bool       // True while a reconnect is in progress
@@ -523,6 +524,7 @@ func (c *InferenceClient) reconnect() {
 	c.mu.Lock()
 	close(c.pumpDone)
 	c.pumpDone = make(chan struct{})
+	c.connGeneration++ // Invalidate stale forceReconnect calls from old goroutines
 	if c.conn != nil {
 		c.conn.Close()
 	}
@@ -596,9 +598,13 @@ func (c *InferenceClient) reconnect() {
 }
 
 // forceReconnect closes the WebSocket connection to trigger readPump's reconnect path.
-// This is called when send buffer saturation indicates the connection is unhealthy.
-func (c *InferenceClient) forceReconnect() {
+// It checks the connection generation to avoid closing a fresh connection from stale goroutines.
+func (c *InferenceClient) forceReconnect(gen uint64) {
 	c.mu.Lock()
+	if c.connGeneration != gen {
+		c.mu.Unlock()
+		return // stale goroutine from a previous connection, ignore
+	}
 	conn := c.conn
 	c.mu.Unlock()
 
@@ -608,9 +614,20 @@ func (c *InferenceClient) forceReconnect() {
 	}
 }
 
+// getConnGeneration returns the current connection generation for callers that
+// need to pass it to forceReconnect later.
+func (c *InferenceClient) getConnGeneration() uint64 {
+	c.mu.RLock()
+	gen := c.connGeneration
+	c.mu.RUnlock()
+	return gen
+}
+
 // trackSendFailure tracks consecutive send buffer full failures and triggers
 // a forced reconnect after 3 consecutive failures.
 func (c *InferenceClient) trackSendFailure() {
+	gen := c.getConnGeneration()
+
 	c.sendFailuresMu.Lock()
 	c.sendFailures++
 	failures := c.sendFailures
@@ -618,7 +635,7 @@ func (c *InferenceClient) trackSendFailure() {
 
 	if failures >= 3 {
 		logs.GetLogger().Errorf("Send buffer full %d consecutive times — forcing reconnect", failures)
-		c.forceReconnect()
+		c.forceReconnect(gen)
 	}
 }
 
@@ -868,7 +885,15 @@ func (c *InferenceClient) register() error {
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
-	c.send <- msgBytes
+	select {
+	case c.send <- msgBytes:
+		// sent successfully
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("send buffer full: registration timed out after 10s")
+	case <-c.stopCh:
+		return fmt.Errorf("client stopped")
+	}
+
 	if len(c.apiKey) > 0 {
 		displayLen := 15
 		if len(c.apiKey) < 15 {
@@ -1049,7 +1074,15 @@ func (c *InferenceClient) sendHeartbeat() {
 		return
 	}
 
-	c.send <- msgBytes
+	select {
+	case c.send <- msgBytes:
+		// sent successfully
+	case <-time.After(5 * time.Second):
+		logs.GetLogger().Warn("Send buffer full, heartbeat dropped — triggering reconnect")
+		c.trackSendFailure()
+	case <-c.stopCh:
+		return
+	}
 }
 
 // SendModelHealthUpdate sends a model health update to Swan Inference
