@@ -227,8 +227,6 @@ computing-provider account create \
 computing-provider collateral add --ecp --from <your-wallet> <amount>
 ```
 
-Get SwanETH from the [Swan Chain Faucet](https://docs.swanchain.io).
-
 > **Note:** You can run the provider without a wallet - it will still serve inference requests, but you won't receive on-chain rewards.
 
 ---
