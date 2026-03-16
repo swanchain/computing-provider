@@ -21,7 +21,7 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 # 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make mainnet && sudo make install
+make clean && make testnet && sudo make install
 
 # 2. Browse available models from the Swan Model Repository
 computing-provider models catalog
@@ -63,7 +63,7 @@ ollama pull qwen2.5:7b
 brew install go
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make mainnet && sudo make install
+make clean && make testnet && sudo make install
 
 # 3. Run the setup wizard
 computing-provider setup
