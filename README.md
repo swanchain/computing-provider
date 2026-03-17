@@ -42,6 +42,9 @@ computing-provider setup
 
 # 6. Run the provider
 computing-provider run
+
+# 7. Verify your provider is connected
+computing-provider inference status
 ```
 
 The `models download` command downloads pre-verified weights from the Swan Model Repository with SHA256 hash checks. The setup wizard will:
@@ -70,9 +73,39 @@ computing-provider setup
 
 # 4. Run the provider
 computing-provider run
+
+# 5. Verify your provider is connected
+computing-provider inference status
 ```
 
 The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
+
+---
+
+## What Happens After Setup
+
+Once your provider is running, it goes through these stages automatically. Most providers are fully active within a day.
+
+```
+Connect ──▶ Benchmark ──▶ Approval ──▶ Collateral ──▶ Active
+(instant)   (automatic)   (< 24 hrs)   (via Stripe)   (earning)
+```
+
+| Stage | What happens | Time |
+|-------|-------------|------|
+| **Connect** | Provider connects to the network and registers its models | Immediate |
+| **Benchmark** | Automated benchmarks verify your GPU can serve the registered models | Minutes (automatic) |
+| **Approval** | Admin reviews your provider | < 24 hours |
+| **Collateral** | Deposit collateral via Stripe to secure your position and unlock earnings | Instant |
+| **Active** | Start receiving inference requests and earning rewards | Ongoing |
+
+> **Grace period:** New providers get a 7-day grace period after activation with full traffic priority while building up uptime and success rate history.
+
+Check your current stage at any time:
+
+```bash
+computing-provider inference status
+```
 
 ---
 
@@ -102,10 +135,32 @@ Swan Inference (Cloud)
 
 ## Prerequisites
 
-| Platform | Requirements |
+### Linux (NVIDIA GPU)
+
+| Category | Requirement |
 |----------|-------------|
-| **Linux** | Docker, NVIDIA GPU, [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
-| **macOS** | [Ollama](https://ollama.ai), Apple Silicon (M1/M2/M3/M4) |
+| **GPU** | NVIDIA RTX 3090, 4090, A100, H100, or equivalent |
+| **VRAM** | Minimum 16GB (24GB+ recommended) |
+| **RAM** | Minimum 32GB system memory |
+| **Storage** | 500GB+ SSD for model weights |
+| **OS** | Ubuntu 22.04+ or Debian 11+ |
+| **NVIDIA Driver** | 535.x or newer |
+| **CUDA** | 12.1 or newer |
+| **Docker** | 24.0+ with [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
+| **Network** | 100 Mbps minimum (1 Gbps recommended), stable connection with low latency |
+
+### macOS (Apple Silicon)
+
+| Category | Requirement |
+|----------|-------------|
+| **Chip** | Apple Silicon M1, M2, M3, or M4 |
+| **Memory** | 16GB+ unified memory (32GB+ recommended) |
+| **Storage** | 500GB+ SSD for model weights |
+| **OS** | macOS 13 Ventura or newer |
+| **Software** | [Ollama](https://ollama.ai) (latest version) |
+| **Network** | 100 Mbps minimum, stable connection with low latency |
+
+> **Ports:** Only outbound WebSocket connections are needed — no port forwarding or public IP required.
 
 ### Install NVIDIA Container Toolkit (Linux only)
 
