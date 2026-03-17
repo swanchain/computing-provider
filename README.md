@@ -300,17 +300,89 @@ docker logs sglang
 
 ---
 
-## Advanced: ZK-Proof Mode
+## FAQ
 
-For generating ZK-Snark proofs (Filecoin, Aleo). Requires additional setup.
+### Setup & Installation
 
-See [ZK-Proof Documentation](docs/ubi/README.md).
+**Q: `make mainnet` fails with `go: command not found`**
+Install Go 1.22+. On Linux: download from [go.dev/dl](https://go.dev/dl/) and add to PATH. On macOS: `brew install go`. Make sure to restart your shell or `source ~/.bashrc` after installing.
 
+**Q: SGLang container fails with `cuda>=12.x unsatisfied condition`**
+Your NVIDIA driver is too old for the latest SGLang image. Either update your driver (`sudo apt install nvidia-driver-550`) or use an older SGLang tag:
 ```bash
-# Initialize with public IP (required for ZK mode)
-computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<name>
+docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
+  -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
+  lmsysorg/sglang:v0.4.7.post1-cu124 \
+  python3 -m sglang.launch_server --model-path /models \
+    --host 0.0.0.0 --port 30000 \
+    --served-model-name Qwen/Qwen2.5-7B-Instruct
+```
 
-# Requires: wallet, account registration, v28 parameters (~200GB)
+**Q: `docker: Error response from daemon: could not select device driver "nvidia"`**
+The NVIDIA Container Toolkit is not installed. Follow the [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) section, then restart Docker.
+
+**Q: `computing-provider setup` doesn't detect my running model server**
+The setup wizard scans common ports (30000, 8080, 11434). Make sure your model server is running *before* you start the wizard. You can verify manually:
+```bash
+curl http://localhost:30000/v1/models   # SGLang/vLLM
+curl http://localhost:11434/api/tags    # Ollama
+```
+If your server uses a non-standard port, the wizard may not find it — you can manually edit `~/.swan/computing/models.json` afterward.
+
+### Model Issues
+
+**Q: My provider is online but not receiving any inference requests**
+The most common cause is a model name mismatch. The `--served-model-name` in your SGLang/vLLM command **must exactly match** the key in `models.json`, and that key must match a model ID registered on Swan Inference. Run `computing-provider models catalog` to see valid model IDs.
+
+**Q: SGLang container starts but immediately exits**
+Check logs with `docker logs sglang`. Common causes:
+- **Out of VRAM**: The model is too large for your GPU. Try a smaller model or a quantized version.
+- **Shared memory**: Add `--shm-size 4g` to your `docker run` command.
+- **Port conflict**: Port 30000 is already in use. Check with `docker ps` or `lsof -i :30000`.
+
+**Q: `models download` fails for Llama or other gated models**
+Some HuggingFace models require accepting a license agreement. Visit the model page on [huggingface.co](https://huggingface.co), accept the terms, then set your HuggingFace token:
+```bash
+export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
+computing-provider models download meta-llama/Llama-3.3-70B-Instruct
+```
+
+### Connection & Authentication
+
+**Q: `WebSocket connection failed` or provider can't connect**
+- Verify the WebSocket URL in `~/.swan/computing/config.toml` is `wss://inference-ws.swanchain.io` (not `http://` or `https://`)
+- Check that outbound port 443 isn't blocked by your firewall or cloud security group
+- If behind a corporate proxy, WebSocket connections may be blocked — check with your network admin
+
+**Q: `invalid provider API key` or `authentication required`**
+- Your API key must start with `sk-prov-`. Consumer keys (`sk-swan-*`) won't work.
+- Verify your key in `~/.swan/computing/config.toml` under `[Inference].ApiKey`
+- You can also set it via environment variable: `export INFERENCE_API_KEY=sk-prov-xxx`
+
+**Q: Provider is stuck in `pending` status**
+Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum tier, and registration benchmark passes. Check your status:
+```bash
+computing-provider inference status
+```
+If you're just testing, ask the Swan team on [Discord](https://discord.gg/3uQUWzaS7U) about dev mode access which skips these requirements.
+
+### Configuration
+
+**Q: I edited `config.toml` but nothing changed**
+Make sure you're editing the right file. The provider reads config from `~/.swan/computing/config.toml` (or wherever `$CP_PATH` points), **not** the `config.toml` in the git repo directory.
+
+**Q: How do I change models without restarting?**
+Edit `~/.swan/computing/models.json` — the provider watches this file and hot-reloads automatically. You can also reload via the API:
+```bash
+curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
+```
+
+**Q: Port 8085 or 30000 is already in use**
+Find and stop the conflicting process:
+```bash
+lsof -i :30000   # Find what's using the port
+docker ps         # Check for leftover containers
+docker rm -f sglang  # Remove old SGLang container
 ```
 
 ---
