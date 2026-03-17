@@ -61,12 +61,7 @@ func InitDb(cpRepoPath string) {
 	sqlDB.SetConnMaxLifetime(0)
 
 	if err = DB.AutoMigrate(
-		&models.TaskEntity{},
-		&models.JobEntity{},
-		&models.CpInfoEntity{},
-		&models.EcpJobEntity{},
-		&models.ScanChainEntity{},
-		&models.CpBalanceEntity{}); err != nil {
+		&models.CpInfoEntity{}); err != nil {
 		panic(fmt.Sprintf("failed to auto migrate for provider db: %v", err))
 	}
 

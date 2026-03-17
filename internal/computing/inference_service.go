@@ -17,7 +17,6 @@ import (
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/conf"
-	"github.com/swanchain/computing-provider-v2/wallet"
 )
 
 // streamingHttpClient is a shared HTTP client for streaming inference requests
@@ -194,14 +193,10 @@ func (s *InferenceService) Start() error {
 	// Start concurrency limiter (with GPU memory awareness)
 	s.concurrencyLimiter.Start()
 
-	// Get owner and worker addresses
-	ownerAddr, workerAddr, err := GetOwnerAddressAndWorkerAddress()
-	if err != nil {
-		logs.GetLogger().Warnf("Failed to get addresses from CP account: %v", err)
-		// For dev mode: use wallet address as owner
-		ownerAddr = s.getDefaultWalletAddress()
-		workerAddr = s.nodeID
-	}
+	// Owner/worker addresses are no longer managed locally.
+	// The node ID serves as the provider identity.
+	ownerAddr := s.getDefaultWalletAddress()
+	workerAddr := s.nodeID
 
 	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
 	s.client.SetInferenceHandler(s.handleInference)
@@ -245,28 +240,10 @@ func (s *InferenceService) Start() error {
 	return nil
 }
 
-// getDefaultWalletAddress returns the first wallet address from keystore (for dev mode)
+// getDefaultWalletAddress returns an empty string — wallet is no longer managed locally.
+// Beneficiary address is set via the dashboard or `inference set-beneficiary`.
 func (s *InferenceService) getDefaultWalletAddress() string {
-	localWallet, err := wallet.SetupWallet(wallet.WalletRepo)
-	if err != nil {
-		logs.GetLogger().Warnf("Failed to setup wallet: %v", err)
-		return ""
-	}
-
-	addresses, err := localWallet.List()
-	if err != nil || len(addresses) == 0 {
-		logs.GetLogger().Warnf("No wallet addresses found")
-		return ""
-	}
-
-	// Remove "wallet-" prefix if present
-	addr := addresses[0]
-	if strings.HasPrefix(addr, "wallet-") {
-		addr = strings.TrimPrefix(addr, "wallet-")
-	}
-
-	logs.GetLogger().Infof("Using wallet address as owner for dev mode: %s", addr)
-	return addr
+	return ""
 }
 
 // Stop gracefully shuts down the Inference service

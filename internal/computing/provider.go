@@ -5,8 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
-	"github.com/swanchain/computing-provider-v2/internal/contract"
 	"log"
 	"os"
 	"path/filepath"
@@ -69,30 +67,4 @@ func hashPublicKey(publicKey *ecdsa.PublicKey) string {
 	publicKeyBytes := crypto.FromECDSAPub(publicKey)
 	hash := sha256.Sum256(publicKeyBytes)
 	return hex.EncodeToString(hash[:])
-}
-
-func GetOwnerAddressAndWorkerAddress() (string, string, error) {
-	cpAccountAddress, err := contract.GetCpAccountAddress()
-	if err != nil {
-		return "", "", fmt.Errorf("get cp account contract address failed, error: %v", err)
-	}
-
-	cpInfoEntity, err := NewCpInfoService().GetCpInfoEntityByAccountAddress(cpAccountAddress)
-	if err != nil {
-		return "", "", fmt.Errorf("get cp info failed, account address: %s, error: %v", cpAccountAddress, err)
-	}
-
-	var ownerAddress, workerAddress string
-	if cpInfoEntity.WorkerAddress == "" || cpInfoEntity.OwnerAddress == "" {
-		info, err := SyncCpAccountInfo()
-		if err != nil {
-			return "", "", fmt.Errorf("failed to sync cp info from chain, error: %v", err)
-		}
-		ownerAddress = info.OwnerAddress
-		workerAddress = info.WorkerAddress
-	} else {
-		ownerAddress = cpInfoEntity.OwnerAddress
-		workerAddress = cpInfoEntity.WorkerAddress
-	}
-	return ownerAddress, workerAddress, nil
 }

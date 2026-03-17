@@ -1,8 +1,6 @@
 package main
 
 import (
-	_ "embed"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,157 +11,17 @@ import (
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	cors "github.com/itsjamie/gin-cors"
-	"github.com/olekukonko/tablewriter"
-	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
-	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/urfave/cli/v2"
 )
-
-var ubiTaskCmd = &cli.Command{
-	Name:  "ubi",
-	Usage: "Manage ZK proof tasks",
-	Subcommands: []*cli.Command{
-		listCmd,
-	},
-}
 
 var runCmd = &cli.Command{
 	Name:  "run",
 	Usage: "Start the computing provider",
 	Action: func(cctx *cli.Context) error {
 		return runDaemon()
-	},
-}
-
-var listCmd = &cli.Command{
-	Name:  "list",
-	Usage: "List ubi task",
-	Flags: []cli.Flag{
-		&cli.BoolFlag{
-			Name:  "show-failed",
-			Usage: "show failed/failing ubi tasks",
-		},
-		&cli.BoolFlag{
-			Name:    "verbose",
-			Usage:   "--verbose",
-			Aliases: []string{"v"},
-		},
-		&cli.IntFlag{
-			Name:  "tail",
-			Usage: "Show the last number of lines. If not specified, all are displayed by default",
-		},
-	},
-	Action: func(cctx *cli.Context) error {
-		fullFlag := cctx.Bool("verbose")
-		cpRepoPath, _ := os.LookupEnv("CP_PATH")
-		if err := conf.InitConfig(cpRepoPath, true); err != nil {
-			return fmt.Errorf("load config file failed, error: %+v", err)
-		}
-
-		showFailed := cctx.Bool("show-failed")
-		tailNum := cctx.Int("tail")
-		var taskData [][]string
-		var rowColorList []RowColor
-		var taskList []*models.TaskEntity
-		var err error
-		if showFailed {
-			taskList, err = computing.NewTaskService().GetTaskList(tailNum)
-			if err != nil {
-				return fmt.Errorf("failed get ubi task, error: %+v", err)
-			}
-		} else {
-			taskList, err = computing.NewTaskService().GetTaskList(tailNum, []int{
-				models.TASK_RECEIVED_STATUS,
-				models.TASK_RUNNING_STATUS,
-				models.TASK_SUBMITTED_STATUS,
-				models.TASK_VERIFIED_STATUS,
-				models.TASK_REWARDED_STATUS,
-			}...)
-			if err != nil {
-				return fmt.Errorf("failed get ubi task, error: %+v", err)
-			}
-		}
-
-		if fullFlag {
-			for i, task := range taskList {
-				createTime := time.Unix(task.CreateTime, 0).Format("2006-01-02 15:04:05")
-				var sequencerStr string
-				var contract string
-				if task.Sequencer == 1 {
-					sequencerStr = "YES"
-					if task.SequenceTaskAddr != "" {
-						contract = task.SequenceTaskAddr
-					}
-				} else if task.Sequencer == 0 {
-					sequencerStr = "NO"
-					contract = task.Contract
-				} else {
-					sequencerStr = ""
-				}
-
-				var taskId string
-				if task.Type == models.Mining {
-					taskId = task.Uuid
-				} else {
-					taskId = strconv.Itoa(int(task.Id))
-				}
-
-				taskData = append(taskData,
-					[]string{taskId, contract, models.GetResourceTypeStr(task.ResourceType), models.UbiTaskTypeStr(task.Type),
-						task.CheckCode, task.Sign, models.TaskStatusStr(task.Status), sequencerStr, createTime})
-
-				rowColorList = append(rowColorList, RowColor{
-					row:    i,
-					column: []int{6},
-					color:  getStatusColor(task.Status),
-				})
-			}
-			header := []string{"TASK ID", "TASK CONTRACT", "TASK TYPE", "ZK TYPE", "CHECK CODE", "SIGNATURE", "STATUS", "SEQUENCER", "CREATE TIME"}
-			NewVisualTable(header, taskData, rowColorList).Generate(false)
-
-		} else {
-			for i, task := range taskList {
-				createTime := time.Unix(task.CreateTime, 0).Format("2006-01-02 15:04:05")
-				var sequencerStr string
-				var contract string
-				if task.Sequencer == 1 {
-					sequencerStr = "YES"
-					if task.SequenceTaskAddr != "" {
-						contract = task.SequenceTaskAddr
-					}
-				} else if task.Sequencer == 0 {
-					sequencerStr = "NO"
-					contract = task.Contract
-				} else {
-					sequencerStr = ""
-				}
-
-				var taskId string
-				if task.Type == models.Mining {
-					taskId = task.Uuid
-				} else {
-					taskId = strconv.Itoa(int(task.Id))
-				}
-
-				taskData = append(taskData,
-					[]string{taskId, contract, models.GetResourceTypeStr(task.ResourceType), models.UbiTaskTypeStr(task.Type),
-						models.TaskStatusStr(task.Status), sequencerStr, createTime})
-
-				rowColorList = append(rowColorList, RowColor{
-					row:    i,
-					column: []int{4},
-					color:  getStatusColor(task.Status),
-				})
-			}
-
-			header := []string{"TASK ID", "TASK CONTRACT", "TASK TYPE", "ZK TYPE", "STATUS", "SEQUENCER", "CREATE TIME"}
-			NewVisualTable(header, taskData, rowColorList).Generate(false)
-		}
-		return nil
-
 	},
 }
 
@@ -205,48 +63,14 @@ func runDaemon() error {
 	// Check Docker availability (optional for Inference-only mode)
 	dockerAvailable := checkDockerAvailable()
 
-	if dockerAvailable {
-		computing.NewDockerService().CleanResourceForDocker(true)
-
-		resourceExporterContainerName := "resource-exporter"
-		rsExist, version, err := computing.NewDockerService().CheckRunningContainer(resourceExporterContainerName)
-		if err != nil {
-			logs.GetLogger().Warnf("check %s container failed: %v (continuing without it)", resourceExporterContainerName, err)
-		} else {
-			if version != "" {
-				if errMsg := util.CheckVersion(build.ResourceExporterVersion, version); errMsg != nil {
-					logs.GetLogger().Warnf("resource-exporter version mismatch: %s", errMsg)
-				}
-			}
-
-			if !rsExist {
-				if err = computing.RestartResourceExporter(); err != nil {
-					logs.GetLogger().Errorf("restartResourceExporter failed, error: %v", err)
-				}
-			}
-		}
-
-		traefikServiceContainerName := "traefik-service"
-		tsExist, _, err := computing.NewDockerService().CheckRunningContainer(traefikServiceContainerName)
-		if err != nil {
-			logs.GetLogger().Warnf("check %s container failed: %v (continuing without it)", traefikServiceContainerName, err)
-		} else if !tsExist {
-			if err = computing.RestartTraefikService(); err != nil {
-				logs.GetLogger().Errorf("restartTraefikService failed, error: %v", err)
-			}
-		}
-	} else {
+	if !dockerAvailable {
 		logs.GetLogger().Info("Docker not available - running in Inference-only mode (Ollama)")
-		logs.GetLogger().Info("Some features (resource-exporter, traefik) will be disabled")
 	}
 
 	if err := conf.InitConfig(cpRepoPath, true); err != nil {
 		logs.GetLogger().Fatal(err)
 	}
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
-
-	computing.SyncCpAccountInfo()
-	computing.CronTaskForEcp()
 
 	// Start Inference mode (Swan Inference marketplace) if enabled
 	nodeID := computing.GetNodeId(cpRepoPath)
@@ -268,19 +92,6 @@ func runDaemon() error {
 	pprof.Register(r)
 
 	router := r.Group("/api/v1/computing")
-	router.GET("/cp", computing.GetCpResource)
-	router.GET("/cp/metrics", computing.GetUbiResourceExporterMetrics)
-	router.POST("/cp/ubi", computing.DoUbiTaskForDocker)
-	router.POST("/cp/docker/receive/ubi", computing.ReceiveUbiProof)
-
-	ecpImageService := computing.NewImageJobService()
-	router.POST("/cp/deploy/check", ecpImageService.CheckJobCondition)
-	router.GET("/cp/price", computing.GetPrice)
-	router.POST("/cp/deploy", ecpImageService.DeployJob)
-	router.GET("/cp/job/status", ecpImageService.GetJobStatus)
-	router.GET("/cp/job/log", ecpImageService.DockerLogsHandler)
-	router.DELETE("/cp/job/:job_uuid", ecpImageService.DeleteJob)
-	router.POST("/cp/zk_task", computing.DoZkTask)
 
 	// Inference metrics endpoints
 	router.GET("/inference/metrics", func(c *gin.Context) {
@@ -536,37 +347,4 @@ func runDaemon() error {
 	<-finishCh
 
 	return nil
-}
-
-func getStatusColor(taskStatus int) []tablewriter.Colors {
-	var rowColor []tablewriter.Colors
-	switch taskStatus {
-	case models.TASK_REJECTED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_RECEIVED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgYellowColor}}
-	case models.TASK_RUNNING_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgCyanColor}}
-	case models.TASK_SUBMITTED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgBlueColor}}
-	case models.TASK_FAILED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_VERIFIED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgBlueColor}}
-	case models.TASK_REWARDED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgGreenColor}}
-	case models.TASK_INVALID_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_TIMEOUT_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_VERIFYFAILED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_REPEATED_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgGreenColor}}
-	case models.TASK_NSC_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgRedColor}}
-	case models.TASK_UNKNOWN_STATUS:
-		rowColor = []tablewriter.Colors{{tablewriter.Bold, tablewriter.FgBlackColor}}
-	}
-	return rowColor
 }

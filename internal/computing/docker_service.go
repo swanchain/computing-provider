@@ -27,8 +27,6 @@ import (
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/constants"
 
-	"github.com/swanchain/computing-provider-v2/conf"
-
 	"github.com/containerd/containerd"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
@@ -182,11 +180,7 @@ func (ds *DockerService) PushImage(imagesName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*6000)
 	defer cancel()
 
-	var authConfig = registry.AuthConfig{
-		ServerAddress: conf.GetConfig().Registry.ServerAddress,
-		Username:      conf.GetConfig().Registry.UserName,
-		Password:      conf.GetConfig().Registry.Password,
-	}
+	var authConfig = registry.AuthConfig{}
 	authConfigBytes, _ := json.Marshal(authConfig)
 	authConfigEncoded := base64.URLEncoding.EncodeToString(authConfigBytes)
 	opts := image.PushOptions{RegistryAuth: authConfigEncoded}

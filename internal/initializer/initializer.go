@@ -12,8 +12,6 @@ func ProjectInit(cpRepoPath string) {
 	}
 	nodeID := computing.InitComputingProvider(cpRepoPath)
 
-	computing.NewCronTask(nodeID).RunTask()
-
 	// Start Inference mode (Swan Inference marketplace) if enabled
 	inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
 	if err := inferenceService.Start(); err != nil {
