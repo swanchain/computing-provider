@@ -232,7 +232,7 @@ Provider communicates with Swan Inference using typed JSON messages:
 Commands are defined in `cmd/computing-provider/`:
 - `run.go` — `run`, `init`, `info`, `state`, `account`, `contract` commands
 - `setup.go` — `setup` wizard (recommended for new providers), subcommands: `discover`, `login`, `signup`
-- `inference.go` — `inference status`, `inference config`
+- `inference.go` — `inference status`, `inference config`, `inference set-beneficiary`
 - `wallet.go` — `wallet`, `collateral`, `sequencer` commands
 - `task.go` — task listing
 - `ubi.go` — `run` daemon (starts HTTP server + routes), `ubi-task` management

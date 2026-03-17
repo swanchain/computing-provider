@@ -31,6 +31,7 @@ var inferenceCmd = &cli.Command{
 		inferenceKeygenCmd,
 		inferenceRequestApprovalCmd,
 		inferenceDepositCmd,
+		inferenceSetBeneficiaryCmd,
 		inferenceRecommendModelsCmd,
 		inferenceSelectModelCmd,
 	},
@@ -853,6 +854,81 @@ type modelDemandEntry struct {
 	MinVRAMGB        int     `json:"min_vram_gb"`
 	Compatible       bool    `json:"compatible"`
 	EstDailyEarnings float64 `json:"est_daily_earnings"`
+}
+
+var inferenceSetBeneficiaryCmd = &cli.Command{
+	Name:      "set-beneficiary",
+	Usage:     "Set the wallet address for receiving rewards",
+	ArgsUsage: "<0x-address>",
+	Action: func(cctx *cli.Context) error {
+		address := cctx.Args().First()
+		if address == "" {
+			return fmt.Errorf("wallet address is required, e.g. computing-provider inference set-beneficiary 0x...")
+		}
+
+		if !strings.HasPrefix(address, "0x") || len(address) != 42 {
+			return fmt.Errorf("invalid Ethereum address: must be 42 characters starting with 0x")
+		}
+
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
+
+		cfg := conf.GetConfig()
+		serviceURL := getServiceURL(cfg)
+		apiKey := getAPIKey(cfg)
+
+		if apiKey == "" {
+			return fmt.Errorf("no API key configured. Run 'computing-provider inference keygen' first")
+		}
+
+		reqBody, _ := json.Marshal(map[string]string{
+			"beneficiary_address": address,
+		})
+
+		url := serviceURL + "/api/v1/provider/me"
+		client := &http.Client{Timeout: 15 * time.Second}
+		req, err := http.NewRequest("PUT", url, bytes.NewReader(reqBody))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to connect to Swan Inference: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+				return fmt.Errorf("failed to update: %s", errResp.Error.Message)
+			}
+			return fmt.Errorf("failed to update (HTTP %d): %s", resp.StatusCode, string(body))
+		}
+
+		fmt.Println()
+		color.Green("Beneficiary address updated!")
+		fmt.Printf("Rewards will be sent to: %s\n", address)
+		fmt.Println()
+
+		return nil
+	},
 }
 
 var inferenceRecommendModelsCmd = &cli.Command{
