@@ -126,12 +126,15 @@ func DownloadModel(ctx context.Context, files []ModelFile, destDir string) error
 
 		// Check resume: skip if file exists with matching size and hash
 		if info, err := os.Stat(destPath); err == nil {
-			if info.Size() == f.SizeBytes && f.SizeBytes > 0 {
+			if f.Hash != "" && info.Size() == f.SizeBytes && f.SizeBytes > 0 {
 				hash, err := hashFile(destPath)
 				if err == nil && hash == f.Hash {
 					fmt.Printf("[%d/%d] skip %s (already verified)\n", i+1, len(files), f.Filename)
 					continue
 				}
+			} else if f.Hash == "" && info.Size() > 0 {
+				fmt.Printf("[%d/%d] skip %s (already exists)\n", i+1, len(files), f.Filename)
+				continue
 			}
 		}
 
@@ -141,16 +144,18 @@ func DownloadModel(ctx context.Context, files []ModelFile, destDir string) error
 			return fmt.Errorf("failed to download %s: %w", f.Filename, err)
 		}
 
-		// Verify hash after download
-		hash, err := hashFile(destPath)
-		if err != nil {
-			return fmt.Errorf("failed to hash %s: %w", f.Filename, err)
+		// Verify hash after download (only if expected hash is available)
+		if f.Hash != "" {
+			hash, err := hashFile(destPath)
+			if err != nil {
+				return fmt.Errorf("failed to hash %s: %w", f.Filename, err)
+			}
+			if hash != f.Hash {
+				os.Remove(destPath)
+				return fmt.Errorf("hash mismatch for %s: expected %s, got %s", f.Filename, f.Hash, hash)
+			}
+			fmt.Printf("[%d/%d] verified %s\n", i+1, len(files), f.Filename)
 		}
-		if hash != f.Hash {
-			os.Remove(destPath)
-			return fmt.Errorf("hash mismatch for %s: expected %s, got %s", f.Filename, f.Hash, hash)
-		}
-		fmt.Printf("[%d/%d] verified %s\n", i+1, len(files), f.Filename)
 	}
 
 	return nil
@@ -231,6 +236,7 @@ func downloadFile(ctx context.Context, url, destPath string, expectedSize int64)
 	if err != nil {
 		return err
 	}
+	req.Header.Set("User-Agent", "SwanProvider/2.0")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -240,7 +246,8 @@ func downloadFile(ctx context.Context, url, destPath string, expectedSize int64)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Write to temp file first, then rename for atomicity
