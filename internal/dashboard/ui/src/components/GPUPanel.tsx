@@ -4,6 +4,7 @@ import type { GPUInfo } from '../types';
 interface GPUPanelProps {
   gpus: GPUInfo[];
   loading: boolean;
+  error?: Error | null;
 }
 
 function ProgressBar({ value, max, color }: { value: number; max: number; color: string }) {
@@ -18,7 +19,7 @@ function ProgressBar({ value, max, color }: { value: number; max: number; color:
   );
 }
 
-export function GPUPanel({ gpus, loading }: GPUPanelProps) {
+export function GPUPanel({ gpus, loading, error }: GPUPanelProps) {
   if (loading) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -34,7 +35,7 @@ export function GPUPanel({ gpus, loading }: GPUPanelProps) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
         <h3 className="text-lg font-semibold text-slate-200 mb-4">GPU Status</h3>
-        <p className="text-slate-400">No GPUs detected</p>
+        <p className="text-slate-400">{error ? 'API unreachable' : 'No GPUs detected'}</p>
       </div>
     );
   }

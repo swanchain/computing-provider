@@ -1,17 +1,36 @@
-import { Wifi, WifiOff } from 'lucide-react';
+import { Wifi, WifiOff, AlertTriangle } from 'lucide-react';
 import type { ConnectionStatus as ConnectionStatusType } from '../types';
 
 interface ConnectionStatusProps {
   status: ConnectionStatusType | null;
   loading: boolean;
+  error?: Error | null;
 }
 
-export function ConnectionStatus({ status, loading }: ConnectionStatusProps) {
-  if (loading || !status) {
+export function ConnectionStatus({ status, loading, error }: ConnectionStatusProps) {
+  if (loading) {
     return (
       <div className="flex items-center gap-2 px-3 py-2 bg-slate-700/50 rounded-lg">
         <div className="w-3 h-3 bg-slate-600 rounded-full animate-pulse"></div>
         <span className="text-sm text-slate-400">Connecting...</span>
+      </div>
+    );
+  }
+
+  if (!status && error) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 bg-amber-900/20 border border-amber-800 rounded-lg">
+        <AlertTriangle size={16} className="text-amber-400" />
+        <span className="text-sm text-amber-400">API Unreachable</span>
+      </div>
+    );
+  }
+
+  if (!status) {
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 bg-slate-700/50 rounded-lg">
+        <WifiOff size={16} className="text-slate-400" />
+        <span className="text-sm text-slate-400">No data</span>
       </div>
     );
   }

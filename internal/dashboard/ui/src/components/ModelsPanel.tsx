@@ -6,11 +6,12 @@ import type { ModelStatus } from '../types';
 interface ModelsPanelProps {
   models: ModelStatus[];
   loading: boolean;
+  error?: Error | null;
   onRefresh: () => void;
   onModelClick?: (modelId: string) => void;
 }
 
-export function ModelsPanel({ models, loading, onRefresh, onModelClick }: ModelsPanelProps) {
+export function ModelsPanel({ models, loading, error, onRefresh, onModelClick }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const handleToggle = async (model: ModelStatus) => {
@@ -83,7 +84,7 @@ export function ModelsPanel({ models, loading, onRefresh, onModelClick }: Models
       </div>
 
       {!models || models.length === 0 ? (
-        <p className="text-slate-400">No models configured</p>
+        <p className="text-slate-400">{error ? 'API unreachable' : 'No models configured'}</p>
       ) : (
         <div className="space-y-3">
           {models.map((model) => (
