@@ -85,7 +85,7 @@ Once your provider is running, it goes through these stages automatically. Most 
 
 ```
 Connect ──▶ Benchmark ──▶ Approval ──▶ Collateral ──▶ Active
-(instant)   (automatic)   (< 24 hrs)   (via Stripe)   (earning)
+(instant)   (automatic)   (< 24 hrs)   (USD or crypto) (earning)
 ```
 
 | Stage | What happens | Time |
@@ -93,10 +93,10 @@ Connect ──▶ Benchmark ──▶ Approval ──▶ Collateral ──▶ Ac
 | **Connect** | Provider connects to the network and registers its models | Immediate |
 | **Benchmark** | Automated benchmarks verify your GPU can serve the registered models | Minutes (automatic) |
 | **Approval** | Admin reviews your provider | < 24 hours |
-| **Collateral** | Deposit collateral via Stripe to secure your position and unlock earnings | Instant |
+| **Collateral** | Deposit collateral to secure your position and unlock earnings (Stripe/PayPal or USDC/USDT on-chain) | Instant |
 | **Active** | Start receiving inference requests and earning rewards | Ongoing |
 
-> **Grace period:** New providers get a 7-day grace period after activation with full traffic priority while building up uptime and success rate history.
+> **Grace period:** New providers get a 7-day grace period after activation. During this period, benchmark failures and low uptime won't affect your routing priority, giving you time to stabilize your setup.
 
 Check your current stage at any time:
 
@@ -292,6 +292,9 @@ computing-provider setup                     # Interactive setup wizard (recomme
 computing-provider run                       # Start provider
 computing-provider inference status          # Check status on Swan Inference
 computing-provider inference config          # Show inference config
+computing-provider inference deposit         # Get collateral deposit instructions
+computing-provider inference deposit --check # Check current collateral status
+computing-provider inference set-beneficiary 0x...  # Set reward wallet
 computing-provider dashboard                 # Web UI (port 3005)
 computing-provider task list --ecp           # List tasks
 ```
@@ -420,6 +423,28 @@ Providers are auto-activated when all conditions are met: collateral deposited, 
 computing-provider inference status
 ```
 If you're just testing, ask the Swan team on [Discord](https://discord.gg/3uQUWzaS7U) about dev mode access which skips these requirements.
+
+### Earnings & Collateral
+
+**Q: How do I earn rewards?**
+You earn per successful inference request. Earnings are calculated based on token usage (input + output tokens) multiplied by the model's per-token price. You can check your balance and earnings breakdown anytime:
+```bash
+computing-provider inference status   # Shows current stage and earnings summary
+```
+Payouts are processed when your balance reaches the minimum threshold ($50). Set a beneficiary wallet to receive payouts:
+```bash
+computing-provider inference set-beneficiary 0xYourWalletAddress
+```
+
+**Q: What are the collateral deposit options?**
+After your provider is approved, you can deposit collateral via:
+- **USD (off-chain):** Stripe or PayPal — pay through the Provider Dashboard
+- **Stablecoin (on-chain):** USDC or USDT on supported chains (Base, Ethereum)
+
+Run `computing-provider inference deposit` to see supported chains, contract addresses, and minimum amounts. Deposit via the [Provider Dashboard](https://inference.swanchain.io/dashboard) or directly to the contract from your wallet.
+
+**Q: What happens if I fail benchmarks?**
+The system runs periodic benchmarks (math, code, reasoning, latency) to verify provider quality. Passing resets your failure counter. Consecutive failures may result in collateral slashing (default: 10% after 2 consecutive failures).
 
 ### Configuration
 
