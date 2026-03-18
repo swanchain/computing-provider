@@ -24,6 +24,7 @@ var modelsCmd = &cli.Command{
 		modelsDownloadCmd,
 		modelsVerifyCmd,
 		modelsListCmd,
+		modelsRmCmd,
 	},
 }
 
@@ -324,6 +325,50 @@ var modelsListCmd = &cli.Command{
 			}
 		}
 
+		return nil
+	},
+}
+
+var modelsRmCmd = &cli.Command{
+	Name:      "rm",
+	Usage:     "Remove a locally downloaded model",
+	ArgsUsage: "<model-id>",
+	Description: `Removes a locally downloaded model and its hash manifest.
+
+Examples:
+  computing-provider models rm meta-llama/Llama-3.1-8B-Instruct`,
+	Action: func(cctx *cli.Context) error {
+		modelID := cctx.Args().First()
+		if modelID == "" {
+			return fmt.Errorf("model ID is required, e.g. meta-llama/Llama-3.1-8B-Instruct")
+		}
+
+		modelDir := filepath.Join(defaultModelsDir(), modelID)
+		info, err := os.Stat(modelDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("model %s not found at %s", modelID, modelDir)
+			}
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", modelDir)
+		}
+
+		fileCount := countFiles(modelDir)
+		fmt.Printf("Removing %s (%d files) from %s\n", modelID, fileCount, modelDir)
+
+		if err := os.RemoveAll(modelDir); err != nil {
+			return fmt.Errorf("failed to remove model: %w", err)
+		}
+
+		// Clean up empty org directory
+		orgDir := filepath.Dir(modelDir)
+		if entries, err := os.ReadDir(orgDir); err == nil && len(entries) == 0 {
+			os.Remove(orgDir)
+		}
+
+		color.Green("Removed %s", modelID)
 		return nil
 	},
 }
