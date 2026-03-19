@@ -12,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v2"
 )
 
@@ -182,34 +181,3 @@ func getRegionByIpInfo() (string, error) {
 	return region, nil
 }
 
-// GetPrice is a HTTP handler that returns the current pricing configuration
-func GetPrice(c *gin.Context) {
-	priceConfig, err := ReadPriceConfig()
-	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(200, priceConfig)
-}
-
-func getWalletList(walletUrl string) ([]string, error) {
-	if walletUrl == "" {
-		return nil, fmt.Errorf("wallet url is empty")
-	}
-	resp, err := http.Get(walletUrl)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var wallets []string
-	if err = json.Unmarshal(body, &wallets); err != nil {
-		return nil, err
-	}
-	return wallets, nil
-}

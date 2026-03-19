@@ -259,23 +259,20 @@ curl http://localhost:8085/api/v1/computing/inference/health
 
 ## Earning Rewards (Optional)
 
-To receive SWAN token rewards for completed inference requests, set up a wallet:
+To receive SWAN token rewards for completed inference requests, set your beneficiary wallet:
+
+```bash
+# Set the wallet address where rewards will be sent
+computing-provider inference set-beneficiary 0xYourWalletAddress
+```
+
+For on-chain collateral (optional, increases reward tier):
 
 ```bash
 # 1. Create a wallet
 computing-provider wallet new
 
-# 2. Note your wallet address
-computing-provider wallet list
-
-# 3. Register on Swan Chain (requires small amount of SwanETH for gas)
-computing-provider account create \
-  --ownerAddress <your-wallet> \
-  --workerAddress <your-wallet> \
-  --beneficiaryAddress <your-wallet> \
-  --task-types 4
-
-# 4. Add collateral (determines your reward tier)
+# 2. Add collateral
 computing-provider collateral add --ecp --from <your-wallet> <amount>
 ```
 

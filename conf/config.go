@@ -1,23 +1,18 @@
 package conf
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/swanchain/computing-provider-v2/build"
-	"github.com/swanchain/computing-provider-v2/internal/contract"
 )
 
 // atomicWriteFile writes data to a temp file then renames to target path.
@@ -82,12 +77,8 @@ func (p *Pricing) UnmarshalTOML(data interface{}) error {
 // ComputeNode is a compute node config
 type ComputeNode struct {
 	API       API
-	UBI       UBI
-	LOG       LOG
-	Registry  Registry
-	RPC       RPC
-	CONTRACT  CONTRACT  `toml:"CONTRACT,omitempty"`
-	Inference Inference `toml:"Inference,omitempty"`
+	RPC       RPC       `toml:"RPC,omitempty"`
+	Inference Inference  `toml:"Inference,omitempty"`
 }
 
 // Inference is the Swan Inference marketplace configuration (default mode)
@@ -107,55 +98,15 @@ type API struct {
 	MultiAddress                  string
 	Domain                        string
 	NodeName                      string
-	WalletWhiteList               string
-	WalletBlackList               string
 	Pricing                       Pricing  `toml:"pricing"`
 	AutoDeleteImage               bool     `toml:"AutoDeleteImage"`
 	ClearLogDuration              int      `toml:"ClearLogDuration"`
 	PortRange                     []string `toml:"PortRange"`
 	GpuUtilizationRejectThreshold float64  `toml:"GpuUtilizationRejectThreshold"`
 }
-type UBI struct {
-	UbiEnginePk     string
-	EnableSequencer bool
-	AutoChainProof  bool
-	SequencerUrl    string
-	EdgeUrl         string
-	VerifySign      bool
-}
-
-type LOG struct {
-	CrtFile string
-	KeyFile string
-}
-
-type Registry struct {
-	ServerAddress string
-	UserName      string
-	Password      string
-}
 
 type RPC struct {
 	SwanChainRpc string `toml:"SWAN_CHAIN_RPC"`
-}
-
-type CONTRACT struct {
-	UpgradeName       string
-	SwanToken         string `toml:"SWAN_CONTRACT"`
-	CpAccountRegister string `toml:"REGISTER_CP_CONTRACT"`
-
-	JobCollateral     string `toml:"SWAN_COLLATERAL_CONTRACT"`
-	JobManager        string `toml:"SWAN_JOB_CONTRACT"`
-	JobManagerCreated uint64 `toml:"JobManagerCreated"`
-
-	TaskRegister           string `toml:"REGISTER_TASK_CONTRACT"`
-	ZkCollateral           string `toml:"ZK_COLLATERAL_CONTRACT"`
-	Sequencer              string `toml:"SEQUENCER_CONTRACT"`
-	EdgeTaskPayment        string `toml:"EDGE_TASK_PAYMENT"`
-	EdgeTaskPaymentCreated uint64 `toml:"EdgeTaskPaymentCreated"`
-
-	JobCollateralUbiZero string `toml:"SWAN_COLLATERAL_UBI_ZERO_CONTRACT"`
-	ZkCollateralUbiZero  string `toml:"ZK_COLLATERAL_UBI_ZERO_CONTRACT"`
 }
 
 func GetRpcByNetWorkName() (string, error) {
@@ -173,13 +124,9 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 			"please use `computing-provider init` to initialize the repo ", cpRepoPath)
 	}
 
-	metaData, err := toml.DecodeFile(configFile, &config)
+	_, err := toml.DecodeFile(configFile, &config)
 	if err != nil {
 		return fmt.Errorf("failed load config file, path: %s, error: %w", configFile, err)
-	}
-
-	if !metaData.IsDefined("Pricing") {
-		config.API.Pricing = true
 	}
 
 	if config.API.GpuUtilizationRejectThreshold == 0 {
@@ -194,163 +141,11 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 		}
 	}
 
-	if standalone {
-		if !requiredFieldsAreGivenForSeparate(metaData) {
-			log.Fatal("Required fields not given")
-		}
-	} else {
-		if !requiredFieldsAreGiven(metaData) {
-			log.Fatal("Required fields not given")
-		}
-		var domain string
-		if strings.HasPrefix(config.API.Domain, ".") {
-			domain = config.API.Domain[1:]
-		} else {
-			domain = config.API.Domain
-		}
-
-		if !isValidDomain(domain) {
-			log.Fatalf("domain \"%s\" is invalid\n", domain)
-		}
-	}
-
-	getConfigByHeight()
 	return nil
 }
 
-func getConfigByHeight() {
-	networkConfig := build.LoadParam()
-	for _, nc := range networkConfig {
-		ncCopy := nc
-		if ncCopy.Network == build.NetWorkTag {
-			var blockNumber uint64
-			var err error
-			var rpc string
-			if config.RPC.SwanChainRpc != "" {
-				rpc = config.RPC.SwanChainRpc
-			} else {
-				rpc = ncCopy.Config.ChainRpc
-			}
-			for {
-				blockNumber, err = getChainHeight(rpc)
-				if err != nil {
-					fmt.Printf("failed to get chain height, error: %v", err)
-					time.Sleep(2 * time.Second)
-					continue
-				}
-				break
-			}
-
-			if blockNumber < ncCopy.BoundaryHeight {
-				config.CONTRACT.SwanToken = ncCopy.Config.LegacyContract.SwanTokenContract
-				config.CONTRACT.JobCollateral = ncCopy.Config.LegacyContract.OrchestratorCollateralContract
-				config.CONTRACT.JobManager = ncCopy.Config.LegacyContract.JobManagerContract
-				config.CONTRACT.JobManagerCreated = ncCopy.Config.LegacyContract.JobManagerContractCreated
-				config.CONTRACT.CpAccountRegister = ncCopy.Config.LegacyContract.RegisterCpContract
-				config.CONTRACT.ZkCollateral = ncCopy.Config.LegacyContract.ZkCollateralContract
-				config.CONTRACT.Sequencer = ncCopy.Config.LegacyContract.SequencerContract
-				config.CONTRACT.TaskRegister = ncCopy.Config.LegacyContract.RegisterTaskContract
-				config.CONTRACT.EdgeTaskPayment = ncCopy.Config.LegacyContract.EdgeTaskPayment
-				config.CONTRACT.EdgeTaskPaymentCreated = ncCopy.Config.LegacyContract.EdgeTaskPaymentCreated
-			} else {
-				config.CONTRACT.UpgradeName = ncCopy.UpgradeName
-				config.CONTRACT.SwanToken = ncCopy.Config.UpgradeContract.SwanTokenContract
-				config.CONTRACT.JobCollateral = ncCopy.Config.UpgradeContract.OrchestratorCollateralContract
-				config.CONTRACT.JobManager = ncCopy.Config.UpgradeContract.JobManagerContract
-				config.CONTRACT.JobManagerCreated = ncCopy.Config.UpgradeContract.JobManagerContractCreated
-				config.CONTRACT.CpAccountRegister = ncCopy.Config.UpgradeContract.RegisterCpContract
-				config.CONTRACT.ZkCollateral = ncCopy.Config.UpgradeContract.ZkCollateralContract
-				config.CONTRACT.Sequencer = ncCopy.Config.UpgradeContract.SequencerContract
-				config.CONTRACT.TaskRegister = ncCopy.Config.UpgradeContract.RegisterTaskContract
-				config.CONTRACT.EdgeTaskPayment = ncCopy.Config.UpgradeContract.EdgeTaskPayment
-				config.CONTRACT.EdgeTaskPaymentCreated = ncCopy.Config.UpgradeContract.EdgeTaskPaymentCreated
-			}
-			config.UBI.SequencerUrl = ncCopy.Config.SequencerUrl
-			config.UBI.EdgeUrl = ncCopy.Config.EdgeUrl
-			config.CONTRACT.ZkCollateralUbiZero = ncCopy.Config.ZkCollateralUbiZeroContract
-			config.CONTRACT.JobCollateralUbiZero = ncCopy.Config.OrchestratorCollateralUbiZeroContract
-			if config.API.ClearLogDuration == 0 {
-				config.API.ClearLogDuration = 24
-			}
-		}
-	}
-}
-
-func getChainHeight(rpc string) (uint64, error) {
-	client, err := contract.GetEthClient(rpc)
-	if err != nil {
-		return 0, fmt.Errorf("failed to dial rpc, error: %v", err)
-	}
-	defer client.Close()
-	return client.BlockNumber(context.Background())
-}
-
-func isValidDomain(domain string) bool {
-	domainRegex := `^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`
-	re := regexp.MustCompile(domainRegex)
-	return re.MatchString(domain)
-}
-
 func GetConfig() *ComputeNode {
-	getConfigByHeight()
 	return config
-}
-
-func requiredFieldsAreGiven(metaData toml.MetaData) bool {
-	requiredFields := [][]string{
-		{"API"},
-		{"LOG"},
-		{"UBI"},
-		{"RPC"},
-
-		{"API", "MultiAddress"},
-		{"API", "Domain"},
-		{"API", "NodeName"},
-
-		{"LOG", "CrtFile"},
-		{"LOG", "KeyFile"},
-
-		{"UBI", "UbiEnginePk"},
-		{"UBI", "EnableSequencer"},
-		{"UBI", "AutoChainProof"},
-		{"UBI", "SequencerUrl"},
-
-		{"RPC", "SWAN_CHAIN_RPC"},
-	}
-
-	for _, v := range requiredFields {
-		if !metaData.IsDefined(v...) {
-			log.Fatal("Required fields ", v)
-		}
-	}
-
-	return true
-}
-
-func requiredFieldsAreGivenForSeparate(metaData toml.MetaData) bool {
-	requiredFields := [][]string{
-		{"API"},
-		{"UBI"},
-		{"RPC"},
-
-		{"API", "MultiAddress"},
-		{"API", "NodeName"},
-
-		{"UBI", "UbiEnginePk"},
-		{"UBI", "EnableSequencer"},
-		{"UBI", "AutoChainProof"},
-		{"UBI", "SequencerUrl"},
-
-		{"RPC", "SWAN_CHAIN_RPC"},
-	}
-
-	for _, v := range requiredFields {
-		if !metaData.IsDefined(v...) {
-			log.Fatal("Required fields ", v)
-		}
-	}
-
-	return true
 }
 
 func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName string, port int) error {
@@ -364,18 +159,7 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 
 	configFilePath := path.Join(cpRepoPath, "config.toml")
 	if _, err := os.Stat(configFilePath); os.IsNotExist(err) {
-		defaultComputeNode := generateDefaultConfig()
-		networkConfig := build.LoadParam()
-		for _, nc := range networkConfig {
-			ncCopy := nc
-			if ncCopy.Network == build.NetWorkTag {
-				defaultComputeNode.UBI.UbiEnginePk = ncCopy.Config.ZkEnginePk
-				defaultComputeNode.RPC.SwanChainRpc = ncCopy.Config.ChainRpc
-				defaultComputeNode.UBI.SequencerUrl = ncCopy.Config.SequencerUrl
-				defaultComputeNode.UBI.EdgeUrl = ncCopy.Config.EdgeUrl
-			}
-		}
-		configTmpl = defaultComputeNode
+		configTmpl = generateDefaultConfig()
 	} else {
 		if _, err = toml.DecodeFile(configFilePath, &configTmpl); err != nil {
 			return err
@@ -424,48 +208,13 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 func generateDefaultConfig() ComputeNode {
 	return ComputeNode{
 		API: API{
-			Port:            8085,
-			MultiAddress:    "/ip4/<PUBLIC_IP>/tcp/<PORT>",
-			Domain:          "",
-			NodeName:        "<YOUR_CP_Node_Name>",
-			WalletWhiteList: "",
-			WalletBlackList: "",
-			Pricing:         true,
-		},
-		UBI: UBI{
-			UbiEnginePk:     "",
-			EnableSequencer: true,
-			AutoChainProof:  true,
-			VerifySign:      true,
-		},
-		LOG: LOG{
-			CrtFile: "",
-			KeyFile: "",
-		},
-		Registry: Registry{
-			ServerAddress: "",
-			UserName:      "",
-			Password:      "",
-		},
-		RPC: RPC{
-			SwanChainRpc: "",
-		},
-		CONTRACT: CONTRACT{
-			SwanToken:              "",
-			JobCollateral:          "",
-			JobCollateralUbiZero:   "",
-			JobManager:             "",
-			JobManagerCreated:      0,
-			CpAccountRegister:      "",
-			TaskRegister:           "",
-			ZkCollateral:           "",
-			ZkCollateralUbiZero:    "",
-			Sequencer:              "",
-			EdgeTaskPayment:        "",
-			EdgeTaskPaymentCreated: 0,
+			Port:         8085,
+			MultiAddress: "/ip4/<PUBLIC_IP>/tcp/<PORT>",
+			NodeName:     "<YOUR_CP_Node_Name>",
+			Pricing:      true,
 		},
 		Inference: Inference{
-			Enable:             true, // Inference mode is enabled by default
+			Enable:             true,
 			ServiceURL:         build.DefaultInferenceURL,
 			WebSocketURL:       build.DefaultInferenceWSURL,
 			Models:             []string{},
@@ -489,29 +238,13 @@ func Exists(cpPath string) bool {
 	return true
 }
 
-func checkDomain(domain string, expectedIP string) bool {
-	ips, err := net.LookupIP(domain)
-	if err != nil {
-		return false
-	}
-
-	matched := false
-	for _, ip := range ips {
-		if ip.String() == expectedIP {
-			matched = true
-			break
-		}
-	}
-	return matched
-}
-
 // ModelConfig represents a model configuration for models.json
 type ModelConfig struct {
 	Container  string `json:"container,omitempty"`
 	Endpoint   string `json:"endpoint"`
 	GPUMemory  int    `json:"gpu_memory"`
 	Category   string `json:"category"`
-	LocalModel string `json:"local_model,omitempty"` // Actual model name to use in requests (e.g., Ollama model name)
+	LocalModel string `json:"local_model,omitempty"`
 }
 
 // UpdateInferenceConfig updates the Inference section in config.toml
@@ -575,14 +308,11 @@ func LoadModelsJson(cpRepoPath string) (map[string]ModelConfig, error) {
 }
 
 // GetInferenceApiKey returns the configured Inference API key
-// It first checks the environment variable, then the config file
 func GetInferenceApiKey(cpRepoPath string) string {
-	// Check environment variable first
 	if key := os.Getenv("INFERENCE_API_KEY"); key != "" {
 		return key
 	}
 
-	// Try to read from config
 	configFilePath := path.Join(cpRepoPath, "config.toml")
 	var configTmpl ComputeNode
 	if _, err := toml.DecodeFile(configFilePath, &configTmpl); err == nil {

@@ -37,15 +37,7 @@ func main() {
 			setupCmd,
 			infoCmd,
 			stateCmd,
-			accountCmd,
 			taskCmd,
-			walletCmd,
-			collateralCmd,
-			sequencerCmd,
-			ubiTaskCmd,
-			contractCmd,
-			priceCmd,
-			ubiZeroCmd,
 			researchCmd,
 			dashboardCmd,
 			inferenceCmd,
@@ -72,7 +64,6 @@ func main() {
 			if c.Args().Present() {
 				firstArg := c.Args().First()
 				if strings.EqualFold(firstArg, initCmd.Name) ||
-					strings.EqualFold(firstArg, walletCmd.Name) ||
 					strings.EqualFold(firstArg, setupCmd.Name) {
 					if _, err := os.Stat(cpRepoPath); os.IsNotExist(err) {
 						err := os.MkdirAll(cpRepoPath, 0755)

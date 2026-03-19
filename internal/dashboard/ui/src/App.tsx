@@ -20,26 +20,31 @@ function App() {
 
   const {
     data: metrics,
+    error: metricsError,
     loading: metricsLoading,
     refetch: refetchMetrics,
   } = usePolling(useCallback(() => api.getMetrics(), []), POLL_INTERVAL);
 
   const {
     data: status,
+    error: statusError,
     loading: statusLoading,
   } = usePolling(useCallback(() => api.getStatus(), []), POLL_INTERVAL);
 
   const {
     data: models,
+    error: modelsError,
     loading: modelsLoading,
     refetch: refetchModels,
   } = usePolling(useCallback(() => api.getModels(), []), POLL_INTERVAL);
 
   const {
     data: requestMgmt,
+    error: requestMgmtError,
     loading: requestMgmtLoading,
     refetch: refetchRequestMgmt,
   } = usePolling(useCallback(() => api.getRequestManagement(), []), POLL_INTERVAL);
+
 
   const handleRefreshAll = () => {
     refetchMetrics();
@@ -61,7 +66,7 @@ function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            <ConnectionStatus status={status} loading={statusLoading} />
+            <ConnectionStatus status={status} loading={statusLoading} error={statusError} />
             <button
               onClick={handleRefreshAll}
               className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
@@ -76,7 +81,7 @@ function App() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
         {/* Top Stats */}
-        <MetricsPanel metrics={metrics} loading={metricsLoading} />
+        <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} />
 
         {/* Charts Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -87,12 +92,13 @@ function App() {
         {/* Middle Row - Models, GPU, Request Management */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1">
-            <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} />
+            <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
           </div>
           <div className="lg:col-span-1">
             <ModelsPanel
               models={models?.models ?? []}
               loading={modelsLoading}
+              error={modelsError}
               onRefresh={refetchModels}
               onModelClick={setSelectedModelId}
             />
@@ -101,6 +107,7 @@ function App() {
             <RequestManagementPanel
               data={requestMgmt}
               loading={requestMgmtLoading}
+              error={requestMgmtError}
               onRefresh={refetchRequestMgmt}
             />
           </div>

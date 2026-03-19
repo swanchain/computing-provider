@@ -196,17 +196,15 @@ func runSetupWizard(c *cli.Context) error {
 	// Done!
 	fmt.Println()
 	setup.PrintHeader("Setup Complete!")
-	fmt.Println("Your computing provider is now configured.")
+	fmt.Println("Your provider is configured and ready to serve AI inference requests.")
 	fmt.Println()
-	fmt.Println("Next steps:")
-	setup.PrintBullet("Start the provider: computing-provider run")
-	setup.PrintBullet("View dashboard: computing-provider dashboard")
-	setup.PrintBullet("Check status: computing-provider inference status")
+	fmt.Println("What to do next:")
+	setup.PrintBullet("Start your provider:  computing-provider run")
+	setup.PrintBullet("Monitor in browser:   computing-provider dashboard")
+	setup.PrintBullet("Check connection:     computing-provider inference status")
 	fmt.Println()
-
-	fmt.Println("To start your provider, run:")
-	fmt.Println()
-	fmt.Println("  computing-provider run")
+	fmt.Println("Once running, your provider will connect to Swan Inference and start")
+	fmt.Println("receiving AI requests for the models you configured.")
 	fmt.Println()
 
 	return nil

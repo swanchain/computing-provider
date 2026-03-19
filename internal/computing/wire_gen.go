@@ -16,42 +16,10 @@ import (
 
 // Injectors from wire.go:
 
-func NewTaskService() TaskService {
-	gormDB := db.NewDbService()
-	taskService := TaskService{
-		DB: gormDB,
-	}
-	return taskService
-}
-
-func NewJobService() JobService {
-	gormDB := db.NewDbService()
-	jobService := JobService{
-		DB: gormDB,
-	}
-	return jobService
-}
-
 func NewCpInfoService() CpInfoService {
 	gormDB := db.NewDbService()
 	cpInfoService := CpInfoService{
 		DB: gormDB,
 	}
 	return cpInfoService
-}
-
-func NewEcpJobService() EcpJobService {
-	gormDB := db.NewDbService()
-	ecpJobService := EcpJobService{
-		DB: gormDB,
-	}
-	return ecpJobService
-}
-
-func NewCpBalanceService() CpBalanceService {
-	gormDB := db.NewDbService()
-	cpBalanceService := CpBalanceService{
-		DB: gormDB,
-	}
-	return cpBalanceService
 }

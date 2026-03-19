@@ -5,6 +5,7 @@ import type { InferenceMetrics } from '../types';
 interface MetricsPanelProps {
   metrics: InferenceMetrics | null;
   loading: boolean;
+  error?: Error | null;
 }
 
 function formatNumber(n: number): string {
@@ -13,8 +14,8 @@ function formatNumber(n: number): string {
   return n.toFixed(0);
 }
 
-export function MetricsPanel({ metrics, loading }: MetricsPanelProps) {
-  if (loading || !metrics) {
+export function MetricsPanel({ metrics, loading, error }: MetricsPanelProps) {
+  if (loading) {
     return (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[...Array(4)].map((_, i) => (
@@ -23,6 +24,17 @@ export function MetricsPanel({ metrics, loading }: MetricsPanelProps) {
             <div className="h-8 bg-slate-700 rounded w-16"></div>
           </div>
         ))}
+      </div>
+    );
+  }
+
+  if (!metrics) {
+    return (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatusCard title="Total Requests" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Activity size={20} />} color="blue" />
+        <StatusCard title="Success Rate" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Zap size={20} />} color="blue" />
+        <StatusCard title="Avg Latency" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Clock size={20} />} color="blue" />
+        <StatusCard title="Connection" value="Unknown" subtitle={error ? "API unreachable" : "No data"} icon={<Wifi size={20} />} color="red" />
       </div>
     );
   }

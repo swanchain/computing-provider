@@ -6,6 +6,7 @@ import type { RequestManagement } from '../types';
 interface RequestManagementPanelProps {
   data: RequestManagement | null;
   loading: boolean;
+  error?: Error | null;
   onRefresh: () => void;
 }
 
@@ -48,7 +49,7 @@ function ProgressRing({ value, max, size = 60, color }: { value: number; max: nu
   );
 }
 
-export function RequestManagementPanel({ data, loading, onRefresh }: RequestManagementPanelProps) {
+export function RequestManagementPanel({ data, loading, error, onRefresh }: RequestManagementPanelProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [rateLimit, setRateLimit] = useState('');
   const [concurrencyLimit, setConcurrencyLimit] = useState('');
@@ -84,13 +85,22 @@ export function RequestManagementPanel({ data, loading, onRefresh }: RequestMana
     }
   };
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
         <h3 className="text-lg font-semibold text-slate-200 mb-4">Request Management</h3>
         <div className="animate-pulse space-y-4">
           <div className="h-24 bg-slate-700 rounded"></div>
         </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+        <h3 className="text-lg font-semibold text-slate-200 mb-4">Request Management</h3>
+        <p className="text-slate-400">{error ? 'API unreachable' : 'No data available'}</p>
       </div>
     );
   }
