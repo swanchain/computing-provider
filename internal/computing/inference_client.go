@@ -959,6 +959,15 @@ func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
+		// Close the connection so readPump also exits and triggers reconnect.
+		// Without this, writePump dying on a write error leaves readPump blocked
+		// on ReadMessage, and nobody drains the send channel.
+		c.mu.RLock()
+		conn := c.conn
+		c.mu.RUnlock()
+		if conn != nil {
+			conn.Close()
+		}
 	}()
 
 	for {
@@ -1378,10 +1387,18 @@ func (c *InferenceClient) sendStreamChunk(requestID string, chunk []byte, done b
 		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
+	// Grab the current pumpDone so stale streaming goroutines from a previous
+	// connection abort immediately on reconnect instead of blocking for 5s each.
+	c.mu.RLock()
+	pumpDone := c.pumpDone
+	c.mu.RUnlock()
+
 	select {
 	case c.send <- msgBytes:
 		c.resetSendFailures()
 		return nil
+	case <-pumpDone:
+		return fmt.Errorf("connection closed, stream aborted")
 	case <-time.After(5 * time.Second):
 		c.trackSendFailure()
 		return fmt.Errorf("send buffer full: timed out after 5s")
@@ -1411,9 +1428,16 @@ func (c *InferenceClient) sendStreamEnd(requestID string, latencyMs int64, token
 	}
 
 	msgBytes, _ := json.Marshal(msg)
+
+	c.mu.RLock()
+	done := c.pumpDone
+	c.mu.RUnlock()
+
 	select {
 	case c.send <- msgBytes:
 		c.resetSendFailures()
+	case <-done:
+		logs.GetLogger().Warnf("Connection closed while sending stream_end for %s", requestID)
 	case <-time.After(10 * time.Second):
 		logs.GetLogger().Errorf("Failed to send stream_end for %s: timed out after 10s", requestID)
 		c.trackSendFailure()
@@ -1794,7 +1818,13 @@ func (c *InferenceClient) sendError(requestID string, code int, message string) 
 	}
 
 	msgBytes, _ := json.Marshal(msg)
-	c.send <- msgBytes
+	select {
+	case c.send <- msgBytes:
+		// sent
+	case <-time.After(5 * time.Second):
+		logs.GetLogger().Warnf("Send buffer full, dropping error response for %s", requestID)
+	case <-c.stopCh:
+	}
 }
 
 func (c *InferenceClient) sendInferenceResponse(response *InferenceResponse) {
@@ -1811,7 +1841,13 @@ func (c *InferenceClient) sendInferenceResponse(response *InferenceResponse) {
 	}
 
 	msgBytes, _ := json.Marshal(msg)
-	c.send <- msgBytes
+	select {
+	case c.send <- msgBytes:
+		// sent
+	case <-time.After(10 * time.Second):
+		logs.GetLogger().Warnf("Send buffer full, dropping inference response for %s", response.RequestID)
+	case <-c.stopCh:
+	}
 }
 
 // IsConnected returns whether the client is connected, registered, and healthy.
