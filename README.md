@@ -339,6 +339,28 @@ computing-provider collateral add --ecp --from <your-wallet> <amount>
 
 > **Note:** You can run the provider without a wallet - it will still serve inference requests, but you won't receive on-chain rewards.
 
+### How UBI Rewards Are Calculated
+
+Your daily SWAN reward is based on a **weight** that combines four factors:
+
+```
+weight = usage_factor × uptime_factor × success_factor × benchmark_factor
+```
+
+| Factor | What it measures | How to maximize |
+|--------|-----------------|-----------------|
+| **Usage factor** | Your share of real token throughput across the network (sqrt-compressed) | Serve more inference requests — idle providers with zero tokens receive zero UBI |
+| **Uptime factor** | How consistently your provider stays online | Keep your provider running 24/7 with stable connectivity |
+| **Success factor** | Ratio of successful responses to total requests | Ensure your model server is healthy and responding correctly |
+| **Benchmark factor** | Performance on periodic benchmarks (math, code, reasoning, latency) | Use recommended model servers (SGLang) and follow [performance tuning best practices](docs/sglang-best-practices.md) |
+
+**Key points:**
+- **Traffic matters most.** Usage factor is based on actual tokens served — registering a powerful GPU without serving traffic won't earn rewards.
+- **Output tokens count 3x** compared to input tokens, so models that generate longer responses contribute more to your usage share.
+- **Rewards scale sub-linearly.** The usage factor uses square-root compression, so doubling your traffic increases your factor by ~1.4x (not 2x). This keeps rewards accessible to smaller providers.
+
+> **Tip:** Run `computing-provider inference status` to see your current earnings breakdown and check how your provider is performing relative to the network.
+
 ---
 
 ## CLI Reference
@@ -506,7 +528,7 @@ If you're just testing, ask the Swan team on [Discord](https://discord.gg/3uQUWz
 ### Earnings & Collateral
 
 **Q: How do I earn rewards?**
-You earn per successful inference request. Earnings are calculated based on token usage (input + output tokens) multiplied by the model's per-token price. You can check your balance and earnings breakdown anytime:
+You earn in two ways: **per-request earnings** based on token usage (input + output tokens) multiplied by the model's per-token price, and **daily UBI rewards** (SWAN tokens) distributed based on your provider's weight — a combination of token throughput, uptime, success rate, and benchmark scores. Serving more real inference traffic increases both. See [How UBI Rewards Are Calculated](#how-ubi-rewards-are-calculated) for the full UBI breakdown.
 ```bash
 computing-provider inference status   # Shows current stage and earnings summary
 ```
