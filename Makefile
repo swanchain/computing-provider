@@ -47,6 +47,17 @@ darwin-arm64-testnet:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOCC) build -ldflags="$(ldflags) -X $(PKG).NetWorkTag=testnet $(dev_ldflags)" -o computing-provider-darwin-arm64 ./cmd/computing-provider
 .PHONY: darwin-arm64-testnet
 
+# Linux AMD64 builds
+linux-amd64:
+	rm -rf computing-provider-linux-amd64
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOCC) build -ldflags="$(ldflags) -X $(PKG).NetWorkTag=mainnet" -o computing-provider-linux-amd64 ./cmd/computing-provider
+.PHONY: linux-amd64
+
+linux-amd64-testnet:
+	rm -rf computing-provider-linux-amd64
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOCC) build -ldflags="$(ldflags) -X $(PKG).NetWorkTag=testnet $(dev_ldflags)" -o computing-provider-linux-amd64 ./cmd/computing-provider
+.PHONY: linux-amd64-testnet
+
 # Linux ARM64 builds
 linux-arm64:
 	rm -rf computing-provider-linux-arm64
