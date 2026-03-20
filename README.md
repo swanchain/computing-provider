@@ -21,15 +21,12 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 # 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make mainnet && sudo make install
+make clean && make testnet && sudo make install
 
-# 2. Browse available models from the Swan Model Repository
-computing-provider models catalog
-
-# 3. Download verified model weights (e.g., Qwen 2.5 7B)
+# 2. Download model weights from HuggingFace (e.g., Qwen 2.5 7B)
 computing-provider models download Qwen/Qwen2.5-7B-Instruct
 
-# 4. Start SGLang with the downloaded model
+# 3. Start SGLang with the downloaded model
 docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
   -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
   lmsysorg/sglang:latest \
@@ -37,17 +34,17 @@ docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
     --host 0.0.0.0 --port 30000 \
     --served-model-name Qwen/Qwen2.5-7B-Instruct
 
-# 5. Run the setup wizard (handles auth, config, and model discovery)
+# 4. Run the setup wizard (handles auth, config, and model discovery)
 computing-provider setup
 
-# 6. Run the provider
+# 5. Run the provider
 computing-provider run
 
 # 7. Verify your provider is connected
 computing-provider inference status
 ```
 
-The `models download` command downloads pre-verified weights from the Swan Model Repository with SHA256 hash checks. The setup wizard will:
+The `models download` command downloads model weights directly from HuggingFace. Large weight files (LFS) are verified with SHA256 hashes. The setup wizard will:
 - Check prerequisites (Docker, GPU)
 - Create/login to your Swan Inference account
 - Auto-discover your running model servers
@@ -66,7 +63,7 @@ ollama pull qwen2.5:7b
 brew install go
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make mainnet && sudo make install
+make clean && make testnet && sudo make install
 
 # 3. Run the setup wizard
 computing-provider setup
@@ -215,8 +212,9 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "wss://inference-ws.swanchain.io"
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
+WebSocketURL = "ws://inference-ws-dev.swanchain.io"
+ServiceURL = "https://api-dev.swanchain.io"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference-dev.swanchain.io
 Models = ["qwen-2.5-7b"]
 ```
 

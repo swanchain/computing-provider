@@ -126,58 +126,50 @@ Examples:
 
 var modelsDownloadCmd = &cli.Command{
 	Name:      "download",
-	Usage:     "Download verified model weights from Swan Model Repository",
+	Usage:     "Download model weights from HuggingFace",
 	ArgsUsage: "<model-id>",
-	Description: `Downloads model weights from the Swan Model Repository (NebulaBlock S3 storage).
-Each file is verified against its SHA256 hash after download. Existing files
-with matching hashes are skipped automatically.
+	Description: `Downloads model weights directly from HuggingFace.
+Files with LFS metadata are verified against their SHA256 hash after download.
+Existing files with matching hashes are skipped automatically.
 
 Examples:
-  computing-provider models download meta-llama/Llama-3.1-8B-Instruct
+  computing-provider models download Qwen/Qwen2.5-7B-Instruct
   computing-provider models download --dest /data/models meta-llama/Llama-3.3-70B-Instruct`,
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "dest",
 			Usage: "Destination directory (default: ~/.swan/models/<model-id>)",
 		},
-		&cli.StringFlag{
-			Name:  "service-url",
-			Usage: "Swan Inference API URL (default: from config or " + build.DefaultInferenceURL + ")",
-		},
 	},
 	Action: func(cctx *cli.Context) error {
 		modelID := cctx.Args().First()
 		if modelID == "" {
-			return fmt.Errorf("model ID is required, e.g. meta-llama/Llama-3.1-8B-Instruct")
+			return fmt.Errorf("model ID is required, e.g. Qwen/Qwen2.5-7B-Instruct")
 		}
 
-		serviceURL := cctx.String("service-url")
-		if serviceURL == "" {
-			serviceURL = getModelsServiceURL(cctx)
-		}
-
-		fmt.Printf("Fetching file manifest for %s...\n", modelID)
-		manifest, err := models.FetchModelFiles(serviceURL, modelID)
+		fmt.Printf("Fetching file list from HuggingFace for %s...\n", modelID)
+		files, err := models.FetchHuggingFaceFiles(modelID)
 		if err != nil {
 			return fmt.Errorf("failed to fetch model files: %v", err)
 		}
 
-		if manifest.FileCount == 0 {
-			return fmt.Errorf("no files found for model %s. Has it been ingested?", modelID)
+		if len(files) == 0 {
+			return fmt.Errorf("no files found for model %s on HuggingFace", modelID)
 		}
 
-		// Use canonical model ID from manifest for directory name (ensures correct casing)
 		destDir := cctx.String("dest")
 		if destDir == "" {
-			destDir = filepath.Join(defaultModelsDir(), manifest.ModelID)
+			destDir = filepath.Join(defaultModelsDir(), modelID)
 		}
 
-		fmt.Printf("Model: %s\n", manifest.ModelID)
-		fmt.Printf("Files: %d, Total size: %s\n", manifest.FileCount, humanSizeCP(manifest.TotalSizeBytes))
+		totalSize := models.HuggingFaceModelSize(files)
+		fmt.Printf("Model: %s\n", modelID)
+		fmt.Printf("Files: %d, Total size: %s\n", len(files), humanSizeCP(totalSize))
+		fmt.Printf("Source: HuggingFace (https://huggingface.co/%s)\n", modelID)
 		fmt.Printf("Destination: %s\n\n", destDir)
 
 		ctx := context.Background()
-		if err := models.DownloadModelAndSaveManifest(ctx, modelID, manifest.Files, destDir); err != nil {
+		if err := models.DownloadModelAndSaveManifest(ctx, modelID, files, destDir); err != nil {
 			return err
 		}
 
