@@ -88,9 +88,6 @@ type Inference struct {
 	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
 	ApiKey             string   `toml:"ApiKey"`             // Provider API key for authentication (sk-prov-*)
 	Models             []string `toml:"Models"`             // Models this provider serves
-	ChainRPC           string   `toml:"ChainRPC"`           // Base Sepolia RPC for Swan Inference
-	CollateralContract string   `toml:"CollateralContract"` // Collateral contract address
-	TaskContract       string   `toml:"TaskContract"`       // Task contract address
 }
 
 type API struct {
@@ -218,9 +215,6 @@ func generateDefaultConfig() ComputeNode {
 			ServiceURL:         build.DefaultInferenceURL,
 			WebSocketURL:       build.DefaultInferenceWSURL,
 			Models:             []string{},
-			ChainRPC:           "",
-			CollateralContract: "",
-			TaskContract:       "",
 		},
 	}
 }
