@@ -11,12 +11,11 @@ var CurrentCommit string
 var NetWorkTag string
 
 // Inference URL defaults — overridable via ldflags at build time.
-// Production defaults; dev builds override these in the Makefile.
 var DefaultInferenceURL = "https://inference-dev.swanchain.io"
 var DefaultInferenceWSURL = "wss://inference-ws-dev.swanchain.io"
 var DefaultInferenceAPIURL = "https://inference-dev.swanchain.io/api/v1"
 
-const BuildVersion = "0.1.0"
+const BuildVersion = "0.1.1"
 
 const UBITaskImageIntelCpu = "swanhub/ubi-worker-cpu-intel:latest"
 const UBITaskImageIntelGpu = "swanhub/ubi-worker-gpu-intel:latest"
