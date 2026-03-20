@@ -259,6 +259,67 @@ curl http://localhost:8085/api/v1/computing/inference/health
 
 ---
 
+## Switching Models
+
+You can add, remove, or swap models without restarting the provider.
+
+### 1. Start the new model server
+
+```bash
+# Example: switch from Qwen 2.5 7B to Llama 3.2 3B
+
+# Stop the old server (optional — you can run multiple models)
+docker stop sglang && docker rm sglang
+
+# Download the new model weights
+computing-provider models download meta-llama/Llama-3.2-3B-Instruct
+
+# Start the new model server
+docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
+  -v ~/.swan/models/meta-llama/Llama-3.2-3B-Instruct:/models \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server --model-path /models \
+    --host 0.0.0.0 --port 30000 \
+    --served-model-name meta-llama/Llama-3.2-3B-Instruct
+
+# Verify the server is healthy
+curl http://localhost:30000/v1/models
+```
+
+### 2. Update `models.json`
+
+Edit `~/.swan/computing/models.json` to point to the new model:
+
+```json
+{
+  "meta-llama/Llama-3.2-3B-Instruct": {
+    "endpoint": "http://localhost:30000",
+    "gpu_memory": 8000,
+    "category": "text-generation"
+  }
+}
+```
+
+The provider watches `models.json` and **hot-reloads automatically** — no restart needed. You can also trigger a manual reload:
+
+```bash
+curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
+```
+
+### 3. Verify
+
+```bash
+# Check the provider picked up the new model
+curl http://localhost:8085/api/v1/computing/inference/models
+
+# Check status on Swan Inference
+computing-provider inference status
+```
+
+> **Tip:** To run multiple models simultaneously, start each on a different port and add all of them to `models.json`. Use `--gpus '"device=0"'` and `--gpus '"device=1"'` to pin each model to a specific GPU.
+
+---
+
 ## Earning Rewards (Optional)
 
 To receive SWAN token rewards for completed inference requests, set your beneficiary wallet:
@@ -365,8 +426,17 @@ docker logs sglang
 Install Go 1.22+. On Linux: download from [go.dev/dl](https://go.dev/dl/) and add to PATH. On macOS: `brew install go`. Make sure to restart your shell or `source ~/.bashrc` after installing.
 
 **Q: SGLang container fails with `cuda>=12.x unsatisfied condition`**
-Your NVIDIA driver is too old for the latest SGLang image. Either update your driver (`sudo apt install nvidia-driver-550`) or use an older SGLang tag:
+Your NVIDIA driver is too old for the latest SGLang image. The error looks like:
+```
+nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9, please update your driver to a newer version, or use an earlier cuda container
+```
+First, check what CUDA version your driver supports:
 ```bash
+nvidia-smi   # Max CUDA version is shown in the top-right corner
+```
+Then either update your driver (`sudo apt install nvidia-driver-550`) or use an older SGLang tag that matches your CUDA version:
+```bash
+# For CUDA 12.4 compatible drivers
 docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
   -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
   lmsysorg/sglang:v0.4.7.post1-cu124 \
@@ -393,7 +463,19 @@ The most common cause is a model name mismatch. The `--served-model-name` in you
 
 **Q: SGLang container starts but immediately exits**
 Check logs with `docker logs sglang`. Common causes:
-- **Out of VRAM**: The model is too large for your GPU. Try a smaller model or a quantized version.
+- **Out of VRAM**: The model is too large for a single GPU. Use tensor parallelism to split it across multiple GPUs with `--tp 2` (or `--tp 4`). For example, a 12B model in bf16 needs ~23 GB — too large for a single 24GB GPU once KV cache is included, but fits easily across 2 GPUs.
+- **Unbalanced GPU memory**: If another model server (e.g., vLLM) is already using one of your GPUs, SGLang will fail with `memory capacity is unbalanced`. Pin SGLang to specific free GPUs instead of using `--gpus all`:
+  ```bash
+  # Check which GPUs are free
+  nvidia-smi
+  # Run on specific GPUs (e.g., GPUs 0 and 2)
+  docker run -d --gpus '"device=0,2"' -p 30000:30000 --ipc=host \
+    -v ~/.swan/models/YourModel:/models \
+    lmsysorg/sglang:v0.4.7.post1-cu124 \
+    python3 -m sglang.launch_server --model-path /models \
+      --host 0.0.0.0 --port 30000 --tp 2 \
+      --served-model-name YourModel
+  ```
 - **Shared memory**: Add `--shm-size 4g` to your `docker run` command.
 - **Port conflict**: Port 30000 is already in use. Check with `docker ps` or `lsof -i :30000`.
 
