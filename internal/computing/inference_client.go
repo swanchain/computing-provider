@@ -37,8 +37,10 @@ const (
 	MsgTypeError             MessageType = "error"
 	MsgTypeStreamChunk       MessageType = "stream_chunk"        // Streaming chunk to Swan Inference
 	MsgTypeStreamEnd         MessageType = "stream_end"          // End of stream marker
-	MsgTypeWarmup            MessageType = "warmup"              // Model warmup request
-	MsgTypeModelHealthUpdate MessageType = "model_health_update" // Model health status update
+	MsgTypeWarmup             MessageType = "warmup"              // Model warmup request
+	MsgTypeModelHealthUpdate  MessageType = "model_health_update" // Model health status update
+	MsgTypeBenchmark          MessageType = "benchmark"           // Benchmark test request from server
+	MsgTypeBenchmarkResponse  MessageType = "benchmark_response"  // Benchmark test results to server
 )
 
 // Message is the base WebSocket message structure
@@ -173,6 +175,42 @@ type WarmupResponse struct {
 	LoadTimeMs int64  `json:"load_time_ms,omitempty"`
 	MemoryMB   int64  `json:"memory_mb,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// BenchmarkPayload is sent from Swan Inference to run benchmark tests
+type BenchmarkPayload struct {
+	BenchmarkID string            `json:"benchmark_id"`
+	TestType    string            `json:"test_type"` // "math", "latency", "code", "reasoning"
+	ModelID     string            `json:"model_id"`
+	Prompts     []BenchmarkPrompt `json:"prompts"`
+	TimeoutMs   int64             `json:"timeout_ms"`
+}
+
+// BenchmarkPrompt is a single prompt in a benchmark test
+type BenchmarkPrompt struct {
+	ID             string `json:"id"`
+	Prompt         string `json:"prompt"`
+	ExpectedAnswer string `json:"expected_answer,omitempty"`
+}
+
+// BenchmarkResponsePayload is returned after processing a benchmark
+type BenchmarkResponsePayload struct {
+	RequestID    string            `json:"request_id"`
+	BenchmarkID  string            `json:"benchmark_id"`
+	Results      []BenchmarkResult `json:"results"`
+	TotalLatency int64             `json:"total_latency_ms"`
+	Error        string            `json:"error,omitempty"`
+}
+
+// BenchmarkResult is the result of a single benchmark prompt
+type BenchmarkResult struct {
+	PromptID  string `json:"prompt_id"`
+	Answer    string `json:"answer"`
+	Correct   bool   `json:"correct"`
+	LatencyMs int64  `json:"latency_ms"`
+	TokensIn  int64  `json:"tokens_in,omitempty"`
+	TokensOut int64  `json:"tokens_out,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ModelHealthUpdatePayload is sent to Swan Inference when model health changes
@@ -1253,6 +1291,15 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		}
 		go c.handleWarmup(msg.RequestID, payload)
 
+	case MsgTypeBenchmark:
+		var payload BenchmarkPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse benchmark payload: %v", err)
+			c.sendError(msg.RequestID, 400, "invalid benchmark payload")
+			return
+		}
+		go c.handleBenchmark(msg.RequestID, payload)
+
 	default:
 		logs.GetLogger().Warnf("Unknown message type: %s", msg.Type)
 	}
@@ -1682,6 +1729,173 @@ func (c *InferenceClient) sendVerifyResponse(requestID, challengeID string, succ
 	default:
 		logs.GetLogger().Warn("Send buffer full, dropping verify response")
 		c.trackSendFailure()
+	}
+}
+
+// handleBenchmark processes a benchmark request by running each prompt through the local model server
+func (c *InferenceClient) handleBenchmark(requestID string, payload BenchmarkPayload) {
+	logs.GetLogger().Infof("Processing benchmark %s for model %s (type: %s, prompts: %d)",
+		payload.BenchmarkID, payload.ModelID, payload.TestType, len(payload.Prompts))
+
+	if c.inferenceHandler == nil {
+		logs.GetLogger().Errorf("No inference handler configured for benchmark %s", payload.BenchmarkID)
+		c.sendBenchmarkResponse(requestID, payload.BenchmarkID, nil, 0, "no inference handler configured")
+		return
+	}
+
+	// Set per-prompt timeout from overall timeout divided by prompt count, with a minimum of 30s
+	promptTimeout := time.Duration(payload.TimeoutMs) * time.Millisecond
+	if len(payload.Prompts) > 0 {
+		perPrompt := promptTimeout / time.Duration(len(payload.Prompts))
+		if perPrompt < 30*time.Second {
+			perPrompt = 30 * time.Second
+		}
+		promptTimeout = perPrompt
+	}
+
+	var results []BenchmarkResult
+	var totalLatency int64
+
+	for _, prompt := range payload.Prompts {
+		result := c.runBenchmarkPrompt(payload.ModelID, prompt, promptTimeout)
+		totalLatency += result.LatencyMs
+		results = append(results, result)
+	}
+
+	c.sendBenchmarkResponse(requestID, payload.BenchmarkID, results, totalLatency, "")
+	logs.GetLogger().Infof("Benchmark %s completed: %d prompts, total latency %dms", payload.BenchmarkID, len(results), totalLatency)
+}
+
+// runBenchmarkPrompt executes a single benchmark prompt against the local model server
+func (c *InferenceClient) runBenchmarkPrompt(modelID string, prompt BenchmarkPrompt, timeout time.Duration) BenchmarkResult {
+	startTime := time.Now()
+
+	// Build OpenAI-compatible chat completion request
+	reqBody := map[string]interface{}{
+		"model": modelID,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt.Prompt},
+		},
+		"temperature": 0,
+		"max_tokens":  500,
+		"stream":      false,
+	}
+
+	requestJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return BenchmarkResult{
+			PromptID: prompt.ID,
+			Error:    "failed to build request: " + err.Error(),
+		}
+	}
+
+	inferPayload := InferencePayload{
+		ModelID: modelID,
+		Request: json.RawMessage(requestJSON),
+		Stream:  false,
+	}
+
+	// Execute with timeout
+	type inferResult struct {
+		resp *InferenceResponse
+		err  error
+	}
+	ch := make(chan inferResult, 1)
+	go func() {
+		resp, err := c.inferenceHandler(inferPayload)
+		ch <- inferResult{resp, err}
+	}()
+
+	var resp *InferenceResponse
+	select {
+	case r := <-ch:
+		resp = r.resp
+		err = r.err
+	case <-time.After(timeout):
+		err = fmt.Errorf("prompt timed out after %v", timeout)
+	}
+
+	latency := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		return BenchmarkResult{
+			PromptID:  prompt.ID,
+			LatencyMs: latency,
+			Error:     err.Error(),
+		}
+	}
+
+	// Parse the OpenAI response to extract the answer and token counts
+	var openAIResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+
+	answer := ""
+	var tokensIn, tokensOut int64
+
+	if resp.Response != nil {
+		if parseErr := json.Unmarshal(resp.Response, &openAIResp); parseErr == nil {
+			if len(openAIResp.Choices) > 0 {
+				answer = openAIResp.Choices[0].Message.Content
+			}
+			tokensIn = openAIResp.Usage.PromptTokens
+			tokensOut = openAIResp.Usage.CompletionTokens
+		}
+	}
+
+	// Determine correctness by checking if the expected answer appears in the response
+	correct := true
+	if prompt.ExpectedAnswer != "" {
+		correct = strings.Contains(
+			strings.ToLower(answer),
+			strings.ToLower(prompt.ExpectedAnswer),
+		)
+	}
+
+	return BenchmarkResult{
+		PromptID:  prompt.ID,
+		Answer:    answer,
+		Correct:   correct,
+		LatencyMs: latency,
+		TokensIn:  tokensIn,
+		TokensOut: tokensOut,
+	}
+}
+
+// sendBenchmarkResponse sends benchmark results back to Swan Inference
+func (c *InferenceClient) sendBenchmarkResponse(requestID, benchmarkID string, results []BenchmarkResult, totalLatency int64, errMsg string) {
+	payload := BenchmarkResponsePayload{
+		RequestID:    requestID,
+		BenchmarkID:  benchmarkID,
+		Results:      results,
+		TotalLatency: totalLatency,
+		Error:        errMsg,
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	msg := Message{
+		Type:      MsgTypeBenchmarkResponse,
+		RequestID: requestID,
+		Payload:   payloadBytes,
+	}
+
+	msgBytes, _ := json.Marshal(msg)
+	select {
+	case c.send <- msgBytes:
+		c.resetSendFailures()
+	case <-time.After(10 * time.Second):
+		logs.GetLogger().Errorf("Failed to send benchmark_response for %s: timed out after 10s", requestID)
+		c.trackSendFailure()
+	case <-c.stopCh:
+		logs.GetLogger().Warnf("Client stopped while sending benchmark_response for %s", requestID)
 	}
 }
 
