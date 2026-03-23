@@ -825,7 +825,6 @@ type modelDemandAPIEntry struct {
 	Category         string  `json:"category"`
 	InputPrice       float64 `json:"input_price"`
 	OutputPrice      float64 `json:"output_price"`
-	Tier             string  `json:"tier"`
 	OnlineProviders  int     `json:"online_providers"`
 	Requests24h      int     `json:"requests_24h"`
 	Tokens24h        int64   `json:"tokens_24h"`

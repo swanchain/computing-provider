@@ -77,6 +77,8 @@ computing-provider inference status
 
 The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
 
+> **Want to maximize earnings?** The quickstart uses Qwen 2.5 7B as an example, but UBI rewards are based on real token traffic. Serving other in-demand models means less competition and more requests routed to you. See the [Switching Models](#switching-models) section to get started.
+
 ---
 
 ## What Happens After Setup
@@ -327,7 +329,7 @@ To receive SWAN token rewards for completed inference requests, set your benefic
 computing-provider inference set-beneficiary 0xYourWalletAddress
 ```
 
-For on-chain collateral (optional, increases reward tier):
+For on-chain collateral (optional, enables staking rewards):
 
 ```bash
 # 1. Create a wallet
@@ -519,7 +521,7 @@ computing-provider models download meta-llama/Llama-3.3-70B-Instruct
 - You can also set it via environment variable: `export INFERENCE_API_KEY=sk-prov-xxx`
 
 **Q: Provider is stuck in `pending` status**
-Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum tier, and registration benchmark passes. Check your status:
+Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum hardware requirements, and registration benchmark passes. Check your status:
 ```bash
 computing-provider inference status
 ```
