@@ -72,6 +72,9 @@ func runDaemon() error {
 	}
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
 
+	// Check if private_key was copied from another machine
+	computing.CheckMachineIdentity(cpRepoPath)
+
 	// Start Inference mode (Swan Inference marketplace) if enabled
 	nodeID := computing.GetNodeId(cpRepoPath)
 	inferenceService := computing.NewInferenceService(nodeID, cpRepoPath)
