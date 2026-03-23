@@ -281,14 +281,16 @@ Available models in Swan Model Repository (6):
 
 ### Hardware Requirements
 
-| Model | Size | Min VRAM | Recommended GPU | Notes |
-|-------|------|----------|-----------------|-------|
-| Qwen/Qwen2.5-0.5B | 942 MB | 2 GB | Any GPU | Tiny model, good for testing |
-| meganovaai/MN-Violet-Lotus-12B-AWQ | 7.8 GB | 12 GB | RTX 3090, RTX 4090 | AWQ quantized, fits single 24GB GPU |
-| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym | 9.3 GB | 16 GB | RTX 3090, RTX 4090 | AWQ quantized, fits single 24GB GPU |
-| Sinensis/L3.3-MS-Nevoria-70b-AWQ | 13.7 GB | 20 GB | RTX 3090, RTX 4090 | AWQ quantized 70B — fits single 24GB GPU |
-| Qwen/Qwen3-8B | 15.3 GB | 20 GB | RTX 3090, RTX 4090 | Full precision, needs 24GB GPU |
-| TheDrummer/Cydonia-24B-v4.1 | 43.9 GB | 48 GB | 2× RTX 3090/4090 or A100 | Full precision, requires multi-GPU (`--tp 2`) |
+VRAM recommendation is roughly 2× the model file size on HuggingFace to account for KV cache and runtime overhead. Longer context lengths need more VRAM.
+
+| Model | HF Size | Recommended VRAM | Example GPU |
+|-------|---------|-----------------|-------------|
+| Qwen/Qwen2.5-0.5B | 1 GB | 2 GB+ | Any GPU |
+| meganovaai/MN-Violet-Lotus-12B-AWQ | 8.3 GB | 16 GB+ | RTX 4090, RTX 3090 |
+| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym | 15.1 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
+| Qwen/Qwen3-8B | 16.4 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
+| Sinensis/L3.3-MS-Nevoria-70b-AWQ | 39.8 GB | 80 GB+ | A100 80GB or 4× RTX 3090/4090 |
+| TheDrummer/Cydonia-24B-v4.1 | 47.2 GB | 96 GB+ | 2× A100 or 4× RTX 3090/4090 |
 
 ---
 
