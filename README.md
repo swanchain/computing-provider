@@ -259,6 +259,39 @@ curl http://localhost:8085/api/v1/computing/inference/health
 
 ---
 
+## Available Models
+
+Run `computing-provider models catalog` to see all supported models:
+
+```
+$ computing-provider models catalog
+Available models in Swan Model Repository (6):
+
++--------------------------------------------------------+----------+-------+----------+----------------+
+|                        MODEL ID                        | CATEGORY | FILES |   SIZE   |     STATUS     |
++--------------------------------------------------------+----------+-------+----------+----------------+
+| Qwen/Qwen2.5-0.5B                                      |   llm    |     1 | 942.3 MB |   downloaded   |
+| Qwen/Qwen3-8B                                          |   llm    |     5 |  15.3 GB | partial (3/5)  |
+| Sinensis/L3.3-MS-Nevoria-70b-AWQ                       |   llm    |     8 |  13.7 GB | not downloaded |
+| TheDrummer/Cydonia-24B-v4.1                            |   llm    |    19 |  43.9 GB | not downloaded |
+| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym |   llm    |     7 |   9.3 GB | not downloaded |
+| meganovaai/MN-Violet-Lotus-12B-AWQ                     |   llm    |    12 |   7.8 GB | not downloaded |
++--------------------------------------------------------+----------+-------+----------+----------------+
+```
+
+### Hardware Requirements
+
+| Model | Size | Min VRAM | Recommended GPU | Notes |
+|-------|------|----------|-----------------|-------|
+| Qwen/Qwen2.5-0.5B | 942 MB | 2 GB | Any GPU | Tiny model, good for testing |
+| meganovaai/MN-Violet-Lotus-12B-AWQ | 7.8 GB | 12 GB | RTX 3090, RTX 4090 | AWQ quantized, fits single 24GB GPU |
+| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym | 9.3 GB | 16 GB | RTX 3090, RTX 4090 | AWQ quantized, fits single 24GB GPU |
+| Sinensis/L3.3-MS-Nevoria-70b-AWQ | 13.7 GB | 20 GB | RTX 3090, RTX 4090 | AWQ quantized 70B — fits single 24GB GPU |
+| Qwen/Qwen3-8B | 15.3 GB | 20 GB | RTX 3090, RTX 4090 | Full precision, needs 24GB GPU |
+| TheDrummer/Cydonia-24B-v4.1 | 43.9 GB | 48 GB | 2× RTX 3090/4090 or A100 | Full precision, requires multi-GPU (`--tp 2`) |
+
+---
+
 ## Switching Models
 
 You can add, remove, or swap models without restarting the provider.
@@ -266,21 +299,21 @@ You can add, remove, or swap models without restarting the provider.
 ### 1. Start the new model server
 
 ```bash
-# Example: switch from Qwen 2.5 7B to Llama 3.2 3B
+# Example: switch from Qwen 2.5 7B to Mistral Small 24B (AWQ)
 
 # Stop the old server (optional — you can run multiple models)
 docker stop sglang && docker rm sglang
 
 # Download the new model weights
-computing-provider models download meta-llama/Llama-3.2-3B-Instruct
+computing-provider models download jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
 
 # Start the new model server
 docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
-  -v ~/.swan/models/meta-llama/Llama-3.2-3B-Instruct:/models \
+  -v ~/.swan/models/jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym:/models \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server --model-path /models \
     --host 0.0.0.0 --port 30000 \
-    --served-model-name meta-llama/Llama-3.2-3B-Instruct
+    --served-model-name jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
 
 # Verify the server is healthy
 curl http://localhost:30000/v1/models
@@ -292,9 +325,9 @@ Edit `~/.swan/computing/models.json` to point to the new model:
 
 ```json
 {
-  "meta-llama/Llama-3.2-3B-Instruct": {
+  "jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym": {
     "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
+    "gpu_memory": 16000,
     "category": "text-generation"
   }
 }
