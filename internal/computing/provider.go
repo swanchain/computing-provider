@@ -15,6 +15,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/mattn/go-isatty"
+	"github.com/swanchain/computing-provider-v2/internal/setup"
 )
 
 func InitComputingProvider(cpRepoPath string) string {
@@ -97,21 +99,56 @@ func getMachineFingerprint() string {
 }
 
 // CheckMachineIdentity verifies that the private_key belongs to this machine.
-// If the key was generated on a different machine (copied config), it logs a warning.
-func CheckMachineIdentity(cpRepoPath string) {
+// If the key was generated on a different machine (copied config), it prompts the user
+// to regenerate a new node-id. In non-interactive environments, it returns an error.
+func CheckMachineIdentity(cpRepoPath string) error {
 	fingerprintPath := filepath.Join(cpRepoPath, "machine_fingerprint")
 	currentFingerprint := getMachineFingerprint()
 
-	if stored, err := os.ReadFile(fingerprintPath); err == nil {
-		storedFingerprint := strings.TrimSpace(string(stored))
-		if storedFingerprint != currentFingerprint {
-			logs.GetLogger().Warnf("WARNING: This private_key was generated on a different machine (fingerprint mismatch).")
-			logs.GetLogger().Warnf("If you are running multiple machines with the same provider key, each machine MUST have its own private_key.")
-			logs.GetLogger().Warnf("Run 'computing-provider setup' on this machine to generate a new identity, or delete '%s/private_key' to auto-generate one.", cpRepoPath)
-			logs.GetLogger().Warnf("Using the same private_key on multiple machines causes them to kick each other offline.")
-		}
+	stored, err := os.ReadFile(fingerprintPath)
+	if err != nil {
+		// First run or file missing — write fingerprint and continue
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		return nil
 	}
 
-	// Write/update the fingerprint for this machine
+	if strings.TrimSpace(string(stored)) == currentFingerprint {
+		// Fingerprint matches — no issue
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		return nil
+	}
+
+	// === MISMATCH: private_key was copied from another machine ===
+	logs.GetLogger().Warnf("WARNING: This private_key was generated on a different machine (fingerprint mismatch).")
+	logs.GetLogger().Warnf("Each machine MUST have its own private_key to get a unique node-id.")
+	logs.GetLogger().Warnf("Using the same private_key on multiple machines causes them to kick each other offline.")
+
+	interactive := isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+	if !interactive {
+		return fmt.Errorf("machine fingerprint mismatch: this private_key was copied from another machine. "+
+			"Delete '%s/private_key' and restart to generate a new node-id, or run interactively to be prompted",
+			cpRepoPath)
+	}
+
+	prompter := setup.NewPrompter()
+	regenerate, err := prompter.AskYesNo("Generate a new node-id for this machine?", true)
+	if err != nil {
+		return fmt.Errorf("failed to read user input: %w", err)
+	}
+
+	if regenerate {
+		privateKeyPath := filepath.Join(cpRepoPath, "private_key")
+		if err := os.Remove(privateKeyPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove old private_key: %w", err)
+		}
+		logs.GetLogger().Infof("Removed old private_key. A new node-id will be generated on startup.")
+		// Do NOT write fingerprint — GenerateNodeID will create a new key,
+		// and the fingerprint will be written on the next startup.
+		return nil
+	}
+
+	// User chose to keep existing key on this machine
+	logs.GetLogger().Warnf("Continuing with existing private_key — both machines will share the same node-id.")
 	_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+	return nil
 }
