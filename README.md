@@ -21,7 +21,7 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 # 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make testnet && sudo make install
+make clean && make mainnet && sudo make install
 
 # 2. Download model weights from HuggingFace (e.g., Qwen 2.5 7B)
 computing-provider models download Qwen/Qwen2.5-7B-Instruct
@@ -63,7 +63,7 @@ ollama pull qwen2.5:7b
 brew install go
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make testnet && sudo make install
+make clean && make mainnet && sudo make install
 
 # 3. Run the setup wizard
 computing-provider setup
@@ -214,9 +214,9 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "ws://inference-ws-dev.swanchain.io"
-ServiceURL = "https://api-dev.swanchain.io"
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference-dev.swanchain.io
+WebSocketURL = "wss://api-ws.swanchain.io"
+ServiceURL = "https://api.swanchain.io"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
 Models = ["qwen-2.5-7b"]
 ```
 
