@@ -12,9 +12,9 @@ var NetWorkTag string
 
 // Inference URL defaults — overridable via ldflags at build time.
 // Production defaults; dev builds override these in the Makefile.
-var DefaultInferenceURL = "https://api.swanchain.io/v1"
+var DefaultInferenceURL = "https://api.swanchain.io"
 var DefaultInferenceWSURL = "wss://api-ws.swanchain.io"
-var DefaultInferenceAPIURL = "https://api.swanchain.io/v1"
+var DefaultInferenceAPIURL = "https://api.swanchain.io/api/v1"
 
 const BuildVersion = "0.1.1"
 
