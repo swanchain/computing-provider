@@ -21,7 +21,7 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
 # 1. Clone and build
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make testnet && sudo make install
+make clean && make mainnet && sudo make install
 
 # 2. Download model weights from HuggingFace (e.g., Qwen 2.5 7B)
 computing-provider models download Qwen/Qwen2.5-7B-Instruct
@@ -63,7 +63,7 @@ ollama pull qwen2.5:7b
 brew install go
 git clone https://github.com/swanchain/computing-provider.git
 cd computing-provider
-make clean && make testnet && sudo make install
+make clean && make mainnet && sudo make install
 
 # 3. Run the setup wizard
 computing-provider setup
@@ -76,6 +76,8 @@ computing-provider inference status
 ```
 
 The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
+
+> **Want to maximize earnings?** The quickstart uses Qwen 2.5 7B as an example, but UBI rewards are based on real token traffic. Serving other in-demand models means less competition and more requests routed to you. See the [Switching Models](#switching-models) section to get started.
 
 ---
 
@@ -212,9 +214,9 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "ws://inference-ws-dev.swanchain.io"
-ServiceURL = "https://api-dev.swanchain.io"
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference-dev.swanchain.io
+WebSocketURL = "wss://api-ws.swanchain.io"
+ServiceURL = "https://api.swanchain.io"
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
 Models = ["qwen-2.5-7b"]
 ```
 
@@ -257,6 +259,41 @@ curl http://localhost:8085/api/v1/computing/inference/health
 
 ---
 
+## Available Models
+
+Run `computing-provider models catalog` to see all supported models:
+
+```
+$ computing-provider models catalog
+Available models in Swan Model Repository (6):
+
++--------------------------------------------------------+----------+-------+----------+----------------+
+|                        MODEL ID                        | CATEGORY | FILES |   SIZE   |     STATUS     |
++--------------------------------------------------------+----------+-------+----------+----------------+
+| Qwen/Qwen2.5-0.5B                                      |   llm    |     1 | 942.3 MB |   downloaded   |
+| Qwen/Qwen3-8B                                          |   llm    |     5 |  15.3 GB | partial (3/5)  |
+| Sinensis/L3.3-MS-Nevoria-70b-AWQ                       |   llm    |     8 |  13.7 GB | not downloaded |
+| TheDrummer/Cydonia-24B-v4.1                            |   llm    |    19 |  43.9 GB | not downloaded |
+| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym |   llm    |     7 |   9.3 GB | not downloaded |
+| meganovaai/MN-Violet-Lotus-12B-AWQ                     |   llm    |    12 |   7.8 GB | not downloaded |
++--------------------------------------------------------+----------+-------+----------+----------------+
+```
+
+### Hardware Requirements
+
+VRAM recommendation is roughly 2× the model file size on HuggingFace to account for KV cache and runtime overhead. Longer context lengths need more VRAM.
+
+| Model | HF Size | Recommended VRAM | Example GPU |
+|-------|---------|-----------------|-------------|
+| Qwen/Qwen2.5-0.5B | 1 GB | 2 GB+ | Any GPU |
+| meganovaai/MN-Violet-Lotus-12B-AWQ | 8.3 GB | 16 GB+ | RTX 4090, RTX 3090 |
+| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym | 15.1 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
+| Qwen/Qwen3-8B | 16.4 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
+| Sinensis/L3.3-MS-Nevoria-70b-AWQ | 39.8 GB | 80 GB+ | A100 80GB or 4× RTX 3090/4090 |
+| TheDrummer/Cydonia-24B-v4.1 | 47.2 GB | 96 GB+ | 2× A100 or 4× RTX 3090/4090 |
+
+---
+
 ## Switching Models
 
 You can add, remove, or swap models without restarting the provider.
@@ -264,21 +301,21 @@ You can add, remove, or swap models without restarting the provider.
 ### 1. Start the new model server
 
 ```bash
-# Example: switch from Qwen 2.5 7B to Llama 3.2 3B
+# Example: switch from Qwen 2.5 7B to Mistral Small 24B (AWQ)
 
 # Stop the old server (optional — you can run multiple models)
 docker stop sglang && docker rm sglang
 
 # Download the new model weights
-computing-provider models download meta-llama/Llama-3.2-3B-Instruct
+computing-provider models download jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
 
 # Start the new model server
 docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
-  -v ~/.swan/models/meta-llama/Llama-3.2-3B-Instruct:/models \
+  -v ~/.swan/models/jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym:/models \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server --model-path /models \
     --host 0.0.0.0 --port 30000 \
-    --served-model-name meta-llama/Llama-3.2-3B-Instruct
+    --served-model-name jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
 
 # Verify the server is healthy
 curl http://localhost:30000/v1/models
@@ -290,9 +327,9 @@ Edit `~/.swan/computing/models.json` to point to the new model:
 
 ```json
 {
-  "meta-llama/Llama-3.2-3B-Instruct": {
+  "jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym": {
     "endpoint": "http://localhost:30000",
-    "gpu_memory": 8000,
+    "gpu_memory": 16000,
     "category": "text-generation"
   }
 }
@@ -327,7 +364,7 @@ To receive SWAN token rewards for completed inference requests, set your benefic
 computing-provider inference set-beneficiary 0xYourWalletAddress
 ```
 
-For on-chain collateral (optional, increases reward tier):
+For on-chain collateral (optional, enables staking rewards):
 
 ```bash
 # 1. Create a wallet
@@ -519,7 +556,7 @@ computing-provider models download meta-llama/Llama-3.3-70B-Instruct
 - You can also set it via environment variable: `export INFERENCE_API_KEY=sk-prov-xxx`
 
 **Q: Provider is stuck in `pending` status**
-Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum tier, and registration benchmark passes. Check your status:
+Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum hardware requirements, and registration benchmark passes. Check your status:
 ```bash
 computing-provider inference status
 ```
