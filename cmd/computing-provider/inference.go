@@ -470,7 +470,7 @@ var inferenceStatusCmd = &cli.Command{
 			fmt.Println("  computing-provider inference keygen")
 			fmt.Println()
 			fmt.Println("Or manually:")
-			fmt.Println("  1. Sign up at " + build.DefaultInferenceURL + " or via API")
+			fmt.Println("  1. Sign up at " + build.DefaultInferenceDashboardURL + " or via API")
 			fmt.Println("  2. Add your API key to config.toml [Inference] section")
 			fmt.Println("  3. Or set: export INFERENCE_API_KEY=sk-prov-xxxxxxxxxxxxxxxxxxxx")
 			fmt.Println()

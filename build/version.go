@@ -15,6 +15,7 @@ var NetWorkTag string
 var DefaultInferenceURL = "https://api.swanchain.io"
 var DefaultInferenceWSURL = "wss://api-ws.swanchain.io"
 var DefaultInferenceAPIURL = "https://api.swanchain.io/api/v1"
+var DefaultInferenceDashboardURL = "https://inference.swanchain.io"
 
 const BuildVersion = "0.1.1"
 
