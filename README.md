@@ -214,7 +214,7 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "wss://api-ws.swanchain.io"
+WebSocketURL = "wss://inference-ws.swanchain.io"
 ServiceURL = "https://api.swanchain.io"
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
 Models = ["qwen-2.5-7b"]
