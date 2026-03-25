@@ -158,7 +158,7 @@ func handleExistingProviderLogin(cpRepoPath string, prompter *setup.Prompter, au
 		setup.PrintError(fmt.Sprintf("Failed to create provider key: %v", err))
 		fmt.Println()
 		fmt.Println("If you have an existing API key, you can enter it manually.")
-		fmt.Println("You can also manage your keys at " + build.DefaultInferenceURL)
+		fmt.Println("You can also manage your keys at " + build.DefaultInferenceDashboardURL)
 		fmt.Println()
 
 		// Fall back to manual entry

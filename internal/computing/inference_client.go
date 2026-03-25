@@ -393,7 +393,7 @@ func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error)
 			CanConnect:  false,
 			Message:     "No API key configured",
 			NextSteps: []string{
-				"1. Sign up at " + build.DefaultInferenceURL + " or via API",
+				"1. Sign up at " + build.DefaultInferenceDashboardURL + " or via API",
 				"2. Add your API key to config.toml [Inference] section",
 				"3. Or set INFERENCE_API_KEY environment variable",
 			},

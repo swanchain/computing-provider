@@ -13,7 +13,8 @@ ldflags=-X=$(PKG).CurrentCommit=+git.$(subst -,.,$(shell git describe --always -
 # Dev/testnet inference URL overrides
 dev_ldflags=-X $(PKG).DefaultInferenceURL=https://inference-dev.swanchain.io \
             -X $(PKG).DefaultInferenceWSURL=wss://inference-ws-dev.swanchain.io \
-            -X $(PKG).DefaultInferenceAPIURL=https://inference-dev.swanchain.io/api/v1
+            -X $(PKG).DefaultInferenceAPIURL=https://inference-dev.swanchain.io/api/v1 \
+            -X $(PKG).DefaultInferenceDashboardURL=https://inference-dev.swanchain.io
 
 all: mainnet
 .PHONY: all
