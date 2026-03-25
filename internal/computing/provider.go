@@ -142,8 +142,8 @@ func CheckMachineIdentity(cpRepoPath string) error {
 			return fmt.Errorf("failed to remove old private_key: %w", err)
 		}
 		logs.GetLogger().Infof("Removed old private_key. A new node-id will be generated on startup.")
-		// Do NOT write fingerprint — GenerateNodeID will create a new key,
-		// and the fingerprint will be written on the next startup.
+		// Write current machine fingerprint so the next startup won't trigger mismatch again
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
 		return nil
 	}
 

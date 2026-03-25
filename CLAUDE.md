@@ -204,7 +204,7 @@ NodeName = "my-provider"
 
 [Inference]
 Enable = true
-WebSocketURL = "wss://inference.swanchain.io/ws"
+WebSocketURL = "wss://inference-ws.swanchain.io"
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Your provider API key
 Models = ["meta-llama/Llama-3.2-3B-Instruct"]
 ```
