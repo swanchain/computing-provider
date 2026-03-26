@@ -252,6 +252,8 @@ func UpdateInferenceConfig(cpRepoPath, apiKey string, models []string) error {
 
 	// Update Inference config
 	configTmpl.Inference.Enable = true
+	configTmpl.Inference.ServiceURL = build.DefaultInferenceURL
+	configTmpl.Inference.WebSocketURL = build.DefaultInferenceWSURL
 	if apiKey != "" {
 		configTmpl.Inference.ApiKey = apiKey
 	}
