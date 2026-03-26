@@ -63,8 +63,8 @@ func handleAuthentication(cpRepoPath string, prompter *setup.Prompter, providedA
 	}
 
 	if existingKey != "" {
-		setup.PrintInfo(fmt.Sprintf("Found existing API key: %s", setup.MaskApiKey(existingKey)))
-		useExisting, err := prompter.AskYesNo("Use existing API key", true)
+		setup.PrintInfo(fmt.Sprintf("Found existing provider API key: %s", setup.MaskApiKey(existingKey)))
+		useExisting, err := prompter.AskYesNo("Use existing provider API key", true)
 		if err != nil {
 			return "", err
 		}
