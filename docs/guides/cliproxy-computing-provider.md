@@ -110,6 +110,22 @@ Create `cp-cliproxy/models.json`:
 }
 ```
 
+> **Note — `local_model` for name-prefixed deployments:** Some swan-inference deployments register models with a vendor prefix (e.g. `openai/gpt-5.5`) in the marketplace. CLIProxyAPI doesn't recognise that prefix — it only serves `gpt-5.5`. Add a `local_model` field to rewrite the model name before the request is forwarded:
+>
+> ```json
+> {
+>   "openai/gpt-5.5": {
+>     "endpoint": "http://localhost:8317",
+>     "api_key": "sk-swan-local",
+>     "category": "text-generation",
+>     "local_model": "gpt-5.5"
+>   }
+> }
+> ```
+>
+> Without this, inference requests and benchmarks will silently fail (CLIProxyAPI returns a model-not-found error). The file is watched for changes — no restart required.
+```
+
 ---
 
 ## Step 4 — Start and verify
@@ -172,4 +188,5 @@ curl http://localhost:8100/v1/chat/completions \
 | `Registration failed: invalid API key` | Check `ApiKey` in `config.toml` matches the `sk-prov-*` from your provider signup |
 | Models stay `unknown` health | Confirm CLIProxyAPI is running and `GET /v1/models` returns 200 |
 | `WebSocketURL` connection refused | Confirm swan-inference is running on port 8081; URL must not have `/ws` suffix |
-| Requests return wrong model | Verify `models.json` keys match the model IDs consumers request |
+| Requests return wrong model / benchmarks score 0% | Add `local_model` to `models.json` if the marketplace model name has a prefix (e.g. `openai/gpt-5.5`) that CLIProxyAPI doesn't recognise |
+| Crash at startup — nil pointer in `ubi_service.go` | You are in the `docker` group but the session doesn't have it active. Run `sg docker -c "computing-provider --repo $CP run"` to activate the group for the subprocess |

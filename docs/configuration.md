@@ -74,6 +74,22 @@ ServiceURL = ""                                      # Optional: HTTP API URL (a
 | `Models` | Yes | List of model names to serve (must match keys in `models.json`) |
 | `ServiceURL` | No | HTTP API URL for status checks. Auto-derived from WebSocketURL if empty |
 
+### models.json field reference
+
+Each key in `models.json` is the marketplace model ID (must match a value in `Models` above).
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `endpoint` | Yes | Base URL of the local model server (`http://localhost:PORT`) |
+| `api_key` | No | API key sent to the local server (Bearer token) |
+| `category` | No | Model category — `text-generation`, `image-generation`, `embedding` |
+| `local_model` | No | Model name to use when forwarding to the local server. Set this when the marketplace ID differs from what the server expects — e.g. marketplace has `openai/gpt-5.5` but the server only accepts `gpt-5.5`, or Ollama uses `llama3.2:3b` for `meta-llama/Llama-3.2-3B-Instruct` |
+| `gpu_memory` | No | VRAM used by this model in MB (used for load scheduling) |
+| `format` | No | Weight format hint: `fp16`, `awq`, `gptq`, `gguf` |
+| `quantization` | No | Quantization detail: `q4_k_m`, `q8_0`, `w4a16`, etc. |
+
+`models.json` is watched by fsnotify — changes are hot-reloaded without a provider restart.
+
 **Environment variable overrides:**
 ```bash
 export INFERENCE_WS_URL=ws://localhost:8081      # Override WebSocket URL for dev
