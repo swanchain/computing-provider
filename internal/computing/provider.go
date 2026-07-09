@@ -67,17 +67,34 @@ func hashPublicKey(publicKey *ecdsa.PublicKey) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// getMachineFingerprint generates a fingerprint from hostname + MAC addresses.
+// fingerprintVersion prefixes stored fingerprints so the algorithm can evolve.
+// Stored values without a version prefix are legacy (hostname + all MACs) and
+// are migrated in place rather than treated as a mismatch — the legacy scheme
+// included Docker veth/bridge MACs, so any container churn changed it.
+const fingerprintVersion = "v2:"
+
+// getMachineFingerprint generates a stable fingerprint for this machine.
 // This is used to detect when a private_key has been copied to a different machine.
+// Prefers the OS machine-id (survives interface churn); falls back to
+// hostname + physical NIC MACs (virtual interfaces like Docker veths are
+// excluded on Linux via /sys/class/net/<if>/device).
 func getMachineFingerprint() string {
+	if id := readMachineID(); id != "" {
+		hash := sha256.Sum256([]byte("machine-id|" + id))
+		return fingerprintVersion + hex.EncodeToString(hash[:16])
+	}
+
 	hostname, _ := os.Hostname()
 
-	// Collect non-loopback MAC addresses
+	// Collect MAC addresses of physical interfaces only
 	var macs []string
 	interfaces, err := net.Interfaces()
 	if err == nil {
 		for _, iface := range interfaces {
 			if iface.Flags&net.FlagLoopback != 0 || len(iface.HardwareAddr) == 0 {
+				continue
+			}
+			if !isPhysicalInterface(iface.Name) {
 				continue
 			}
 			macs = append(macs, iface.HardwareAddr.String())
@@ -87,7 +104,31 @@ func getMachineFingerprint() string {
 
 	raw := fmt.Sprintf("%s|%s", hostname, strings.Join(macs, ","))
 	hash := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(hash[:16]) // 16 bytes = 32 hex chars
+	return fingerprintVersion + hex.EncodeToString(hash[:16]) // 16 bytes = 32 hex chars
+}
+
+// readMachineID returns the systemd machine-id if available (Linux).
+func readMachineID() string {
+	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		if data, err := os.ReadFile(p); err == nil {
+			if id := strings.TrimSpace(string(data)); id != "" {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// isPhysicalInterface reports whether the named interface is backed by real
+// hardware. On Linux, physical NICs have a /sys/class/net/<if>/device link;
+// virtual interfaces (veth, docker0, bridges, tunnels) do not. On other
+// platforms every interface is treated as physical.
+func isPhysicalInterface(name string) bool {
+	if _, err := os.Stat("/sys/class/net"); err != nil {
+		return true // non-Linux: no way to tell, keep legacy behavior
+	}
+	_, err := os.Stat(filepath.Join("/sys/class/net", name, "device"))
+	return err == nil
 }
 
 // CheckMachineIdentity verifies that the private_key belongs to this machine.
@@ -104,8 +145,17 @@ func CheckMachineIdentity(cpRepoPath string) error {
 		return nil
 	}
 
-	if strings.TrimSpace(string(stored)) == currentFingerprint {
+	storedFingerprint := strings.TrimSpace(string(stored))
+	if storedFingerprint == currentFingerprint {
 		// Fingerprint matches — no issue
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		return nil
+	}
+
+	if !strings.HasPrefix(storedFingerprint, fingerprintVersion) {
+		// Legacy fingerprint (pre-versioning, hostname + all MACs including
+		// Docker veths) — unstable by design, so migrate rather than mismatch
+		logs.GetLogger().Infof("Migrating machine fingerprint to %s format", strings.TrimSuffix(fingerprintVersion, ":"))
 		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
 		return nil
 	}
