@@ -146,3 +146,20 @@ func TestHandleInferenceEnforcement(t *testing.T) {
 		t.Fatalf("expected 429 ModelServerError for concurrency, got: %v", err)
 	}
 }
+
+func TestSameModelSet(t *testing.T) {
+	cases := []struct {
+		a, b []string
+		want bool
+	}{
+		{nil, nil, true},
+		{[]string{"a", "b"}, []string{"b", "a"}, true},
+		{[]string{"a"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, []string{"a", "c"}, false},
+	}
+	for _, c := range cases {
+		if got := sameModelSet(c.a, c.b); got != c.want {
+			t.Errorf("sameModelSet(%v, %v) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -142,14 +143,37 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 }
 
 // updateClientModels updates the client's model list based on ready models
+// and re-registers with Swan Inference if the ready set changed
 func (s *InferenceService) updateClientModels() {
-	if s.client != nil && s.registry != nil {
-		models := s.registry.GetReadyModelIDs()
-		s.client.models = models
-		if s.client.IsConnected() {
-			s.client.register()
+	if s.client == nil || s.registry == nil {
+		return
+	}
+	models := s.registry.GetReadyModelIDs()
+	if sameModelSet(s.client.models, models) {
+		return
+	}
+	s.client.models = models
+	if s.client.IsConnected() {
+		s.client.register()
+	}
+}
+
+// sameModelSet reports whether two model ID lists contain the same IDs,
+// ignoring order
+func sameModelSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
 		}
 	}
+	return true
 }
 
 // loadModelMappings loads model-to-endpoint mappings from models.json
@@ -222,6 +246,9 @@ func (s *InferenceService) Start() error {
 		if s.client != nil && s.client.IsConnected() {
 			s.client.SendModelHealthUpdate(modelHealth)
 		}
+		// A health transition can change the ready set (e.g. a hot-added model
+		// passing its first health check) — re-register so Swan Inference sees it
+		s.updateClientModels()
 	})
 
 	if err := s.client.Start(); err != nil {
