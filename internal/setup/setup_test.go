@@ -88,8 +88,10 @@ func TestCredentialsManager(t *testing.T) {
 	mgr := NewCredentialsManager(tmpDir)
 
 	// Test no credentials initially
-	if mgr.HasApiKey() {
-		t.Error("Expected no API key initially")
+	if initial, err := mgr.Load(); err != nil {
+		t.Fatalf("Failed to load credentials: %v", err)
+	} else if initial != nil {
+		t.Error("Expected no credentials initially")
 	}
 
 	// Test save and load
@@ -126,22 +128,17 @@ func TestCredentialsManager(t *testing.T) {
 		t.Errorf("Email mismatch: got %s, expected %s", loaded.Email, creds.Email)
 	}
 
-	// Test HasApiKey
-	if !mgr.HasApiKey() {
-		t.Error("Expected HasApiKey to return true")
-	}
-
 	// Test GetApiKey
 	if mgr.GetApiKey() != creds.ApiKey {
 		t.Errorf("GetApiKey returned %s, expected %s", mgr.GetApiKey(), creds.ApiKey)
 	}
 
-	// Test delete
-	if err := mgr.Delete(); err != nil {
+	// Test removal
+	if err := os.Remove(filepath.Join(tmpDir, "credentials.json")); err != nil {
 		t.Fatalf("Failed to delete credentials: %v", err)
 	}
 
-	if mgr.HasApiKey() {
+	if mgr.GetApiKey() != "" {
 		t.Error("Expected no API key after delete")
 	}
 }

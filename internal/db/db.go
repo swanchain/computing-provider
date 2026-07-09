@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
-	"github.com/swanchain/computing-provider-v2/internal/models"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -59,11 +58,6 @@ func InitDb(cpRepoPath string) {
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetConnMaxLifetime(0)
-
-	if err = DB.AutoMigrate(
-		&models.CpInfoEntity{}); err != nil {
-		panic(fmt.Sprintf("failed to auto migrate for provider db: %v", err))
-	}
 
 	logs.GetLogger().Info("Database initialized successfully")
 }

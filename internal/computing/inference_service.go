@@ -268,19 +268,6 @@ func (s *InferenceService) Stop() {
 	}
 }
 
-// Name returns the service name for the supervisor
-func (s *InferenceService) Name() string {
-	return "inference-service"
-}
-
-// IsHealthy returns whether the service is healthy (connected to Swan Inference)
-func (s *InferenceService) IsHealthy() bool {
-	if s.client == nil {
-		return false
-	}
-	return s.client.IsConnected()
-}
-
 // handleInference processes inference requests from Inference service
 func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
@@ -518,11 +505,6 @@ func (s *InferenceService) substituteModelName(request json.RawMessage, modelID,
 	return modifiedRequest
 }
 
-// GetClient returns the Inference client
-func (s *InferenceService) GetClient() *InferenceClient {
-	return s.client
-}
-
 // IsConnected returns whether the Inference client is connected
 func (s *InferenceService) IsConnected() bool {
 	if s.client == nil {
@@ -555,17 +537,6 @@ func (s *InferenceService) GetMetricsPrometheus() string {
 		return ""
 	}
 	return s.client.GetMetricsPrometheus()
-}
-
-// RegisterModels updates the models this provider serves
-func (s *InferenceService) RegisterModels(models []string) {
-	if s.client != nil {
-		s.client.models = models
-		// Re-register with new model list
-		if s.client.IsConnected() {
-			s.client.register()
-		}
-	}
 }
 
 // handleStreamingInference processes streaming inference requests
@@ -800,16 +771,6 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 }
 
 // === Model Management API ===
-
-// GetRegistry returns the model registry
-func (s *InferenceService) GetRegistry() *ModelRegistry {
-	return s.registry
-}
-
-// GetHealthChecker returns the model health checker
-func (s *InferenceService) GetHealthChecker() *ModelHealthChecker {
-	return s.healthChecker
-}
 
 // GetAllModels returns all registered models with their status
 func (s *InferenceService) GetAllModels() []*RegisteredModel {

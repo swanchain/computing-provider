@@ -1,7 +1,6 @@
 package computing
 
 import (
-	"errors"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -67,41 +66,6 @@ func NewTokenBucket(tokensPerSecond float64, burstSize int) *TokenBucket {
 		refillRate: tokensPerSecond,
 		lastRefill: time.Now(),
 	}
-}
-
-// Allow checks if a request is allowed and consumes a token
-func (tb *TokenBucket) Allow() bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	tb.refill()
-
-	if tb.tokens >= 1 {
-		tb.tokens--
-		tb.totalAllowed++
-		return true
-	}
-
-	tb.totalThrottled++
-	return false
-}
-
-// AllowN checks if n requests are allowed and consumes n tokens
-func (tb *TokenBucket) AllowN(n int) bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	tb.refill()
-
-	needed := float64(n)
-	if tb.tokens >= needed {
-		tb.tokens -= needed
-		tb.totalAllowed += int64(n)
-		return true
-	}
-
-	tb.totalThrottled += int64(n)
-	return false
 }
 
 // refill adds tokens based on elapsed time
@@ -185,37 +149,6 @@ func (rl *RateLimiter) Stop() {
 	logs.GetLogger().Info("Rate limiter stopped")
 }
 
-// Allow checks if a global request is allowed
-func (rl *RateLimiter) Allow() bool {
-	return rl.globalBucket.Allow()
-}
-
-// AllowModel checks if a request for a specific model is allowed
-func (rl *RateLimiter) AllowModel(modelID string) bool {
-	// Check global limit first
-	if !rl.globalBucket.Allow() {
-		return false
-	}
-
-	// Check model-specific limit
-	rl.mu.RLock()
-	bucket, exists := rl.modelBuckets[modelID]
-	rl.mu.RUnlock()
-
-	if !exists {
-		// No model-specific limit, allow
-		return true
-	}
-
-	if !bucket.Allow() {
-		// Model limit exceeded, but we already consumed global token
-		// This is acceptable for simplicity
-		return false
-	}
-
-	return true
-}
-
 // SetModelLimit sets a rate limit for a specific model
 func (rl *RateLimiter) SetModelLimit(modelID string, tokensPerSecond float64, burstSize int) {
 	rl.mu.Lock()
@@ -223,13 +156,6 @@ func (rl *RateLimiter) SetModelLimit(modelID string, tokensPerSecond float64, bu
 
 	rl.modelBuckets[modelID] = NewTokenBucket(tokensPerSecond, burstSize)
 	logs.GetLogger().Infof("Set rate limit for model %s: %.2f req/s, burst %d", modelID, tokensPerSecond, burstSize)
-}
-
-// RemoveModelLimit removes the rate limit for a model
-func (rl *RateLimiter) RemoveModelLimit(modelID string) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	delete(rl.modelBuckets, modelID)
 }
 
 // adaptiveLoop adjusts rate based on GPU utilization
@@ -303,151 +229,4 @@ func (rl *RateLimiter) GetMetrics() RateLimiterMetrics {
 		BurstSize:       rl.config.BurstSize,
 		AdaptiveEnabled: rl.config.EnableAdaptive,
 	}
-}
-
-// GetModelMetrics returns metrics for a specific model
-func (rl *RateLimiter) GetModelMetrics(modelID string) *RateLimiterMetrics {
-	rl.mu.RLock()
-	bucket, exists := rl.modelBuckets[modelID]
-	rl.mu.RUnlock()
-
-	if !exists {
-		return nil
-	}
-
-	tokens, rate, allowed, throttled := bucket.GetStats()
-	return &RateLimiterMetrics{
-		TotalAllowed:   allowed,
-		TotalThrottled: throttled,
-		CurrentRate:    rate,
-		CurrentTokens:  tokens,
-	}
-}
-
-// WaitForToken blocks until a token is available or context is cancelled
-func (rl *RateLimiter) WaitForToken(modelID string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	backoff := 10 * time.Millisecond
-
-	for time.Now().Before(deadline) {
-		if rl.AllowModel(modelID) {
-			return nil
-		}
-
-		// Exponential backoff with cap
-		time.Sleep(backoff)
-		backoff *= 2
-		if backoff > 100*time.Millisecond {
-			backoff = 100 * time.Millisecond
-		}
-	}
-
-	return ErrRateLimitExceeded
-}
-
-// Rate limiter errors
-var (
-	ErrRateLimitExceeded = errors.New("rate limit exceeded")
-)
-
-// PerModelRateLimiter wraps RateLimiter for per-model rate limiting
-type PerModelRateLimiter struct {
-	*RateLimiter
-	defaultRate  float64
-	defaultBurst int
-}
-
-// NewPerModelRateLimiter creates a rate limiter with per-model defaults
-func NewPerModelRateLimiter(config RateLimiterConfig, gpuCollector *GPUMetricsCollector, defaultRate float64, defaultBurst int) *PerModelRateLimiter {
-	return &PerModelRateLimiter{
-		RateLimiter:  NewRateLimiter(config, gpuCollector),
-		defaultRate:  defaultRate,
-		defaultBurst: defaultBurst,
-	}
-}
-
-// EnsureModelLimit creates a model rate limit if it doesn't exist
-func (prl *PerModelRateLimiter) EnsureModelLimit(modelID string) {
-	prl.mu.RLock()
-	_, exists := prl.modelBuckets[modelID]
-	prl.mu.RUnlock()
-
-	if !exists {
-		prl.SetModelLimit(modelID, prl.defaultRate, prl.defaultBurst)
-	}
-}
-
-// AdaptiveTokenBucket extends TokenBucket with adaptive rate based on feedback
-type AdaptiveTokenBucket struct {
-	*TokenBucket
-	mu             sync.Mutex
-	targetLatency  time.Duration // Target latency for requests
-	currentLatency time.Duration // Current observed latency
-	minRate        float64
-	maxRate        float64
-	adjustment     float64
-}
-
-// NewAdaptiveTokenBucket creates an adaptive token bucket
-func NewAdaptiveTokenBucket(initialRate float64, burstSize int, targetLatency time.Duration) *AdaptiveTokenBucket {
-	return &AdaptiveTokenBucket{
-		TokenBucket:   NewTokenBucket(initialRate, burstSize),
-		targetLatency: targetLatency,
-		minRate:       initialRate * 0.1,
-		maxRate:       initialRate * 10,
-		adjustment:    0.05,
-	}
-}
-
-// RecordLatency records a request latency and adjusts rate accordingly
-func (atb *AdaptiveTokenBucket) RecordLatency(latency time.Duration) {
-	atb.mu.Lock()
-	defer atb.mu.Unlock()
-
-	// Exponential moving average
-	alpha := 0.3
-	atb.currentLatency = time.Duration(float64(atb.currentLatency)*(1-alpha) + float64(latency)*alpha)
-
-	// Adjust rate based on latency
-	currentRate := atb.refillRate
-	var newRate float64
-
-	if atb.currentLatency > atb.targetLatency*2 {
-		// Latency too high - reduce rate
-		newRate = currentRate * (1 - atb.adjustment*2)
-	} else if atb.currentLatency > atb.targetLatency {
-		// Latency above target - reduce rate slightly
-		newRate = currentRate * (1 - atb.adjustment)
-	} else if atb.currentLatency < atb.targetLatency/2 {
-		// Latency well below target - increase rate
-		newRate = currentRate * (1 + atb.adjustment)
-	} else {
-		return // No adjustment needed
-	}
-
-	// Apply bounds
-	if newRate < atb.minRate {
-		newRate = atb.minRate
-	}
-	if newRate > atb.maxRate {
-		newRate = atb.maxRate
-	}
-
-	atb.SetRate(newRate)
-}
-
-// GetBackoffTime returns suggested wait time based on current state
-func (rl *RateLimiter) GetBackoffTime() time.Duration {
-	tokens, rate, _, _ := rl.globalBucket.GetStats()
-
-	if tokens > 0 {
-		return 0 // No backoff needed
-	}
-
-	// Calculate time until next token
-	if rate > 0 {
-		return time.Duration(float64(time.Second) / rate)
-	}
-
-	return time.Second // Default backoff
 }

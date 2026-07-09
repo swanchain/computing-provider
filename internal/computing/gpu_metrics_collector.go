@@ -166,15 +166,3 @@ func (c *GPUMetricsCollector) GetAggregatedGPUMetrics() (avgUtilization, avgMemo
 
 	return totalUtilization / float64(len(metrics)), totalMemoryUsage / float64(len(metrics))
 }
-
-// IsGPUAvailable checks if any GPU is available
-func (c *GPUMetricsCollector) IsGPUAvailable() bool {
-	if runtime.GOOS == "darwin" {
-		// Apple Silicon always has GPU
-		return true
-	}
-
-	cmd := exec.Command("nvidia-smi", "--version")
-	err := cmd.Run()
-	return err == nil
-}

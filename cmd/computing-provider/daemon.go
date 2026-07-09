@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -348,6 +349,10 @@ func runDaemon() error {
 
 	finishCh := util.MonitorShutdown(shutdownChan,
 		util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
+		util.ShutdownHandler{Component: "inference-service", StopFunc: func(ctx context.Context) error {
+			inferenceService.Stop()
+			return nil
+		}},
 	)
 	<-finishCh
 

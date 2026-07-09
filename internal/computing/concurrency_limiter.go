@@ -1,11 +1,8 @@
 package computing
 
 import (
-	"context"
-	"errors"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
@@ -65,77 +62,6 @@ func NewSemaphore(max int) *Semaphore {
 	}
 	s.cond = sync.NewCond(&s.mu)
 	return s
-}
-
-// Acquire tries to acquire a slot, blocking until available or timeout
-func (s *Semaphore) Acquire(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for s.current >= s.max {
-		// Check timeout
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			s.timeouts++
-			return false
-		}
-
-		// Wait with timeout
-		done := make(chan struct{})
-		go func() {
-			time.Sleep(remaining)
-			s.cond.Broadcast()
-			close(done)
-		}()
-
-		s.cond.Wait()
-
-		select {
-		case <-done:
-			// Timeout occurred during wait
-			if s.current >= s.max {
-				s.timeouts++
-				return false
-			}
-		default:
-			// Woken up by release
-		}
-	}
-
-	s.current++
-	s.acquired++
-	return true
-}
-
-// TryAcquire attempts to acquire without blocking
-func (s *Semaphore) TryAcquire() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.current >= s.max {
-		s.rejected++
-		return false
-	}
-
-	s.current++
-	s.acquired++
-	return true
-}
-
-// Release releases a slot
-func (s *Semaphore) Release(holdTime time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.current > 0 {
-		s.current--
-		s.released++
-		s.totalHoldTime += holdTime.Milliseconds()
-		s.holdCount++
-		s.cond.Signal()
-	}
 }
 
 // SetMax updates the maximum concurrent slots
@@ -212,138 +138,6 @@ func (cl *ConcurrencyLimiter) Stop() {
 	cl.mu.Unlock()
 
 	logs.GetLogger().Info("Concurrency limiter stopped")
-}
-
-// RegisterModel sets up concurrency limits for a model
-func (cl *ConcurrencyLimiter) RegisterModel(modelID string, maxConcurrent int, gpuMemoryMB int) {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	cl.modelSems[modelID] = NewSemaphore(maxConcurrent)
-	cl.modelGPUMemory[modelID] = gpuMemoryMB
-
-	logs.GetLogger().Infof("Registered model %s: max concurrent %d, GPU memory %d MB",
-		modelID, maxConcurrent, gpuMemoryMB)
-}
-
-// UnregisterModel removes concurrency limits for a model
-func (cl *ConcurrencyLimiter) UnregisterModel(modelID string) {
-	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	delete(cl.modelSems, modelID)
-	delete(cl.modelGPUMemory, modelID)
-}
-
-// Acquire acquires slots for a request (both global and model-specific)
-func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, modelID string) (*ConcurrencyToken, error) {
-	timeout := cl.config.AcquireTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-
-	// Try to acquire global slot first
-	if !cl.globalSem.Acquire(timeout) {
-		return nil, ErrGlobalConcurrencyLimit
-	}
-
-	// Get or create model semaphore
-	cl.mu.RLock()
-	modelSem, exists := cl.modelSems[modelID]
-	cl.mu.RUnlock()
-
-	if !exists {
-		// Create default semaphore for unknown model
-		cl.mu.Lock()
-		modelSem, exists = cl.modelSems[modelID]
-		if !exists {
-			modelSem = NewSemaphore(cl.config.DefaultModelMax)
-			cl.modelSems[modelID] = modelSem
-		}
-		cl.mu.Unlock()
-	}
-
-	// Try to acquire model-specific slot
-	remainingTimeout := timeout - time.Millisecond // Small buffer
-	if remainingTimeout <= 0 {
-		remainingTimeout = time.Millisecond
-	}
-
-	if !modelSem.Acquire(remainingTimeout) {
-		// Release global slot since we couldn't get model slot
-		cl.globalSem.Release(0)
-		return nil, ErrModelConcurrencyLimit
-	}
-
-	return &ConcurrencyToken{
-		modelID:    modelID,
-		limiter:    cl,
-		acquiredAt: time.Now(),
-	}, nil
-}
-
-// TryAcquire attempts to acquire without blocking
-func (cl *ConcurrencyLimiter) TryAcquire(modelID string) (*ConcurrencyToken, error) {
-	// Try global first
-	if !cl.globalSem.TryAcquire() {
-		return nil, ErrGlobalConcurrencyLimit
-	}
-
-	// Get model semaphore
-	cl.mu.RLock()
-	modelSem, exists := cl.modelSems[modelID]
-	cl.mu.RUnlock()
-
-	if !exists {
-		cl.mu.Lock()
-		modelSem, exists = cl.modelSems[modelID]
-		if !exists {
-			modelSem = NewSemaphore(cl.config.DefaultModelMax)
-			cl.modelSems[modelID] = modelSem
-		}
-		cl.mu.Unlock()
-	}
-
-	// Try model-specific
-	if !modelSem.TryAcquire() {
-		cl.globalSem.Release(0)
-		return nil, ErrModelConcurrencyLimit
-	}
-
-	return &ConcurrencyToken{
-		modelID:    modelID,
-		limiter:    cl,
-		acquiredAt: time.Now(),
-	}, nil
-}
-
-// ConcurrencyToken represents an acquired concurrency slot
-type ConcurrencyToken struct {
-	modelID    string
-	limiter    *ConcurrencyLimiter
-	acquiredAt time.Time
-	released   int32 // atomic flag to prevent double release
-}
-
-// Release releases the concurrency slots
-func (ct *ConcurrencyToken) Release() {
-	if !atomic.CompareAndSwapInt32(&ct.released, 0, 1) {
-		return // Already released
-	}
-
-	holdTime := time.Since(ct.acquiredAt)
-
-	ct.limiter.mu.RLock()
-	modelSem := ct.limiter.modelSems[ct.modelID]
-	ct.limiter.mu.RUnlock()
-
-	if modelSem != nil {
-		modelSem.Release(holdTime)
-	}
-	ct.limiter.globalSem.Release(holdTime)
 }
 
 // gpuAwarenessLoop adjusts limits based on GPU memory
@@ -448,20 +242,6 @@ func (cl *ConcurrencyLimiter) GetMetrics() ConcurrencyMetrics {
 	}
 }
 
-// GetModelConcurrency returns current and max concurrency for a model
-func (cl *ConcurrencyLimiter) GetModelConcurrency(modelID string) (current, max int) {
-	cl.mu.RLock()
-	sem := cl.modelSems[modelID]
-	cl.mu.RUnlock()
-
-	if sem == nil {
-		return 0, cl.config.DefaultModelMax
-	}
-
-	current, max, _, _, _, _, _ = sem.GetStats()
-	return
-}
-
 // SetGlobalMax updates the global maximum concurrent requests
 func (cl *ConcurrencyLimiter) SetGlobalMax(max int) {
 	cl.globalSem.SetMax(max)
@@ -481,9 +261,3 @@ func (cl *ConcurrencyLimiter) SetModelMax(modelID string, max int) {
 	sem.SetMax(max)
 	logs.GetLogger().Infof("Updated model %s concurrency limit to %d", modelID, max)
 }
-
-// Concurrency errors
-var (
-	ErrGlobalConcurrencyLimit = errors.New("global concurrency limit reached")
-	ErrModelConcurrencyLimit  = errors.New("model concurrency limit reached")
-)

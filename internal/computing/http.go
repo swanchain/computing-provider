@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strings"
 	"time"
@@ -71,17 +70,6 @@ func NewHttpClient(host string, header http.Header) *HttpClient {
 		host:   host,
 		header: header,
 	}
-}
-
-func (c *HttpClient) Get(api string, queries url.Values, dest any) error {
-	if queries != nil {
-		api += "?" + queries.Encode()
-	}
-	return c.Request(http.MethodGet, api, nil, dest, "")
-}
-
-func (c *HttpClient) PostForm(api string, data url.Values, dest any) error {
-	return c.Request(http.MethodPost, api, strings.NewReader(data.Encode()), dest, "application/x-www-form-urlencoded")
 }
 
 func (c *HttpClient) PostJSON(api string, data any, dest any) error {

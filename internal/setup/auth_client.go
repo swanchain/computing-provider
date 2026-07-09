@@ -179,60 +179,6 @@ func (c *AuthClient) UpgradeToProvider(token, name, walletAddress string) (*Upgr
 	return resp, nil
 }
 
-// ProviderSignupRequest represents the provider signup request payload (direct signup without user account)
-type ProviderSignupRequest struct {
-	Name               string `json:"name"`
-	OwnerAddress       string `json:"owner_address"`
-	WorkerAddress      string `json:"worker_address,omitempty"`
-	BeneficiaryAddress string `json:"beneficiary_address,omitempty"`
-	Description        string `json:"description,omitempty"`
-}
-
-// ProviderSignupResponse represents the provider signup response
-type ProviderSignupResponse struct {
-	ProviderID string   `json:"provider_id"`
-	ApiKey     string   `json:"api_key"`
-	KeyPrefix  string   `json:"key_prefix"`
-	Status     string   `json:"status"`
-	CanConnect bool     `json:"can_connect"`
-	Message    string   `json:"message"`
-	NextSteps  []string `json:"next_steps"`
-	Error      string   `json:"error,omitempty"`
-}
-
-// ProviderSignup creates a new provider account directly
-// This is the main signup flow - creates provider and returns API key
-func (c *AuthClient) ProviderSignup(name, ownerAddress string) (*ProviderSignupResponse, error) {
-	// Validate owner address format
-	if ownerAddress != "" {
-		if err := ValidateEVMAddress(ownerAddress); err != nil {
-			return nil, fmt.Errorf("invalid wallet address: %w", err)
-		}
-	}
-
-	req := ProviderSignupRequest{
-		Name:         name,
-		OwnerAddress: ownerAddress,
-	}
-
-	resp := &ProviderSignupResponse{}
-	if err := c.doRequest("POST", "/provider/signup", nil, req, resp); err != nil {
-		return nil, err
-	}
-
-	// Check for error in response
-	if resp.Error != "" {
-		return nil, fmt.Errorf("signup failed: %s", resp.Error)
-	}
-
-	// Check if we got an API key
-	if resp.ApiKey == "" {
-		return nil, fmt.Errorf("signup failed: no API key returned")
-	}
-
-	return resp, nil
-}
-
 // ProviderStatusResponse represents the provider status response
 type ProviderStatusResponse struct {
 	ProviderID  string   `json:"provider_id"`

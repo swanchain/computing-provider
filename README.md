@@ -367,11 +367,9 @@ computing-provider inference set-beneficiary 0xYourWalletAddress
 For on-chain collateral (optional, enables staking rewards):
 
 ```bash
-# 1. Create a wallet
-computing-provider wallet new
-
-# 2. Add collateral
-computing-provider collateral add --ecp --from <your-wallet> <amount>
+# Get deposit instructions and check your collateral status
+computing-provider inference deposit
+computing-provider inference deposit --check
 ```
 
 > **Note:** You can run the provider without a wallet - it will still serve inference requests, but you won't receive on-chain rewards.
@@ -413,7 +411,6 @@ computing-provider inference deposit         # Get collateral deposit instructio
 computing-provider inference deposit --check # Check current collateral status
 computing-provider inference set-beneficiary 0x...  # Set reward wallet
 computing-provider dashboard                 # Web UI (port 3005)
-computing-provider task list --ecp           # List tasks
 ```
 
 ### Setup Wizard
@@ -429,14 +426,6 @@ computing-provider setup --api-key=sk-prov-xxx  # Use existing API key
 computing-provider setup discover            # Just discover model servers
 computing-provider setup login               # Login to existing account
 computing-provider setup signup              # Create new account
-```
-
-### Wallet Commands (for rewards)
-
-```bash
-computing-provider wallet new                # Create wallet
-computing-provider wallet list               # List wallets
-computing-provider wallet import <file>      # Import private key
 ```
 
 ### Hardware Info
@@ -456,7 +445,6 @@ computing-provider research gpu-benchmark    # Run benchmark
 | `go: command not found` | Install Go 1.21+: see [go.dev/dl](https://go.dev/dl/) |
 | `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
-| `container "/resource-exporter" already in use` | Run `docker rm -f resource-exporter` |
 | `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
 | `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
 | `WebSocket connection failed` | Check WebSocketURL and network connectivity |

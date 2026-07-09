@@ -1999,24 +1999,6 @@ func (c *InferenceClient) sendWarmupResponse(response *WarmupResponse) {
 	c.send <- msgBytes
 }
 
-func (c *InferenceClient) sendAck(requestID string, success bool, message string) {
-	payload := AckPayload{
-		RequestID: requestID,
-		Success:   success,
-		Message:   message,
-	}
-
-	payloadBytes, _ := json.Marshal(payload)
-	msg := Message{
-		Type:      MsgTypeAck,
-		RequestID: requestID,
-		Payload:   payloadBytes,
-	}
-
-	msgBytes, _ := json.Marshal(msg)
-	c.send <- msgBytes
-}
-
 func (c *InferenceClient) sendError(requestID string, code int, message string) {
 	payload := ErrorPayload{
 		RequestID: requestID,
@@ -2073,11 +2055,6 @@ func (c *InferenceClient) IsConnected() bool {
 		return false
 	}
 	return c.missedAcks < 3
-}
-
-// GetNodeID returns the local node ID
-func (c *InferenceClient) GetNodeID() string {
-	return c.nodeID
 }
 
 // GetMetrics returns a snapshot of the current metrics

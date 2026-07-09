@@ -19,14 +19,6 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/setup"
 )
 
-func InitComputingProvider(cpRepoPath string) string {
-	nodeID, peerID, address := GenerateNodeID(cpRepoPath)
-
-	logs.GetLogger().Infof("Node ID :%s Peer ID:%s address:%s",
-		nodeID, peerID, address)
-	return nodeID
-}
-
 func GetNodeId(cpRepoPath string) string {
 	nodeID, _, _ := GenerateNodeID(cpRepoPath)
 	return nodeID

@@ -580,24 +580,6 @@ func (r *ModelRegistry) ReloadConfig() error {
 	return r.loadConfig()
 }
 
-// GetModelMappings returns model mappings in the original format (for compatibility)
-func (r *ModelRegistry) GetModelMappings() map[string]ModelMapping {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	mappings := make(map[string]ModelMapping, len(r.models))
-	for id, model := range r.models {
-		mappings[id] = ModelMapping{
-			Container: model.Container,
-			Endpoint:  model.Endpoint,
-			GPUMemory: model.GPUMemory,
-			Category:  model.Category,
-			APIKey:    model.APIKey,
-		}
-	}
-	return mappings
-}
-
 // GetStatusSummary returns a summary of model statuses
 func (r *ModelRegistry) GetStatusSummary() map[string]interface{} {
 	r.mu.RLock()

@@ -6,7 +6,6 @@ import (
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/internal/db"
-	"gorm.io/gorm"
 )
 
 // MetricsHistoryEntity represents a historical metrics data point in the database
@@ -304,34 +303,4 @@ func sortInt64s(a []int64) {
 			a[j], a[j-1] = a[j-1], a[j]
 		}
 	}
-}
-
-// GetRecentDataPoints returns the most recent N data points (for quick access)
-func (h *MetricsHistory) GetRecentDataPoints(count int) ([]HistoricalDataPoint, error) {
-	database := db.NewDbService()
-	if database == nil {
-		return nil, nil
-	}
-
-	var entries []MetricsHistoryEntity
-	err := database.Order("timestamp DESC").Limit(count).Find(&entries).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
-		return nil, err
-	}
-
-	// Reverse to get chronological order
-	result := make([]HistoricalDataPoint, len(entries))
-	for i, e := range entries {
-		result[len(entries)-1-i] = HistoricalDataPoint{
-			Timestamp:         e.Timestamp,
-			TotalRequests:     e.TotalRequests,
-			SuccessRate:       e.SuccessRate,
-			AvgLatencyMs:      e.AvgLatencyMs,
-			P99LatencyMs:      e.P99LatencyMs,
-			TokensPerSecond:   e.TokensPerSecond,
-			RequestsPerMinute: e.RequestsPerMinute,
-		}
-	}
-
-	return result, nil
 }

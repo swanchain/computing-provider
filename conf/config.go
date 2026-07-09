@@ -106,13 +106,6 @@ type RPC struct {
 	SwanChainRpc string `toml:"SWAN_CHAIN_RPC"`
 }
 
-func GetRpcByNetWorkName() (string, error) {
-	if len(strings.TrimSpace(GetConfig().RPC.SwanChainRpc)) == 0 {
-		return "", fmt.Errorf("You need to set SWAN_CHAIN_RPC in the configuration file")
-	}
-	return GetConfig().RPC.SwanChainRpc, nil
-}
-
 func InitConfig(cpRepoPath string, standalone bool) error {
 	configFile := filepath.Join(cpRepoPath, "config.toml")
 

@@ -70,15 +70,6 @@ func (m *CredentialsManager) Load() (*Credentials, error) {
 	return &creds, nil
 }
 
-// HasApiKey checks if an API key is stored
-func (m *CredentialsManager) HasApiKey() bool {
-	creds, err := m.Load()
-	if err != nil || creds == nil {
-		return false
-	}
-	return creds.ApiKey != ""
-}
-
 // GetApiKey returns the stored API key
 func (m *CredentialsManager) GetApiKey() string {
 	creds, err := m.Load()
@@ -86,15 +77,6 @@ func (m *CredentialsManager) GetApiKey() string {
 		return ""
 	}
 	return creds.ApiKey
-}
-
-// Delete removes the credentials file
-func (m *CredentialsManager) Delete() error {
-	path := m.credentialsPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil // Already doesn't exist
-	}
-	return os.Remove(path)
 }
 
 // MaskApiKey returns a masked version of the API key for display

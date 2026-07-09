@@ -37,7 +37,6 @@ func main() {
 			setupCmd,
 			infoCmd,
 			stateCmd,
-			taskCmd,
 			researchCmd,
 			dashboardCmd,
 			inferenceCmd,

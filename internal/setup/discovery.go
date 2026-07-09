@@ -306,55 +306,6 @@ func (d *ModelDiscovery) checkHealth(endpoint string) bool {
 	return false
 }
 
-// VerifyModel sends a minimal inference request to verify a model works
-func (d *ModelDiscovery) VerifyModel(endpoint, model string, serverType ServerType) error {
-	var reqBody []byte
-	var url string
-	var err error
-
-	switch serverType {
-	case ServerTypeOllama:
-		url = endpoint + "/api/generate"
-		req := map[string]interface{}{
-			"model":  model,
-			"prompt": "hi",
-			"stream": false,
-			"options": map[string]interface{}{
-				"num_predict": 1,
-			},
-		}
-		reqBody, err = json.Marshal(req)
-	default:
-		url = endpoint + "/v1/chat/completions"
-		req := map[string]interface{}{
-			"model": model,
-			"messages": []map[string]string{
-				{"role": "user", "content": "hi"},
-			},
-			"max_tokens": 1,
-		}
-		reqBody, err = json.Marshal(req)
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to create verification request: %w", err)
-	}
-
-	// Use a longer timeout for verification
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(url, "application/json", strings.NewReader(string(reqBody)))
-	if err != nil {
-		return fmt.Errorf("verification request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("verification returned status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
 // EstimateGPUMemory estimates GPU memory needed for a model based on its name
 func EstimateGPUMemory(modelName string) int {
 	modelLower := strings.ToLower(modelName)
@@ -764,32 +715,6 @@ func calculateMatchScore(normalizedLocal, normalizedSwan, originalLocal, origina
 	}
 
 	return familyScore + versionScore + sizeScore
-}
-
-// extractModelInfo extracts model family and size from normalized name
-// Deprecated: Use extractModelInfoV2 for better version extraction
-func extractModelInfo(name string) (family string, size string) {
-	// Common size patterns
-	sizePatterns := []string{"70b", "65b", "34b", "33b", "32b", "30b", "24b", "14b", "13b", "11b", "8b", "7b", "6b", "4b", "3b", "2b", "1b"}
-
-	for _, pattern := range sizePatterns {
-		if strings.Contains(name, pattern) {
-			size = pattern
-			// Extract family (everything before the size)
-			idx := strings.Index(name, pattern)
-			if idx > 0 {
-				family = strings.Trim(name[:idx], "-")
-			}
-			break
-		}
-	}
-
-	// If no size found, the whole name is the family
-	if family == "" {
-		family = name
-	}
-
-	return family, size
 }
 
 // versionPattern matches version numbers like "3", "3-2", "2-5", etc.

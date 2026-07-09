@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Computing Provider v2 is a CLI tool that turns GPUs into AI inference endpoints on the Swan Chain network. It connects outbound to Swan Inference via WebSocket (no inbound ports needed), registers available models, and forwards inference requests to local model servers (SGLang/Ollama).
 
-**Two modes:** Inference (default, no wallet/blockchain needed) and ZK-Proof (requires wallet, public IP, v28 parameters).
+**Inference-only.** The legacy ZK-Proof/UBI-task mode, wallets, and smart-contract bindings were removed (see commit `677e37d`); that workload lives in the legacy [go-computing-provider](https://github.com/swanchain/go-computing-provider) repo. "UBI rewards" in this repo refers to the server-side inference rewards program (token throughput/uptime-based) — no client-side blockchain code is involved. No wallet is required (a beneficiary address is optional, for rewards).
 
 ## Prerequisites
 
@@ -62,12 +62,7 @@ go build -o computing-provider ./cmd/computing-provider && ./computing-provider 
 
 **Build injects via ldflags:** `build.NetWorkTag` (mainnet/testnet) and `build.CurrentCommit` (git hash).
 
-| Mode | Description | Wallet Required |
-|------|-------------|-----------------|
-| **Inference** (Default) | AI inference via WebSocket | No (optional for rewards) |
-| ZK-Proof | ZK-Snark proof generation | Yes |
-
-## Inference Mode Quick Reference
+## Inference Quick Reference
 
 **Prerequisites:** Docker + NVIDIA Container Toolkit (Linux) or Ollama (macOS)
 
@@ -125,76 +120,59 @@ docker run -d --gpus all -p 30000:30000 --name sglang \
 
 ```bash
 go test ./...                           # All tests
-go test ./internal/contract/ecp/...     # Single package
+go test ./internal/setup/...            # Single package
 go test -run TestFunctionName ./path/   # Single test
 ```
 
-Test coverage is minimal (4 test files: contract stubs, tablewriter, sequencer service).
+Test coverage is minimal (currently only `internal/setup`).
 
 ## Architecture
 
 ### Startup Flow
 
-`main.go` → urfave/cli v2 app → `run` command → `initializer.ProjectInit()`:
+`main.go` → urfave/cli v2 app → `Before` hook runs `db.InitDb()` → `run` command → `runDaemon()` in `cmd/computing-provider/daemon.go`:
 1. `conf.InitConfig()` — loads `$CP_PATH/config.toml` (default `~/.swan/computing`)
-2. `computing.InitComputingProvider()` — generates node ID from ECDSA keypair
-3. `computing.NewCronTask().RunTask()` — starts background scheduled tasks
-4. `computing.NewInferenceService().Start()` — connects WebSocket, registers models
+2. `computing.CheckMachineIdentity()` — detects private_key copied from another machine
+3. `computing.NewInferenceService(nodeID, cpRepoPath).Start()` — connects WebSocket, registers models
+4. gin HTTP API on `API.Port` — all `/api/v1/computing/inference/*` routes are registered inline in `runDaemon`
+5. `util.MonitorShutdown` — graceful shutdown on SIGTERM/SIGINT (stops HTTP server, then `InferenceService.Stop()` which cascades to all subsystems)
 
 ### Core Package: `internal/computing/`
 
-This is the heart of the system (26 files). Key components and their relationships:
+Key components and their relationships:
 
 ```
-HTTP API (http.go)
+HTTP API (routes in cmd/computing-provider/daemon.go)
     ↕
 InferenceService (inference_service.go)  ← orchestrates everything
     ├── ModelRegistry (model_registry.go)       ← tracks models from models.json, fsnotify hot-reload
     ├── ModelHealthChecker (model_health_checker.go) ← polls model endpoints
-    ├── RateLimiter (rate_limiter.go)            ← GPU-aware rate limiting
-    ├── ConcurrencyLimiter (concurrency_limiter.go)
-    ├── RequestQueue (request_queue.go)          ← request queueing
-    ├── RetryPolicy (retry_policy.go)            ← exponential backoff with jitter
+    ├── RateLimiter (rate_limiter.go)            ← GPU-aware rate limit config + metrics
+    ├── ConcurrencyLimiter (concurrency_limiter.go) ← concurrency config + metrics
+    ├── RetryPolicy (retry_policy.go)            ← retry config + metrics
     ├── InferenceMetrics (inference_metrics.go)  ← metrics tracking
+    ├── MetricsHistory (metrics_history.go)      ← periodic metric snapshots to SQLite
     ├── GPUMetricsCollector (gpu_metrics_collector.go)
     └── InferenceClient (inference_client.go)    ← WebSocket protocol to Swan Inference
 ```
+
+> **Caveat:** RateLimiter, ConcurrencyLimiter, and RetryPolicy are currently *configuration and metrics surfaces only* — their enforcement paths (`Allow`/`Acquire`/`Execute`) are not wired into the request flow. The API endpoints that set limits update config/metrics but do not gate requests. Wire them into `InferenceClient`/`InferenceService` request handling before relying on them.
 
 **ModelRegistry** uses callback pattern (`onModelAdded`, `onModelRemoved`, `onHealthUpdate`) to notify InferenceService of changes.
 
 **Dashboard:** `internal/dashboard/` — embedded React/Vite frontend served by Go (port 3005). Proxies API requests to the main provider.
 
-**Parallel systems** (not inference):
-- `ecp_image_service.go` — ECP image-based job management
-- `ubi_service.go` — UBI/ZK proof task management
-- `sequence_service.go` — Sequencer integration for low-gas transactions
-- `cron_task.go` / `supervisor.go` — Background task orchestration
-
-### Dependency Injection (Google Wire)
-
-Wire is used only for entity services wrapping GORM. Defined in `wire.go` (build tag `wireinject`), generated in `wire_gen.go`:
-- `NewTaskService()`, `NewJobService()`, `NewCpInfoService()`, `NewEcpJobService()`, `NewCpBalanceService()`
-
-Each service is a thin struct embedding `*gorm.DB`. If you add a new entity service, update both `wire.go` and run `wire` to regenerate.
-
-### Network Configuration: `build/`
-
-`build/parameters.json` (embedded via `//go:embed`) contains mainnet/testnet contract addresses. Contract selection is height-based: `LoadParam()` compares current block height against `BoundaryHeight` to choose legacy vs upgrade contracts.
+**Other packages:** `internal/setup/` (setup wizard: auth, prerequisites, model discovery), `internal/models/` (HuggingFace catalog/download/verify helpers), `internal/db/` (SQLite), `conf/` (config parsing), `util/` (shutdown, HTTP serve).
 
 ### Database: `internal/db/`
 
-SQLite with GORM, WAL mode, max 1 open connection (avoids lock contention). Auto-migrates entities on startup.
-
-### Smart Contracts: `internal/contract/`
-
-Auto-generated Ethereum contract bindings (account, ecp tasks/collateral/sequencer, token). Do not edit generated files.
+SQLite with GORM, WAL mode, max 1 open connection (avoids lock contention). The only table is `metrics_history`, auto-migrated by `MetricsHistory.migrate()` on first use.
 
 ## Configuration
 
 **Config files** (in `$CP_PATH`, default `~/.swan/computing`):
 - `config.toml` — main config (parsed by `conf/config.go` using BurntSushi/toml)
 - `models.json` — model-to-endpoint mapping (watched by fsnotify for hot-reload)
-- `price.toml` — resource pricing
 
 **config.toml example:**
 ```toml
@@ -230,30 +208,31 @@ Provider communicates with Swan Inference using typed JSON messages:
 ## CLI Structure (urfave/cli v2)
 
 Commands are defined in `cmd/computing-provider/`:
-- `run.go` — `run`, `init`, `info`, `state`, `account`, `contract` commands
+- `daemon.go` — `run` command (`runDaemon`: starts InferenceService + HTTP API + graceful shutdown)
+- `run.go` — `init`, `info`, `state` commands
 - `setup.go` — `setup` wizard (recommended for new providers), subcommands: `discover`, `login`, `signup`
-- `inference.go` — `inference status`, `inference config`, `inference set-beneficiary`
-- `wallet.go` — `wallet`, `collateral`, `sequencer` commands
-- `task.go` — task listing
-- `ubi.go` — `run` daemon (starts HTTP server + routes), `ubi-task` management
-- `ubi_zero.go` — `ubi-zero` operations
-- `price.go` — resource pricing management
-- `research.go` — hardware/GPU info and benchmarks
+- `inference.go` — `inference` subcommands: `status`, `config`, `deposit`, `set-beneficiary`, `keygen`, `request-approval`, `recommend-models`, `select-model`
+- `models.go` — `models` subcommands: `catalog`, `download`, `verify`, `list`, `rm`
+- `research.go` — `research` subcommands: `hardware`, `gpu-info`, `gpu-benchmark`
 - `dashboard.go` — web UI (port 3005)
+- `auth.go` — shared auth/login helpers used by setup and inference commands
+- `tablewriter.go` — CLI table output helpers
 
 Global flags: `--repo` sets `CP_PATH` (default `~/.swan/computing`), `--help`/`-h` shows help for any command/subcommand, `--version` shows version info.
 
 ## REST API
 
-Base: `/api/v1/computing/` (routes registered in `ubi.go` `runDaemon`)
+Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.go` `runDaemon`)
 
 **Inference endpoints** (`/inference/`):
 - `GET /metrics` — JSON metrics summary
 - `GET /metrics/prometheus` — Prometheus format
+- `GET /metrics/history` — historical metrics (`duration`, `resolution` query params)
 - `GET /status` — connection and active models status
 - `GET /models` — list all models with status
 - `GET /models/:model_id` — single model status
 - `GET /models/:model_id/health` — model health details
+- `GET /models/:model_id/metrics` — per-model detailed metrics
 - `GET /health` — all models health
 - `POST /models/:model_id/enable` — enable a model
 - `POST /models/:model_id/disable` — disable a model
@@ -263,22 +242,11 @@ Base: `/api/v1/computing/` (routes registered in `ubi.go` `runDaemon`)
 **Request management** (`/inference/`):
 - `GET /ratelimit`, `GET /concurrency`, `GET /retries` — metrics
 - `GET /request-management` — combined status
+- `GET /requests` — request queue/inflight status
 - `POST /ratelimit/global`, `POST /ratelimit/model/:model_id` — set rate limits
 - `POST /concurrency/global`, `POST /concurrency/model/:model_id` — set concurrency limits
 
-**ECP/Docker endpoints** (`/cp/`):
-- `GET /cp` — resources, `POST /cp/deploy` — deploy job, `DELETE /cp/job/:job_uuid` — delete job
-- `POST /cp/ubi` — UBI task, `POST /cp/zk_task` — ZK task
-
-## Task Types
-
-| ID | Type | Provider |
-|----|------|----------|
-| 1 | FIL-C2 | ECP |
-| 2 | Mining | ECP |
-| 3 | AI | FCP |
-| 4 | Inference | ECP |
-| 5 | NodePort | — |
+> Note: the rate-limit/concurrency POST endpoints update configuration and metrics, but enforcement is not wired into the request path (see Architecture caveat).
 
 ## Common Issues
 
@@ -287,6 +255,5 @@ Base: `/api/v1/computing/` (routes registered in `ubi.go` `runDaemon`)
 | `go: command not found` | Install Go 1.21+ (see Prerequisites section above) |
 | `permission denied...docker.sock` | `sudo usermod -aG docker $USER` |
 | `could not select device driver "nvidia"` | Install NVIDIA Container Toolkit |
-| `container "/resource-exporter" already in use` | `docker rm -f resource-exporter` |
 | `authentication required` / `invalid provider API key` | Set valid `sk-prov-*` key in config.toml or `INFERENCE_API_KEY` |
 | Config changes not taking effect | Rebuild binary or use `go run ./cmd/computing-provider run` |

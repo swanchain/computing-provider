@@ -3,7 +3,6 @@ package computing
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -394,20 +393,6 @@ func (h *ModelHealthChecker) GetAllStatuses() map[string]*ModelStatus {
 	return result
 }
 
-// GetHealthyModels returns list of healthy model IDs
-func (h *ModelHealthChecker) GetHealthyModels() []string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	var healthy []string
-	for id, status := range h.statuses {
-		if status.Health == ModelHealthHealthy || status.Health == ModelHealthDegraded {
-			healthy = append(healthy, id)
-		}
-	}
-	return healthy
-}
-
 // IsModelHealthy returns whether a specific model is healthy enough to serve requests
 func (h *ModelHealthChecker) IsModelHealthy(modelID string) bool {
 	h.mu.RLock()
@@ -431,10 +416,4 @@ func (h *ModelHealthChecker) ForceCheck(modelID string) {
 	if exists {
 		h.checkModel(modelID)
 	}
-}
-
-// GetStatusJSON returns all statuses as JSON
-func (h *ModelHealthChecker) GetStatusJSON() ([]byte, error) {
-	statuses := h.GetAllStatuses()
-	return json.MarshalIndent(statuses, "", "  ")
 }

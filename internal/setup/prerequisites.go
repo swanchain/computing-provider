@@ -50,16 +50,6 @@ func (pc *PrerequisiteChecker) CheckAll() []PrerequisiteResult {
 	return pc.results
 }
 
-// hasPassingResult checks if a prerequisite with the given name passed
-func (pc *PrerequisiteChecker) hasPassingResult(name string) bool {
-	for _, r := range pc.results {
-		if r.Name == name && r.Status {
-			return true
-		}
-	}
-	return false
-}
-
 // HasCriticalFailures returns true if any critical prerequisite failed
 // For Inference mode: need Docker OR Ollama (not both)
 func (pc *PrerequisiteChecker) HasCriticalFailures() bool {
@@ -81,11 +71,6 @@ func (pc *PrerequisiteChecker) HasCriticalFailures() bool {
 	}
 
 	return false
-}
-
-// GetResults returns all check results
-func (pc *PrerequisiteChecker) GetResults() []PrerequisiteResult {
-	return pc.results
 }
 
 // commandTimeout is the timeout for running commands
@@ -284,73 +269,4 @@ func (pc *PrerequisiteChecker) checkGPU() {
 		result.Message = fmt.Sprintf("%d GPUs: %s", len(gpus), strings.Join(gpus, ", "))
 	}
 	pc.results = append(pc.results, result)
-}
-
-// GetGPUInfo returns detailed GPU information
-func GetGPUInfo() ([]GPUInfo, error) {
-	if runtime.GOOS == "darwin" {
-		return getAppleSiliconInfo()
-	}
-	return getNvidiaGPUInfo()
-}
-
-// GPUInfo represents information about a GPU
-type GPUInfo struct {
-	Index      int
-	Name       string
-	MemoryMB   int
-	MemoryFree int
-}
-
-// getAppleSiliconInfo returns info for Apple Silicon
-func getAppleSiliconInfo() ([]GPUInfo, error) {
-	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var memBytes int64
-	fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &memBytes)
-	memMB := int(memBytes / 1024 / 1024)
-
-	// Apple Silicon shares memory with GPU, typically can use ~75% for ML
-	gpuMemMB := int(float64(memMB) * 0.75)
-
-	return []GPUInfo{
-		{
-			Index:      0,
-			Name:       "Apple Silicon (Unified Memory)",
-			MemoryMB:   gpuMemMB,
-			MemoryFree: gpuMemMB,
-		},
-	}, nil
-}
-
-// getNvidiaGPUInfo returns info for NVIDIA GPUs
-func getNvidiaGPUInfo() ([]GPUInfo, error) {
-	out, err := exec.Command("nvidia-smi", "--query-gpu=index,name,memory.total,memory.free", "--format=csv,noheader,nounits").Output()
-	if err != nil {
-		return nil, err
-	}
-
-	var gpus []GPUInfo
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	for _, line := range lines {
-		parts := strings.Split(line, ",")
-		if len(parts) >= 4 {
-			var index, memTotal, memFree int
-			fmt.Sscanf(strings.TrimSpace(parts[0]), "%d", &index)
-			fmt.Sscanf(strings.TrimSpace(parts[2]), "%d", &memTotal)
-			fmt.Sscanf(strings.TrimSpace(parts[3]), "%d", &memFree)
-
-			gpus = append(gpus, GPUInfo{
-				Index:      index,
-				Name:       strings.TrimSpace(parts[1]),
-				MemoryMB:   memTotal,
-				MemoryFree: memFree,
-			})
-		}
-	}
-
-	return gpus, nil
 }
