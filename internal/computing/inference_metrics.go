@@ -7,10 +7,9 @@ import (
 	"time"
 )
 
-// InferenceMetrics tracks metrics for the inference service
-type InferenceMetrics struct {
-	mu sync.RWMutex
-
+// InferenceMetricsData holds the exported metric values. It contains no
+// locks, so it can be copied freely (e.g. returned as a snapshot).
+type InferenceMetricsData struct {
 	// Connection metrics
 	ConnectionState    string    `json:"connection_state"`
 	LastConnectedAt    time.Time `json:"last_connected_at,omitempty"`
@@ -43,6 +42,13 @@ type InferenceMetrics struct {
 	MemoryUsagePercent float64 `json:"memory_usage_percent"`
 	MemoryUsedGB       float64 `json:"memory_used_gb"`
 	MemoryTotalGB      float64 `json:"memory_total_gb"`
+}
+
+// InferenceMetrics tracks metrics for the inference service
+type InferenceMetrics struct {
+	mu sync.RWMutex
+
+	InferenceMetricsData
 
 	// Time tracking for rate calculations
 	startTime        time.Time
@@ -104,9 +110,11 @@ type RequestMetric struct {
 // NewInferenceMetrics creates a new InferenceMetrics instance
 func NewInferenceMetrics() *InferenceMetrics {
 	return &InferenceMetrics{
-		ConnectionState:  "disconnected",
-		ModelMetrics:     make(map[string]*ModelMetrics),
-		GPUMetrics:       make([]GPUMetrics, 0),
+		InferenceMetricsData: InferenceMetricsData{
+			ConnectionState: "disconnected",
+			ModelMetrics:    make(map[string]*ModelMetrics),
+			GPUMetrics:      make([]GPUMetrics, 0),
+		},
 		startTime:        time.Now(),
 		latencies:        make([]float64, 0, 1000),
 		maxLatencySample: 1000,
@@ -156,8 +164,17 @@ func (m *InferenceMetrics) RecordRequestStart(model string, streaming bool) {
 	mm.ActiveRequests++
 }
 
-// RecordRequestEnd records the completion of a request
-func (m *InferenceMetrics) RecordRequestEnd(model string, latencyMs float64, tokensIn, tokensOut int, success bool, errorReason string) {
+// RecordRequestEnd records the completion of a request and appends it to
+// the request history buffer (served by the /inference/requests endpoint)
+func (m *InferenceMetrics) RecordRequestEnd(req RequestMetric) {
+	model := req.Model
+	latencyMs := req.LatencyMs
+	tokensIn := req.TokensIn
+	tokensOut := req.TokensOut
+	success := req.Success
+
+	m.RecordRequest(req)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -244,23 +261,13 @@ func (m *InferenceMetrics) UpdateGPUMetrics(gpuMetrics []GPUMetrics) {
 	m.GPUMetrics = gpuMetrics
 }
 
-// UpdateSystemMetrics updates system-level metrics
-func (m *InferenceMetrics) UpdateSystemMetrics(cpuPercent, memPercent, memUsedGB, memTotalGB float64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.CPUUsagePercent = cpuPercent
-	m.MemoryUsagePercent = memPercent
-	m.MemoryUsedGB = memUsedGB
-	m.MemoryTotalGB = memTotalGB
-}
-
 // GetSnapshot returns a copy of the current metrics
-func (m *InferenceMetrics) GetSnapshot() InferenceMetrics {
+func (m *InferenceMetrics) GetSnapshot() InferenceMetricsData {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// Create a copy
-	snapshot := *m
+	// Create a copy of the lock-free data
+	snapshot := m.InferenceMetricsData
 
 	// Deep copy model metrics
 	snapshot.ModelMetrics = make(map[string]*ModelMetrics)
@@ -272,9 +279,6 @@ func (m *InferenceMetrics) GetSnapshot() InferenceMetrics {
 	// Deep copy GPU metrics
 	snapshot.GPUMetrics = make([]GPUMetrics, len(m.GPUMetrics))
 	copy(snapshot.GPUMetrics, m.GPUMetrics)
-
-	// Don't copy internal tracking fields
-	snapshot.latencies = nil
 
 	return snapshot
 }
@@ -381,30 +385,6 @@ func (m *InferenceMetrics) GetPrometheusMetrics() string {
 	sb.WriteString(fmt.Sprintf("inference_memory_usage_percent %.2f\n", m.MemoryUsagePercent))
 
 	return sb.String()
-}
-
-// Reset resets all metrics
-func (m *InferenceMetrics) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.TotalRequests = 0
-	m.SuccessfulReqs = 0
-	m.FailedReqs = 0
-	m.StreamingReqs = 0
-	m.AvgLatencyMs = 0
-	m.P50LatencyMs = 0
-	m.P95LatencyMs = 0
-	m.P99LatencyMs = 0
-	m.TotalTokensIn = 0
-	m.TotalTokensOut = 0
-	m.TokensPerSecond = 0
-	m.ActiveRequests = 0
-	m.RequestsPerMinute = 0
-	m.ReconnectCount = 0
-	m.ModelMetrics = make(map[string]*ModelMetrics)
-	m.latencies = make([]float64, 0, m.maxLatencySample)
-	m.startTime = time.Now()
 }
 
 // RecordRequest adds a request to the history circular buffer

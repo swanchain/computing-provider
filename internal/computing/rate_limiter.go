@@ -68,6 +68,23 @@ func NewTokenBucket(tokensPerSecond float64, burstSize int) *TokenBucket {
 	}
 }
 
+// Allow checks if a request is allowed and consumes a token
+func (tb *TokenBucket) Allow() bool {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+
+	tb.refill()
+
+	if tb.tokens >= 1 {
+		tb.tokens--
+		tb.totalAllowed++
+		return true
+	}
+
+	tb.totalThrottled++
+	return false
+}
+
 // refill adds tokens based on elapsed time
 func (tb *TokenBucket) refill() {
 	now := time.Now()
@@ -147,6 +164,26 @@ func (rl *RateLimiter) Stop() {
 	rl.mu.Unlock()
 
 	logs.GetLogger().Info("Rate limiter stopped")
+}
+
+// AllowModel checks if a request for a specific model is allowed
+func (rl *RateLimiter) AllowModel(modelID string) bool {
+	// Check global limit first
+	if !rl.globalBucket.Allow() {
+		return false
+	}
+
+	// Check model-specific limit
+	rl.mu.RLock()
+	bucket, exists := rl.modelBuckets[modelID]
+	rl.mu.RUnlock()
+
+	if !exists {
+		// No model-specific limit, allow
+		return true
+	}
+
+	return bucket.Allow()
 }
 
 // SetModelLimit sets a rate limit for a specific model

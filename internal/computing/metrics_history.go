@@ -61,7 +61,7 @@ func NewMetricsHistory() *MetricsHistory {
 }
 
 // Start begins the metrics recording goroutine
-func (h *MetricsHistory) Start(metricsProvider func() *InferenceMetrics) error {
+func (h *MetricsHistory) Start(metricsProvider func() *InferenceMetricsData) error {
 	h.mu.Lock()
 	if h.running {
 		h.mu.Unlock()
@@ -106,7 +106,7 @@ func (h *MetricsHistory) migrate() error {
 }
 
 // recordLoop periodically records metrics snapshots
-func (h *MetricsHistory) recordLoop(metricsProvider func() *InferenceMetrics) {
+func (h *MetricsHistory) recordLoop(metricsProvider func() *InferenceMetricsData) {
 	ticker := time.NewTicker(h.recordInterval)
 	defer ticker.Stop()
 
@@ -121,9 +121,9 @@ func (h *MetricsHistory) recordLoop(metricsProvider func() *InferenceMetrics) {
 }
 
 // recordSnapshot saves a metrics snapshot to the database
-func (h *MetricsHistory) recordSnapshot(metricsProvider func() *InferenceMetrics) {
-	metrics := metricsProvider()
-	if metrics == nil {
+func (h *MetricsHistory) recordSnapshot(metricsProvider func() *InferenceMetricsData) {
+	snapshot := metricsProvider()
+	if snapshot == nil {
 		return
 	}
 
@@ -131,8 +131,6 @@ func (h *MetricsHistory) recordSnapshot(metricsProvider func() *InferenceMetrics
 	if database == nil {
 		return
 	}
-
-	snapshot := metrics.GetSnapshot()
 
 	// Calculate success rate
 	var successRate float64

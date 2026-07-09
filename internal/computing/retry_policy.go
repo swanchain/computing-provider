@@ -1,9 +1,16 @@
 package computing
 
 import (
+	"context"
+	"errors"
+	"math"
 	"math/rand"
+	"net"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 )
 
 // RetryConfig configures retry behavior
@@ -87,6 +94,138 @@ func NewRetryPolicy(config RetryConfig) *RetryPolicy {
 		metrics: &retryMetricsCollector{},
 		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
+}
+
+// Execute runs a function with retry logic (exponential backoff with jitter)
+func (rp *RetryPolicy) Execute(ctx context.Context, operation func() error) error {
+	var lastErr error
+	attempt := 0
+
+	rp.metrics.mu.Lock()
+	rp.metrics.totalAttempts++
+	rp.metrics.mu.Unlock()
+
+	for attempt <= rp.config.MaxRetries {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		err := operation()
+		if err == nil {
+			if attempt > 0 {
+				rp.metrics.mu.Lock()
+				rp.metrics.totalSuccesses++
+				rp.metrics.mu.Unlock()
+				logs.GetLogger().Debugf("Operation succeeded after %d retries", attempt)
+			}
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if error is retryable
+		if !rp.IsRetryable(err) {
+			rp.metrics.mu.Lock()
+			rp.metrics.totalNonRetryable++
+			rp.metrics.mu.Unlock()
+			return err
+		}
+
+		// Don't retry if we've exhausted attempts
+		if attempt >= rp.config.MaxRetries {
+			break
+		}
+
+		// Calculate delay with exponential backoff and jitter
+		delay := rp.CalculateDelay(attempt)
+
+		logs.GetLogger().Debugf("Retrying operation (attempt %d/%d) after %v: %v",
+			attempt+1, rp.config.MaxRetries, delay, err)
+
+		rp.metrics.mu.Lock()
+		rp.metrics.totalRetries++
+		rp.metrics.mu.Unlock()
+
+		// Wait before retry
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+
+		attempt++
+	}
+
+	rp.metrics.mu.Lock()
+	rp.metrics.totalFailures++
+	rp.metrics.mu.Unlock()
+
+	return lastErr
+}
+
+// IsRetryable determines if an error should be retried
+func (rp *RetryPolicy) IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := strings.ToLower(err.Error())
+
+	// Check non-retryable errors first
+	for _, pattern := range rp.config.NonRetryableErrors {
+		if strings.Contains(errStr, strings.ToLower(pattern)) {
+			return false
+		}
+	}
+
+	// Check for known retryable errors
+	for _, pattern := range rp.config.RetryableErrors {
+		if strings.Contains(errStr, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+
+	// Check for network errors (usually retryable)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Temporary() || netErr.Timeout()
+	}
+
+	// Context deadline exceeded / cancellation are not retryable
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	// Default: don't retry unknown errors
+	return false
+}
+
+// CalculateDelay calculates the delay for a given attempt with jitter
+func (rp *RetryPolicy) CalculateDelay(attempt int) time.Duration {
+	// Exponential backoff
+	delay := float64(rp.config.InitialDelay) * math.Pow(rp.config.Multiplier, float64(attempt))
+
+	// Cap at max delay
+	if delay > float64(rp.config.MaxDelay) {
+		delay = float64(rp.config.MaxDelay)
+	}
+
+	// Add jitter
+	if rp.config.JitterFactor > 0 {
+		rp.mu.Lock()
+		jitter := (rp.rng.Float64()*2 - 1) * rp.config.JitterFactor * delay
+		rp.mu.Unlock()
+		delay += jitter
+	}
+
+	// Ensure delay is positive
+	if delay < 0 {
+		delay = float64(rp.config.InitialDelay)
+	}
+
+	return time.Duration(delay)
 }
 
 // GetMetrics returns retry metrics

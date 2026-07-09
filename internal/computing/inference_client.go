@@ -1342,7 +1342,15 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 		}
 
 		// Record failed request
-		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, 0, 0, false, err.Error())
+		c.metrics.RecordRequestEnd(RequestMetric{
+			RequestID:   requestID,
+			Model:       payload.ModelID,
+			StartTime:   startTime,
+			EndTime:     time.Now(),
+			LatencyMs:   latencyFloat,
+			Success:     false,
+			ErrorReason: err.Error(),
+		})
 		response = &InferenceResponse{
 			RequestID:  requestID,
 			Error:      err.Error(),
@@ -1352,7 +1360,16 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	} else {
 		// Extract token counts from response if available
 		tokensIn, tokensOut := extractTokenCounts(response.Response)
-		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, tokensIn, tokensOut, true, "")
+		c.metrics.RecordRequestEnd(RequestMetric{
+			RequestID: requestID,
+			Model:     payload.ModelID,
+			StartTime: startTime,
+			EndTime:   time.Now(),
+			LatencyMs: latencyFloat,
+			TokensIn:  tokensIn,
+			TokensOut: tokensOut,
+			Success:   true,
+		})
 		response.RequestID = requestID
 		response.Latency = latency
 	}
@@ -1363,7 +1380,15 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 func (c *InferenceClient) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
-		c.metrics.RecordRequestEnd(payload.ModelID, 0, 0, 0, false, "streaming not supported")
+		c.metrics.RecordRequestEnd(RequestMetric{
+			RequestID:   requestID,
+			Model:       payload.ModelID,
+			StartTime:   startTime,
+			EndTime:     time.Now(),
+			Streaming:   true,
+			Success:     false,
+			ErrorReason: "streaming not supported",
+		})
 		c.sendError(requestID, 501, "streaming not supported")
 		return
 	}
@@ -1401,11 +1426,21 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 	}
 
 	// Record metrics for streaming request
-	if err != nil {
-		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), false, err.Error())
-	} else {
-		c.metrics.RecordRequestEnd(payload.ModelID, latencyFloat, int(tokensIn), int(tokensOut), true, "")
+	streamReq := RequestMetric{
+		RequestID: requestID,
+		Model:     payload.ModelID,
+		StartTime: startTime,
+		EndTime:   time.Now(),
+		LatencyMs: latencyFloat,
+		TokensIn:  int(tokensIn),
+		TokensOut: int(tokensOut),
+		Streaming: true,
+		Success:   err == nil,
 	}
+	if err != nil {
+		streamReq.ErrorReason = err.Error()
+	}
+	c.metrics.RecordRequestEnd(streamReq)
 
 	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, statusCode, err)
 }
@@ -2058,7 +2093,7 @@ func (c *InferenceClient) IsConnected() bool {
 }
 
 // GetMetrics returns a snapshot of the current metrics
-func (c *InferenceClient) GetMetrics() InferenceMetrics {
+func (c *InferenceClient) GetMetrics() InferenceMetricsData {
 	return c.metrics.GetSnapshot()
 }
 

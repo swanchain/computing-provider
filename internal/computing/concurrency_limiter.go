@@ -1,8 +1,11 @@
 package computing
 
 import (
+	"context"
+	"errors"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
@@ -64,6 +67,62 @@ func NewSemaphore(max int) *Semaphore {
 	return s
 }
 
+// Acquire tries to acquire a slot, blocking until available or timeout
+func (s *Semaphore) Acquire(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for s.current >= s.max {
+		// Check timeout
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			s.timeouts++
+			return false
+		}
+
+		// Wait with timeout
+		done := make(chan struct{})
+		go func() {
+			time.Sleep(remaining)
+			s.cond.Broadcast()
+			close(done)
+		}()
+
+		s.cond.Wait()
+
+		select {
+		case <-done:
+			// Timeout occurred during wait
+			if s.current >= s.max {
+				s.timeouts++
+				return false
+			}
+		default:
+			// Woken up by release
+		}
+	}
+
+	s.current++
+	s.acquired++
+	return true
+}
+
+// Release releases a slot
+func (s *Semaphore) Release(holdTime time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.current > 0 {
+		s.current--
+		s.released++
+		s.totalHoldTime += holdTime.Milliseconds()
+		s.holdCount++
+		s.cond.Signal()
+	}
+}
+
 // SetMax updates the maximum concurrent slots
 func (s *Semaphore) SetMax(max int) {
 	s.mu.Lock()
@@ -106,6 +165,88 @@ func NewConcurrencyLimiter(config ConcurrencyConfig, gpuCollector *GPUMetricsCol
 		gpuCollector:   gpuCollector,
 		stopCh:         make(chan struct{}),
 	}
+}
+
+// Concurrency limit errors
+var (
+	ErrGlobalConcurrencyLimit = errors.New("global concurrency limit reached")
+	ErrModelConcurrencyLimit  = errors.New("model concurrency limit reached")
+)
+
+// Acquire acquires slots for a request (both global and model-specific)
+func (cl *ConcurrencyLimiter) Acquire(ctx context.Context, modelID string) (*ConcurrencyToken, error) {
+	timeout := cl.config.AcquireTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+
+	// Try to acquire global slot first
+	if !cl.globalSem.Acquire(timeout) {
+		return nil, ErrGlobalConcurrencyLimit
+	}
+
+	// Get or create model semaphore
+	cl.mu.RLock()
+	modelSem, exists := cl.modelSems[modelID]
+	cl.mu.RUnlock()
+
+	if !exists {
+		// Create default semaphore for unknown model
+		cl.mu.Lock()
+		modelSem, exists = cl.modelSems[modelID]
+		if !exists {
+			modelSem = NewSemaphore(cl.config.DefaultModelMax)
+			cl.modelSems[modelID] = modelSem
+		}
+		cl.mu.Unlock()
+	}
+
+	// Try to acquire model-specific slot
+	remainingTimeout := timeout - time.Millisecond // Small buffer
+	if remainingTimeout <= 0 {
+		remainingTimeout = time.Millisecond
+	}
+
+	if !modelSem.Acquire(remainingTimeout) {
+		// Release global slot since we couldn't get model slot
+		cl.globalSem.Release(0)
+		return nil, ErrModelConcurrencyLimit
+	}
+
+	return &ConcurrencyToken{
+		modelID:    modelID,
+		limiter:    cl,
+		acquiredAt: time.Now(),
+	}, nil
+}
+
+// ConcurrencyToken represents an acquired concurrency slot
+type ConcurrencyToken struct {
+	modelID    string
+	limiter    *ConcurrencyLimiter
+	acquiredAt time.Time
+	released   int32 // atomic flag to prevent double release
+}
+
+// Release releases the concurrency slots
+func (ct *ConcurrencyToken) Release() {
+	if !atomic.CompareAndSwapInt32(&ct.released, 0, 1) {
+		return // Already released
+	}
+
+	holdTime := time.Since(ct.acquiredAt)
+
+	ct.limiter.mu.RLock()
+	modelSem := ct.limiter.modelSems[ct.modelID]
+	ct.limiter.mu.RUnlock()
+
+	if modelSem != nil {
+		modelSem.Release(holdTime)
+	}
+	ct.limiter.globalSem.Release(holdTime)
 }
 
 // Start begins the concurrency limiter

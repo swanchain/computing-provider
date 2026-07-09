@@ -3,6 +3,7 @@ package computing
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -229,7 +230,7 @@ func (s *InferenceService) Start() error {
 
 	// Start metrics history recorder
 	if s.metricsHistory != nil {
-		if err := s.metricsHistory.Start(func() *InferenceMetrics {
+		if err := s.metricsHistory.Start(func() *InferenceMetricsData {
 			return s.GetMetrics()
 		}); err != nil {
 			logs.GetLogger().Warnf("Failed to start metrics history: %v", err)
@@ -272,6 +273,26 @@ func (s *InferenceService) Stop() {
 func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
+	// Enforce rate limit
+	if s.rateLimiter != nil && !s.rateLimiter.AllowModel(payload.ModelID) {
+		return nil, &ModelServerError{
+			StatusCode: 429,
+			Message:    fmt.Sprintf("provider rate limit exceeded for model %s", payload.ModelID),
+		}
+	}
+
+	// Enforce concurrency limit (blocks up to AcquireTimeout for a free slot)
+	if s.concurrencyLimiter != nil {
+		token, err := s.concurrencyLimiter.Acquire(context.Background(), payload.ModelID)
+		if err != nil {
+			return nil, &ModelServerError{
+				StatusCode: 429,
+				Message:    fmt.Sprintf("provider concurrency limit for model %s: %v", payload.ModelID, err),
+			}
+		}
+		defer token.Release()
+	}
+
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string
 	var localModel string
@@ -301,7 +322,20 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
-	response, err := s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+	var response json.RawMessage
+	forward := func() error {
+		var ferr error
+		response, ferr = s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+		return ferr
+	}
+	var err error
+	if s.retryPolicy != nil {
+		// Retry transient failures (connection refused/reset, 502/503/504, timeouts)
+		// with exponential backoff and jitter
+		err = s.retryPolicy.Execute(context.Background(), forward)
+	} else {
+		err = forward()
+	}
 	if err != nil {
 		// Preserve ModelServerError type for status code extraction
 		var modelErr *ModelServerError
@@ -522,8 +556,8 @@ func (s *InferenceService) GetActiveModels() []string {
 	return activeModels
 }
 
-// GetMetrics returns the current inference metrics
-func (s *InferenceService) GetMetrics() *InferenceMetrics {
+// GetMetrics returns a snapshot of the current inference metrics
+func (s *InferenceService) GetMetrics() *InferenceMetricsData {
 	if s.client == nil {
 		return nil
 	}
@@ -542,6 +576,26 @@ func (s *InferenceService) GetMetricsPrometheus() string {
 // handleStreamingInference processes streaming inference requests
 func (s *InferenceService) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
+
+	// Enforce rate limit
+	if s.rateLimiter != nil && !s.rateLimiter.AllowModel(payload.ModelID) {
+		return &StreamResult{Error: &ModelServerError{
+			StatusCode: 429,
+			Message:    fmt.Sprintf("provider rate limit exceeded for model %s", payload.ModelID),
+		}}
+	}
+
+	// Enforce concurrency limit (blocks up to AcquireTimeout for a free slot)
+	if s.concurrencyLimiter != nil {
+		token, err := s.concurrencyLimiter.Acquire(context.Background(), payload.ModelID)
+		if err != nil {
+			return &StreamResult{Error: &ModelServerError{
+				StatusCode: 429,
+				Message:    fmt.Sprintf("provider concurrency limit for model %s: %v", payload.ModelID, err),
+			}}
+		}
+		defer token.Release()
+	}
 
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string

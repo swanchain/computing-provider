@@ -124,7 +124,7 @@ go test ./internal/setup/...            # Single package
 go test -run TestFunctionName ./path/   # Single test
 ```
 
-Test coverage is minimal (currently only `internal/setup`).
+Test coverage is minimal (`internal/setup` wizard tests, `internal/computing` enforcement tests).
 
 ## Architecture
 
@@ -147,16 +147,16 @@ HTTP API (routes in cmd/computing-provider/daemon.go)
 InferenceService (inference_service.go)  ← orchestrates everything
     ├── ModelRegistry (model_registry.go)       ← tracks models from models.json, fsnotify hot-reload
     ├── ModelHealthChecker (model_health_checker.go) ← polls model endpoints
-    ├── RateLimiter (rate_limiter.go)            ← GPU-aware rate limit config + metrics
-    ├── ConcurrencyLimiter (concurrency_limiter.go) ← concurrency config + metrics
-    ├── RetryPolicy (retry_policy.go)            ← retry config + metrics
+    ├── RateLimiter (rate_limiter.go)            ← GPU-aware token-bucket rate limiting
+    ├── ConcurrencyLimiter (concurrency_limiter.go) ← global + per-model concurrency slots
+    ├── RetryPolicy (retry_policy.go)            ← exponential backoff with jitter
     ├── InferenceMetrics (inference_metrics.go)  ← metrics tracking
     ├── MetricsHistory (metrics_history.go)      ← periodic metric snapshots to SQLite
     ├── GPUMetricsCollector (gpu_metrics_collector.go)
     └── InferenceClient (inference_client.go)    ← WebSocket protocol to Swan Inference
 ```
 
-> **Caveat:** RateLimiter, ConcurrencyLimiter, and RetryPolicy are currently *configuration and metrics surfaces only* — their enforcement paths (`Allow`/`Acquire`/`Execute`) are not wired into the request flow. The API endpoints that set limits update config/metrics but do not gate requests. Wire them into `InferenceClient`/`InferenceService` request handling before relying on them.
+Rate limiting and concurrency limits are enforced in `handleInference`/`handleStreamingInference` (rejected requests return HTTP 429 to Swan Inference). Transient upstream failures (connection refused/reset, 502/503/504, timeouts) are retried with exponential backoff via RetryPolicy on the non-streaming path.
 
 **ModelRegistry** uses callback pattern (`onModelAdded`, `onModelRemoved`, `onHealthUpdate`) to notify InferenceService of changes.
 
@@ -246,7 +246,7 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `POST /ratelimit/global`, `POST /ratelimit/model/:model_id` — set rate limits
 - `POST /concurrency/global`, `POST /concurrency/model/:model_id` — set concurrency limits
 
-> Note: the rate-limit/concurrency POST endpoints update configuration and metrics, but enforcement is not wired into the request path (see Architecture caveat).
+> Rate-limit/concurrency settings are enforced on the inference request path; over-limit requests are rejected with HTTP 429.
 
 ## Common Issues
 
