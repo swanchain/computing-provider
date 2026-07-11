@@ -11,7 +11,7 @@ var DefaultInferenceWSURL = "wss://inference-ws.swanchain.io"
 var DefaultInferenceAPIURL = "https://api.swanchain.io/api/v1"
 var DefaultInferenceDashboardURL = "https://inference.swanchain.io"
 
-const BuildVersion = "0.2.0"
+const BuildVersion = "0.3.0"
 
 const UBITaskImageIntelCpu = "swanhub/ubi-worker-cpu-intel:latest"
 const UBITaskImageIntelGpu = "swanhub/ubi-worker-gpu-intel:latest"
