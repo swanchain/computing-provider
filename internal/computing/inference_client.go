@@ -1342,6 +1342,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 		}
 
 		// Record failed request
+		logs.GetLogger().Errorf("Inference request %s for model %s failed after %dms (status %d): %v", requestID, payload.ModelID, latency, statusCode, err)
 		c.metrics.RecordRequestEnd(RequestMetric{
 			RequestID:   requestID,
 			Model:       payload.ModelID,
@@ -1439,6 +1440,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 	}
 	if err != nil {
 		streamReq.ErrorReason = err.Error()
+		logs.GetLogger().Errorf("Streaming inference request %s for model %s failed after %dms (status %d, tokens in/out %d/%d): %v", requestID, payload.ModelID, latency, statusCode, tokensIn, tokensOut, err)
 	}
 	c.metrics.RecordRequestEnd(streamReq)
 
