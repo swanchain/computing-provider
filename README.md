@@ -132,6 +132,22 @@ Swan Inference (Cloud)
 
 ---
 
+## Reliability & Performance
+
+The provider manages request flow and backend health automatically — no manual tuning is required to run:
+
+- **Health checking** — each model endpoint is polled continuously; unhealthy backends are reported to Swan Inference so traffic routes away, and they recover automatically when they come back online.
+- **Rate limiting** — GPU-aware token-bucket limits (global and per-model); over-limit requests are rejected with HTTP 429 instead of overloading your GPU.
+- **Concurrency control** — global and per-model in-flight request slots protect the backend under burst load.
+- **Automatic retries** — transient upstream failures (connection refused/reset, 502/503/504, timeouts) are retried with exponential backoff and jitter.
+- **Hot-reload** — edits to `models.json` are picked up live via file watching; no restart needed to add, remove, or repoint a model.
+- **Observability** — failed requests are logged with model, latency, and status code; live metrics are available via the [web dashboard](#web-dashboard) and a Prometheus endpoint.
+- **Graceful shutdown** — SIGTERM/SIGINT drains cleanly, stopping the HTTP server before tearing down inference subsystems.
+
+Rate limits and concurrency slots can be tuned at runtime via the REST API (see [Useful Endpoints](#useful-endpoints)).
+
+---
+
 ## Prerequisites
 
 ### Linux (NVIDIA GPU)
