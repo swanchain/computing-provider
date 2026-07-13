@@ -51,6 +51,7 @@ type ModelMapping struct {
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
+	ContextLength int   `json:"context_length,omitempty"` // Max context this backend serves; auto-detected from /v1/models if unset
 }
 
 // InferenceService manages the Inference client and inference handling

@@ -69,6 +69,7 @@ type ModelInfo struct {
 	HashAlgo     string `json:"hash_algo,omitempty"`     // Hash algorithm, e.g. "sha256"
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	ContextLength int   `json:"context_length,omitempty"` // Max context (tokens) this provider actually serves for the model
 }
 
 // VerifyResponsePayload is returned after processing a verification challenge
@@ -879,6 +880,49 @@ func probeEndpointEngine(client *http.Client, endpoint string) string {
 	}
 
 	return "unknown"
+}
+
+// detectModelContext queries a model server's OpenAI-compatible /v1/models endpoint
+// and returns the reported max_model_len (context window in tokens) for servedName,
+// or 0 if it can't be determined. vLLM and SGLang expose max_model_len per model.
+func detectModelContext(client *http.Client, endpoint, apiKey, servedName string) int {
+	req, err := http.NewRequest("GET", endpoint+"/v1/models", nil)
+	if err != nil {
+		return 0
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+
+	var body struct {
+		Data []struct {
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return 0
+	}
+
+	// Prefer the entry matching the served model name; fall back to the sole entry
+	// when the server lists exactly one model.
+	for _, m := range body.Data {
+		if m.ID == servedName && m.MaxModelLen > 0 {
+			return m.MaxModelLen
+		}
+	}
+	if len(body.Data) == 1 && body.Data[0].MaxModelLen > 0 {
+		return body.Data[0].MaxModelLen
+	}
+	return 0
 }
 
 func (c *InferenceClient) register() error {
@@ -1946,6 +1990,12 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		mappings = c.modelMappingsProvider()
 	}
 
+	// Short-timeout client for auto-detecting each backend's context length.
+	ctxClient := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+
 	for _, modelID := range c.models {
 		info := ModelInfo{
 			ModelID: modelID,
@@ -1955,6 +2005,22 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		if mapping, ok := mappings[modelID]; ok {
 			info.Format = mapping.Format
 			info.Quantization = mapping.Quantization
+
+			// Context length: explicit models.json override, else auto-detect the
+			// backend's real max_model_len from /v1/models. This tells Swan Inference
+			// the context this node actually serves, rather than the model catalog max.
+			ctxLen := mapping.ContextLength
+			if ctxLen == 0 && mapping.Endpoint != "" {
+				served := modelID
+				if mapping.LocalModel != "" {
+					served = mapping.LocalModel
+				}
+				ctxLen = detectModelContext(ctxClient, mapping.Endpoint, mapping.APIKey, served)
+			}
+			if ctxLen > 0 {
+				info.ContextLength = ctxLen
+				logs.GetLogger().Infof("Model %s reports context length: %d tokens", modelID, ctxLen)
+			}
 		}
 
 		modelDir := c.getModelDir(modelID)
