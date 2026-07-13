@@ -87,14 +87,6 @@ type CollateralChainInfo struct {
 	FaucetURL       string  `json:"faucet_url"`
 }
 
-// CollateralCheckResponse mirrors the backend collateral check response
-type CollateralCheckResponse struct {
-	HasCollateral bool            `json:"has_collateral"`
-	Required      bool            `json:"required"`
-	AmountRequired float64        `json:"amount_required"`
-	Collateral    json.RawMessage `json:"collateral,omitempty"`
-}
-
 // getServiceURL determines the HTTP API URL from config
 func getServiceURL(cfg *conf.ComputeNode) string {
 	serviceURL := cfg.Inference.ServiceURL
@@ -676,11 +668,20 @@ var inferenceDepositCmd = &cli.Command{
 			return fmt.Errorf("failed to read contract info: %v", err)
 		}
 
-		var contractData struct {
-			Chains []CollateralChainInfo `json:"chains"`
+		// The endpoint wraps its payload in a {code, msg, data} envelope
+		var contractEnvelope struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Chains []CollateralChainInfo `json:"chains"`
+			} `json:"data"`
 		}
-		if err := json.Unmarshal(contractBody, &contractData); err != nil {
+		if err := json.Unmarshal(contractBody, &contractEnvelope); err != nil {
 			return fmt.Errorf("failed to parse contract info: %v", err)
+		}
+		contractData := contractEnvelope.Data
+		if len(contractData.Chains) == 0 {
+			color.Yellow("No supported chains returned by the service — check the dashboard for deposit options.")
 		}
 
 		// Step 3: Display deposit instructions
@@ -716,43 +717,18 @@ var inferenceDepositCmd = &cli.Command{
 		fmt.Println("  3. After deposit, your provider will activate within ~2 hours")
 		fmt.Println()
 
-		// Step 4: If --check, show current collateral status
+		// Step 4: If --check, report collateral state derived from provider status.
+		// (The /provider/collateral endpoint requires a dashboard session JWT and
+		// rejects provider API keys, so it cannot be queried from the CLI. The
+		// status endpoint already encodes deposit state: approved = no confirmed
+		// deposit, activating = deposit confirmed, active = earning — the latter
+		// two are handled and returned above.)
 		if cctx.Bool("check") {
-			fmt.Println("Checking collateral status...")
+			fmt.Println("Collateral status: no confirmed deposit (provider status: approved)")
 			fmt.Println()
-
-			collateralURL := serviceURL + "/api/v1/provider/collateral"
-			collReq, err := http.NewRequest("GET", collateralURL, nil)
-			if err != nil {
-				return fmt.Errorf("failed to create request: %v", err)
-			}
-			collReq.Header.Set("Authorization", "Bearer "+apiKey)
-
-			collResp, err := client.Do(collReq)
-			if err != nil {
-				return fmt.Errorf("failed to check collateral: %v", err)
-			}
-			defer collResp.Body.Close()
-
-			collBody, err := io.ReadAll(collResp.Body)
-			if err != nil {
-				return fmt.Errorf("failed to read collateral response: %v", err)
-			}
-
-			var collStatus CollateralCheckResponse
-			if err := json.Unmarshal(collBody, &collStatus); err != nil {
-				return fmt.Errorf("failed to parse collateral status: %v", err)
-			}
-
-			if collStatus.HasCollateral {
-				color.Green("Collateral record found!")
-				fmt.Printf("  Raw data: %s\n", string(collStatus.Collateral))
-			} else {
-				color.Yellow("No collateral deposit found yet.")
-				if collStatus.Required {
-					fmt.Printf("  Required amount: %.2f\n", collStatus.AmountRequired)
-				}
-			}
+			fmt.Println("Note: deposits that are initiated but not yet confirmed on-chain are")
+			fmt.Printf("only visible on the Provider Dashboard: %s/dashboard\n", serviceURL)
+			fmt.Println("Once your deposit confirms, this command will report status 'activating'.")
 			fmt.Println()
 		}
 
