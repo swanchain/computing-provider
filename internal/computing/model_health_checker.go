@@ -3,7 +3,9 @@ package computing
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -74,23 +76,27 @@ func DefaultHealthCheckConfig() HealthCheckConfig {
 
 // ModelHealthChecker performs periodic health checks on model endpoints
 type ModelHealthChecker struct {
-	mu            sync.RWMutex
-	statuses      map[string]*ModelStatus
-	endpoints     map[string]string // modelID -> endpoint
-	apiKeys       map[string]string // modelID -> API key for authenticated endpoints
-	config        HealthCheckConfig
-	httpClient    *http.Client
-	stopCh        chan struct{}
-	running       bool
+	mu             sync.RWMutex
+	statuses       map[string]*ModelStatus
+	endpoints      map[string]string // modelID -> endpoint
+	apiKeys        map[string]string // modelID -> API key for authenticated endpoints
+	localModels    map[string]string // modelID -> model name the backend serves it under (models.json local_model)
+	contextLengths map[string]int    // modelID -> max_model_len auto-detected from the backend's /v1/models
+	config         HealthCheckConfig
+	httpClient     *http.Client
+	stopCh         chan struct{}
+	running        bool
 	onStatusChange func(modelID string, oldHealth, newHealth ModelHealth)
 }
 
 // NewModelHealthChecker creates a new health checker
 func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 	return &ModelHealthChecker{
-		statuses:  make(map[string]*ModelStatus),
-		endpoints: make(map[string]string),
-		apiKeys:   make(map[string]string),
+		statuses:       make(map[string]*ModelStatus),
+		endpoints:      make(map[string]string),
+		apiKeys:        make(map[string]string),
+		localModels:    make(map[string]string),
+		contextLengths: make(map[string]int),
 		config:    config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -109,8 +115,9 @@ func (h *ModelHealthChecker) SetStatusChangeCallback(cb func(modelID string, old
 	h.onStatusChange = cb
 }
 
-// RegisterModel adds a model to health checking
-func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey string) {
+// RegisterModel adds a model to health checking. localModel is the name the
+// backend serves the model under (may differ from the marketplace modelID).
+func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey, localModel string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -119,6 +126,11 @@ func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey string) {
 		h.apiKeys[modelID] = apiKey
 	} else {
 		delete(h.apiKeys, modelID)
+	}
+	if localModel != "" {
+		h.localModels[modelID] = localModel
+	} else {
+		delete(h.localModels, modelID)
 	}
 	if _, exists := h.statuses[modelID]; !exists {
 		h.statuses[modelID] = &ModelStatus{
@@ -140,6 +152,8 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 
 	delete(h.endpoints, modelID)
 	delete(h.apiKeys, modelID)
+	delete(h.localModels, modelID)
+	delete(h.contextLengths, modelID)
 	delete(h.statuses, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
 }
@@ -219,10 +233,11 @@ func (h *ModelHealthChecker) checkAllModels() {
 		wg.Add(1)
 		go func(ep string, info *endpointInfo) {
 			defer wg.Done()
-			err := h.probeEndpoint(ep, info.apiKey)
+			contexts, err := h.probeEndpoint(ep, info.apiKey)
 			for _, modelID := range info.modelIDs {
 				h.applyProbeResult(modelID, ep, err)
 			}
+			h.updateDetectedContexts(info.modelIDs, contexts)
 		}(endpoint, group)
 	}
 	wg.Wait()
@@ -239,8 +254,9 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 		return
 	}
 
-	err := h.probeEndpoint(endpoint, apiKey)
+	contexts, err := h.probeEndpoint(endpoint, apiKey)
 	h.applyProbeResult(modelID, endpoint, err)
+	h.updateDetectedContexts([]string{modelID}, contexts)
 }
 
 // applyProbeResult updates a model's health status based on a probe result.
@@ -312,7 +328,10 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 // Tries /v1/models first (lightweight, just lists models) then falls back to
 // /health. This avoids triggering expensive deep health checks on proxies like
 // LiteLLM, where GET /health sends a real inference request to every backend.
-func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
+// On a successful /v1/models probe it also returns the per-model context
+// lengths (served model name -> max_model_len) reported by the backend;
+// vLLM and SGLang expose max_model_len there.
+func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) (map[string]int, error) {
 	// Try /v1/models first — lightweight on all known serving engines
 	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
 	defer modelsCancel()
@@ -320,7 +339,7 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 	modelsURL := endpoint + "/v1/models"
 	req, err := http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -328,8 +347,9 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 
 	resp, err := h.httpClient.Do(req)
 	if err == nil && resp.StatusCode == http.StatusOK {
+		contexts := parseModelContextLengths(resp.Body)
 		resp.Body.Close()
-		return nil
+		return contexts, nil
 	}
 	if resp != nil {
 		resp.Body.Close()
@@ -346,7 +366,7 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 	healthURL := endpoint + "/health"
 	req, err = http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -354,15 +374,88 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 
 	resp, err = h.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("endpoint unreachable: %w", err)
+		return nil, fmt.Errorf("endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("endpoint returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("endpoint returned status %d", resp.StatusCode)
 	}
 
-	return nil
+	return nil, nil
+}
+
+// parseModelContextLengths extracts per-model context windows from an
+// OpenAI-compatible /v1/models response body. Returns model id -> max_model_len
+// for entries that report one (vLLM, SGLang); entries without it are skipped.
+func parseModelContextLengths(body io.Reader) map[string]int {
+	var modelsResp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(body).Decode(&modelsResp); err != nil {
+		return nil
+	}
+
+	contexts := make(map[string]int, len(modelsResp.Data))
+	for _, m := range modelsResp.Data {
+		if m.MaxModelLen > 0 {
+			contexts[m.ID] = m.MaxModelLen
+		}
+	}
+	return contexts
+}
+
+// updateDetectedContexts caches the context lengths detected from a backend's
+// /v1/models response for the models served by that endpoint. Backend model ids
+// are matched against the mapping's local model name first (mappings can rename,
+// e.g. marketplace "openai/gpt-5.5" served locally as "gpt-5.5"), then the
+// marketplace id, then a single-model server's sole entry. Last-known values are
+// kept when a probe fails, so a temporarily down backend keeps reporting its
+// previously detected context.
+func (h *ModelHealthChecker) updateDetectedContexts(modelIDs []string, contexts map[string]int) {
+	if len(contexts) == 0 {
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, modelID := range modelIDs {
+		ctxLen := 0
+		if served := h.localModels[modelID]; served != "" {
+			ctxLen = contexts[served]
+		}
+		if ctxLen == 0 {
+			ctxLen = contexts[modelID]
+		}
+		if ctxLen == 0 && len(contexts) == 1 {
+			// Single-model server (typical vLLM/SGLang) with an id that matches
+			// neither name — trust its only entry.
+			for _, v := range contexts {
+				ctxLen = v
+			}
+		}
+		if ctxLen > 0 && h.contextLengths[modelID] != ctxLen {
+			h.contextLengths[modelID] = ctxLen
+			logs.GetLogger().Infof("Detected context length for model %s: %d tokens", modelID, ctxLen)
+		}
+	}
+}
+
+// GetDetectedContextLengths returns a copy of the auto-detected context lengths
+// (modelID -> max_model_len reported by the backend)
+func (h *ModelHealthChecker) GetDetectedContextLengths() map[string]int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	result := make(map[string]int, len(h.contextLengths))
+	for id, ctxLen := range h.contextLengths {
+		result[id] = ctxLen
+	}
+	return result
 }
 
 // GetModelStatus returns the health status of a specific model

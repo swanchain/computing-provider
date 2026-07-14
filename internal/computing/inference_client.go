@@ -127,6 +127,7 @@ type HeartbeatPayload struct {
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
+	ModelHashes []ModelInfo        `json:"model_hashes,omitempty"` // Per-model info incl. context_length (mirrors register, so backend restarts propagate without reconnect)
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
 }
@@ -275,6 +276,7 @@ type InferenceClient struct {
 	warmupHandler             WarmupHandler
 	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
 	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
+	contextLengthProvider     func() map[string]int              // Returns auto-detected per-model context lengths
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -368,6 +370,12 @@ func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]stri
 // SetModelMappingsProvider sets the function that returns model mappings for format/quantization
 func (c *InferenceClient) SetModelMappingsProvider(provider func() map[string]ModelMapping) {
 	c.modelMappingsProvider = provider
+}
+
+// SetContextLengthProvider sets the function that returns auto-detected context lengths
+// (modelID -> max_model_len reported by the backend's /v1/models endpoint)
+func (c *InferenceClient) SetContextLengthProvider(provider func() map[string]int) {
+	c.contextLengthProvider = provider
 }
 
 // ProviderStatusResponse represents the status check response from Swan Inference
@@ -882,49 +890,6 @@ func probeEndpointEngine(client *http.Client, endpoint string) string {
 	return "unknown"
 }
 
-// detectModelContext queries a model server's OpenAI-compatible /v1/models endpoint
-// and returns the reported max_model_len (context window in tokens) for servedName,
-// or 0 if it can't be determined. vLLM and SGLang expose max_model_len per model.
-func detectModelContext(client *http.Client, endpoint, apiKey, servedName string) int {
-	req, err := http.NewRequest("GET", endpoint+"/v1/models", nil)
-	if err != nil {
-		return 0
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0
-	}
-
-	var body struct {
-		Data []struct {
-			ID          string `json:"id"`
-			MaxModelLen int    `json:"max_model_len"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return 0
-	}
-
-	// Prefer the entry matching the served model name; fall back to the sole entry
-	// when the server lists exactly one model.
-	for _, m := range body.Data {
-		if m.ID == servedName && m.MaxModelLen > 0 {
-			return m.MaxModelLen
-		}
-	}
-	if len(body.Data) == 1 && body.Data[0].MaxModelLen > 0 {
-		return body.Data[0].MaxModelLen
-	}
-	return 0
-}
-
 func (c *InferenceClient) register() error {
 	// Detect GPU hardware and cache it for heartbeat messages
 	hardware := DetectGPUHardware()
@@ -936,7 +901,7 @@ func (c *InferenceClient) register() error {
 	}
 
 	// Load hash manifests for each model
-	modelHashes := c.loadModelHashes()
+	modelHashes := c.loadModelHashes(false)
 
 	payload := RegisterPayload{
 		NodeID:       c.nodeID,   // Local node ID for routing
@@ -1141,6 +1106,10 @@ func (c *InferenceClient) sendHeartbeat() {
 		Models:     c.models,   // Include models so hub can rebuild routing map after restart
 		Hardware:   c.hardware, // Include cached hardware info for periodic updates
 	}
+
+	// Mirror the register model_hashes list so changes like a backend restarted
+	// with a different max_model_len propagate without a reconnect
+	payload.ModelHashes = c.loadModelHashes(true)
 
 	// Include model health in heartbeat as backup for health update messages
 	if c.modelHealthProvider != nil {
@@ -1980,8 +1949,10 @@ func (c *InferenceClient) sendBenchmarkResponse(requestID, benchmarkID string, r
 	}
 }
 
-// loadModelHashes loads hash manifests for all configured models
-func (c *InferenceClient) loadModelHashes() []ModelInfo {
+// loadModelHashes builds the per-model info list (hashes, format, context length)
+// sent in register and heartbeat payloads. quiet suppresses per-model logging for
+// the periodic heartbeat path.
+func (c *InferenceClient) loadModelHashes(quiet bool) []ModelInfo {
 	hashes := make([]ModelInfo, 0, len(c.models))
 
 	// Get model mappings for format/quantization
@@ -1990,10 +1961,10 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		mappings = c.modelMappingsProvider()
 	}
 
-	// Short-timeout client for auto-detecting each backend's context length.
-	ctxClient := &http.Client{
-		Timeout:   3 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	// Context lengths auto-detected from each backend's /v1/models (max_model_len)
+	var detected map[string]int
+	if c.contextLengthProvider != nil {
+		detected = c.contextLengthProvider()
 	}
 
 	for _, modelID := range c.models {
@@ -2005,28 +1976,20 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		if mapping, ok := mappings[modelID]; ok {
 			info.Format = mapping.Format
 			info.Quantization = mapping.Quantization
-
-			// Context length: explicit models.json override, else auto-detect the
-			// backend's real max_model_len from /v1/models. This tells Swan Inference
-			// the context this node actually serves, rather than the model catalog max.
-			ctxLen := mapping.ContextLength
-			if ctxLen == 0 && mapping.Endpoint != "" {
-				served := modelID
-				if mapping.LocalModel != "" {
-					served = mapping.LocalModel
-				}
-				ctxLen = detectModelContext(ctxClient, mapping.Endpoint, mapping.APIKey, served)
-			}
-			if ctxLen > 0 {
-				info.ContextLength = ctxLen
-				logs.GetLogger().Infof("Model %s reports context length: %d tokens", modelID, ctxLen)
-			}
+			// Explicit models.json override for the served context window
+			info.ContextLength = mapping.ContextLength
+		}
+		if info.ContextLength == 0 {
+			// Fall back to the backend's self-reported max_model_len (0 = unknown)
+			info.ContextLength = detected[modelID]
 		}
 
 		modelDir := c.getModelDir(modelID)
 		manifest, err := models.LoadHashManifest(modelDir)
 		if err != nil {
-			logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
+			if !quiet {
+				logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
+			}
 			hashes = append(hashes, info)
 			continue
 		}
@@ -2034,7 +1997,9 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		if manifest != nil {
 			info.WeightHash = manifest.CompositeHash
 			info.HashAlgo = manifest.Algorithm
-			logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, manifest.CompositeHash[:16]+"...")
+			if !quiet {
+				logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, manifest.CompositeHash[:16]+"...")
+			}
 		}
 
 		hashes = append(hashes, info)

@@ -49,6 +49,7 @@ type RegisteredModel struct {
 	Format       string       `json:"format,omitempty"`        // Weight format: fp16, awq, gptq, gguf, etc.
 	Quantization string       `json:"quantization,omitempty"`  // Quantization detail: q4_k_m, q8_0, w4a16, etc.
 	APIKey       string       `json:"api_key,omitempty"`       // API key for authenticated model endpoints
+	ContextLength int         `json:"context_length,omitempty"` // Max context this backend serves (models.json override)
 	State        ModelState   `json:"state"`
 	StateString  string       `json:"state_string"`
 	Health       ModelHealth  `json:"health"`
@@ -210,7 +211,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.LocalModel != mapping.LocalModel ||
 				existingModel.Format != mapping.Format ||
 				existingModel.Quantization != mapping.Quantization ||
-				existingModel.APIKey != mapping.APIKey {
+				existingModel.APIKey != mapping.APIKey ||
+				existingModel.ContextLength != mapping.ContextLength {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
@@ -220,11 +222,12 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.Format = mapping.Format
 				existingModel.Quantization = mapping.Quantization
 				existingModel.APIKey = mapping.APIKey
+				existingModel.ContextLength = mapping.ContextLength
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
 				if r.healthChecker != nil {
-					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey)
+					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel)
 				}
 
 				logs.GetLogger().Infof("Updated model configuration: %s", modelID)
@@ -251,6 +254,7 @@ func (r *ModelRegistry) loadConfig() error {
 				Format:       mapping.Format,
 				Quantization: mapping.Quantization,
 				APIKey:       mapping.APIKey,
+				ContextLength: mapping.ContextLength,
 				State:        ModelStateLoading,
 				StateString:  ModelStateLoading.String(),
 				Health:       ModelHealthUnknown,
@@ -263,7 +267,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 			// Register with health checker
 			if r.healthChecker != nil {
-				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey)
+				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel)
 			}
 
 			logs.GetLogger().Infof("Registered new model: %s -> %s (local: %s)", modelID, mapping.Endpoint, mapping.LocalModel)

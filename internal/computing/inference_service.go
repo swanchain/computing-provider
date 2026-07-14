@@ -114,9 +114,11 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Endpoint:     model.Endpoint,
 				GPUMemory:    model.GPUMemory,
 				Category:     model.Category,
+				LocalModel:   model.LocalModel,
 				Format:       model.Format,
 				Quantization: model.Quantization,
 				APIKey:       model.APIKey,
+				ContextLength: model.ContextLength,
 			}
 			s.updateClientModels()
 		},
@@ -132,9 +134,11 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Endpoint:     model.Endpoint,
 				GPUMemory:    model.GPUMemory,
 				Category:     model.Category,
+				LocalModel:   model.LocalModel,
 				Format:       model.Format,
 				Quantization: model.Quantization,
 				APIKey:       model.APIKey,
+				ContextLength: model.ContextLength,
 			}
 		},
 	)
@@ -232,6 +236,12 @@ func (s *InferenceService) Start() error {
 	// Set up model mappings provider for format/quantization and engine detection
 	s.client.SetModelMappingsProvider(func() map[string]ModelMapping {
 		return s.modelMappings
+	})
+
+	// Set up context length provider so register/heartbeat report the context
+	// window each backend actually serves (auto-detected by the health checker)
+	s.client.SetContextLengthProvider(func() map[string]int {
+		return s.healthChecker.GetDetectedContextLengths()
 	})
 
 	// Set up model health provider for heartbeats (backup for health update messages)
