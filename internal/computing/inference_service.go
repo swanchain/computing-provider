@@ -51,6 +51,7 @@ type ModelMapping struct {
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
+	ContextLength int   `json:"context_length,omitempty"` // Max context this backend serves; auto-detected from /v1/models if unset
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -113,9 +114,11 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Endpoint:     model.Endpoint,
 				GPUMemory:    model.GPUMemory,
 				Category:     model.Category,
+				LocalModel:   model.LocalModel,
 				Format:       model.Format,
 				Quantization: model.Quantization,
 				APIKey:       model.APIKey,
+				ContextLength: model.ContextLength,
 			}
 			s.updateClientModels()
 		},
@@ -131,9 +134,11 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 				Endpoint:     model.Endpoint,
 				GPUMemory:    model.GPUMemory,
 				Category:     model.Category,
+				LocalModel:   model.LocalModel,
 				Format:       model.Format,
 				Quantization: model.Quantization,
 				APIKey:       model.APIKey,
+				ContextLength: model.ContextLength,
 			}
 		},
 	)
@@ -231,6 +236,12 @@ func (s *InferenceService) Start() error {
 	// Set up model mappings provider for format/quantization and engine detection
 	s.client.SetModelMappingsProvider(func() map[string]ModelMapping {
 		return s.modelMappings
+	})
+
+	// Set up context length provider so register/heartbeat report the context
+	// window each backend actually serves (auto-detected by the health checker)
+	s.client.SetContextLengthProvider(func() map[string]int {
+		return s.healthChecker.GetDetectedContextLengths()
 	})
 
 	// Set up model health provider for heartbeats (backup for health update messages)
