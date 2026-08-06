@@ -1200,9 +1200,20 @@ var inferenceSelectModelCmd = &cli.Command{
 hardware, and automatically configure it in models.json and config.toml.
 The running provider will hot-reload the new model via fsnotify.
 
+With --auto, no prompts are shown: models are ranked by a competition-adjusted
+earnings score (est_earnings / (online_providers + 1), boosted by rising demand),
+matched against locally running model servers (SGLang/vLLM/Ollama, discovered
+automatically), and the best servable model(s) are written to the config.
+
 Examples:
   # Interactive model selection
   computing-provider inference select-model
+
+  # Fully automatic: pick and configure the best model for this machine
+  computing-provider inference select-model --auto
+
+  # Automatically configure the 3 best models (e.g., an Ollama host)
+  computing-provider inference select-model --auto --top 3
 
   # Pre-filter by category
   computing-provider inference select-model --category text-generation
@@ -1219,11 +1230,25 @@ Examples:
 		},
 		&cli.StringFlag{
 			Name:  "endpoint",
-			Usage: "Model server endpoint URL (skip prompt)",
+			Usage: "Model server endpoint URL (skip prompt; in --auto mode, fallback endpoint when no local server matches)",
 		},
 		&cli.StringFlag{
 			Name:  "category",
 			Usage: "Filter by category (e.g., text-generation, image-generation, embedding)",
+		},
+		&cli.BoolFlag{
+			Name:  "auto",
+			Usage: "Automatically select and configure the best model(s) without prompts",
+		},
+		&cli.IntFlag{
+			Name:  "top",
+			Usage: "Number of models to configure in --auto mode",
+			Value: 1,
+		},
+		&cli.BoolFlag{
+			Name:    "json",
+			Usage:   "Output result as JSON (--auto mode only)",
+			Aliases: []string{"j"},
 		},
 	},
 	Action: func(cctx *cli.Context) error {
@@ -1253,6 +1278,10 @@ Examples:
 			} else {
 				totalVRAM = vramPerGPU
 			}
+		}
+
+		if cctx.Bool("auto") {
+			return runAutoSelectModel(cctx, cfg, cpRepoPath, serviceURL, hardware, vramPerGPU, totalVRAM)
 		}
 
 		setup.PrintHeader("Swan Inference - Model Selection")
@@ -1422,4 +1451,304 @@ Examples:
 
 		return nil
 	},
+}
+
+// --- select-model --auto ---
+
+// autoSelectResult describes one model configured (or confirmed) by auto-selection.
+type autoSelectResult struct {
+	ModelID           string  `json:"model_id"`
+	Endpoint          string  `json:"endpoint"`
+	LocalModel        string  `json:"local_model,omitempty"`
+	ServerType        string  `json:"server_type"`
+	Category          string  `json:"category"`
+	GPUMemoryMB       int     `json:"gpu_memory_mb"`
+	Score             float64 `json:"score"`
+	EstDailyEarnings  float64 `json:"est_daily_earnings"`
+	MatchConfidence   float64 `json:"match_confidence"`
+	AlreadyConfigured bool    `json:"already_configured,omitempty"`
+}
+
+// autoSelectScore ranks a marketplace model for auto-selection: estimated
+// earnings divided by provider competition, boosted/penalized by demand trend.
+func autoSelectScore(e modelDemandEntry) float64 {
+	base := e.EstDailyEarnings
+	if base == 0 {
+		// No per-provider estimate; fall back to the model's network-wide revenue,
+		// which the competition divisor below scales to an approximate share.
+		base = e.Revenue24h
+	}
+	trend := 1.0
+	switch e.DemandTrend {
+	case "up":
+		trend = 1.2
+	case "down":
+		trend = 0.8
+	}
+	return base / float64(e.OnlineProviders+1) * trend
+}
+
+// autoEndpointMatch is a resolved local server for a marketplace model.
+type autoEndpointMatch struct {
+	server     setup.DiscoveredServer
+	localModel string
+	confidence float64
+}
+
+// autoMatchConfidenceMin is the minimum name-match confidence required to wire
+// a marketplace model to a locally served model without user confirmation.
+const autoMatchConfidenceMin = 0.7
+
+// matchEntryToServers finds the discovered server that serves the given
+// marketplace model, if any, using the setup wizard's fuzzy name matching.
+func matchEntryToServers(e modelDemandEntry, servers []setup.DiscoveredServer) *autoEndpointMatch {
+	swan := []setup.SwanModel{{ID: e.ModelID, Name: e.Name, Category: e.Category, Active: true}}
+	var best *autoEndpointMatch
+	for _, srv := range servers {
+		if !srv.Healthy || len(srv.Models) == 0 {
+			continue
+		}
+		for _, m := range setup.MatchModels(srv.Models, swan) {
+			if m.Confidence < autoMatchConfidenceMin {
+				continue
+			}
+			if best == nil || m.Confidence > best.confidence {
+				best = &autoEndpointMatch{server: srv, localModel: m.LocalModel, confidence: m.Confidence}
+			}
+		}
+	}
+	return best
+}
+
+// runAutoSelectModel implements `select-model --auto`: rank compatible models by
+// score, resolve endpoints from running local servers, and write the config.
+func runAutoSelectModel(cctx *cli.Context, cfg *conf.ComputeNode, cpRepoPath, serviceURL string, hardware *computing.HardwareInfo, vramPerGPU, totalVRAM int) error {
+	jsonOut := cctx.Bool("json")
+	topN := cctx.Int("top")
+	if topN < 1 {
+		topN = 1
+	}
+
+	entries, err := fetchModelDemand(serviceURL, cctx.String("category"), vramPerGPU, totalVRAM, vramPerGPU > 0)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("no compatible models found (detected %d GB VRAM; use --vram to override)", vramPerGPU)
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		si, sj := autoSelectScore(entries[i]), autoSelectScore(entries[j])
+		if si != sj {
+			return si > sj
+		}
+		return entries[i].Requests24h > entries[j].Requests24h
+	})
+
+	servers := setup.NewModelDiscovery().DiscoverAll()
+
+	models, err := conf.LoadModelsJson(cpRepoPath)
+	if err != nil {
+		return fmt.Errorf("failed to load models.json: %v", err)
+	}
+	configuredModels := make(map[string]bool)
+	for _, m := range cfg.Inference.Models {
+		configuredModels[m] = true
+	}
+
+	fallbackEndpoint := cctx.String("endpoint")
+	var selected []autoSelectResult
+	var unserved []modelDemandEntry
+
+	for _, e := range entries {
+		if len(selected) >= topN {
+			break
+		}
+
+		// Best model already configured: confirm it, don't rewrite.
+		if existing, ok := models[e.ModelID]; ok && configuredModels[e.ModelID] {
+			selected = append(selected, autoSelectResult{
+				ModelID:           e.ModelID,
+				Endpoint:          existing.Endpoint,
+				LocalModel:        existing.LocalModel,
+				ServerType:        "configured",
+				Category:          existing.Category,
+				GPUMemoryMB:       existing.GPUMemory,
+				Score:             autoSelectScore(e),
+				EstDailyEarnings:  e.EstDailyEarnings,
+				MatchConfidence:   1.0,
+				AlreadyConfigured: true,
+			})
+			continue
+		}
+
+		match := matchEntryToServers(e, servers)
+		endpoint := ""
+		localModel := ""
+		serverType := ""
+		confidence := 0.0
+		if match != nil {
+			endpoint = match.server.Endpoint
+			serverType = string(match.server.Type)
+			confidence = match.confidence
+			if !strings.EqualFold(match.localModel, e.ModelID) {
+				localModel = match.localModel
+			}
+		} else if fallbackEndpoint != "" {
+			endpoint = fallbackEndpoint
+			serverType = "manual"
+		} else {
+			unserved = append(unserved, e)
+			continue
+		}
+
+		gpuMemoryMB := e.MinVRAMGB * 1000
+		if gpuMemoryMB == 0 {
+			name := localModel
+			if name == "" {
+				name = e.ModelID
+			}
+			gpuMemoryMB = setup.EstimateGPUMemory(name)
+		}
+		category := e.Category
+		if category == "" {
+			category = "text-generation"
+		}
+
+		models[e.ModelID] = conf.ModelConfig{
+			Endpoint:   endpoint,
+			GPUMemory:  gpuMemoryMB,
+			Category:   category,
+			LocalModel: localModel,
+		}
+		selected = append(selected, autoSelectResult{
+			ModelID:          e.ModelID,
+			Endpoint:         endpoint,
+			LocalModel:       localModel,
+			ServerType:       serverType,
+			Category:         category,
+			GPUMemoryMB:      gpuMemoryMB,
+			Score:            autoSelectScore(e),
+			EstDailyEarnings: e.EstDailyEarnings,
+			MatchConfidence:  confidence,
+		})
+	}
+
+	// Persist config only when something new was selected.
+	newCount := 0
+	for _, s := range selected {
+		if !s.AlreadyConfigured {
+			newCount++
+		}
+	}
+	if newCount > 0 {
+		if err := conf.WriteModelsJson(cpRepoPath, models); err != nil {
+			return fmt.Errorf("failed to write models.json: %v", err)
+		}
+		updatedModels := cfg.Inference.Models
+		for _, s := range selected {
+			if !configuredModels[s.ModelID] {
+				updatedModels = append(updatedModels, s.ModelID)
+			}
+		}
+		if err := conf.UpdateInferenceConfig(cpRepoPath, "", updatedModels); err != nil {
+			return fmt.Errorf("failed to update config.toml Models list: %v", err)
+		}
+	}
+
+	if len(unserved) > 3 {
+		unserved = unserved[:3]
+	}
+
+	if jsonOut {
+		out := map[string]interface{}{
+			"hardware": hardware,
+			"selected": selected,
+			"unserved": unserved,
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	setup.PrintHeader("Swan Inference - Auto Model Selection")
+	if hardware != nil {
+		if hardware.GPUCount > 1 {
+			fmt.Printf("Hardware: %dx %s (%d GB each, %d GB total)\n", hardware.GPUCount, hardware.GPUModel, vramPerGPU, totalVRAM)
+		} else {
+			fmt.Printf("Hardware: %s (%d GB)\n", hardware.GPUModel, vramPerGPU)
+		}
+	} else if vramPerGPU > 0 {
+		fmt.Printf("Hardware: VRAM override %d GB\n", vramPerGPU)
+	} else {
+		color.Yellow("Hardware: Not detected (use --vram to specify)")
+	}
+
+	if len(servers) == 0 {
+		fmt.Println("Local model servers: none detected")
+	} else {
+		var labels []string
+		for _, s := range servers {
+			labels = append(labels, fmt.Sprintf("%s @ %s:%d (%d models)", s.Type, s.Host, s.Port, len(s.Models)))
+		}
+		fmt.Printf("Local model servers: %s\n", strings.Join(labels, ", "))
+	}
+	fmt.Println()
+
+	if len(selected) > 0 {
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"MODEL", "ENDPOINT", "SERVER", "LOCAL NAME", "EST $/DAY", "STATUS"})
+		table.SetAutoFormatHeaders(false)
+		table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+		table.SetAlignment(tablewriter.ALIGN_LEFT)
+		table.SetHeaderLine(false)
+		table.SetBorder(false)
+		table.SetCenterSeparator("")
+		table.SetColumnSeparator("")
+		table.SetRowSeparator("")
+		table.SetTablePadding("  ")
+		table.SetNoWhiteSpace(true)
+		for _, s := range selected {
+			earningStr := "-"
+			if s.EstDailyEarnings > 0 {
+				earningStr = fmt.Sprintf("$%.2f", s.EstDailyEarnings)
+			}
+			status := "added"
+			if s.AlreadyConfigured {
+				status = "already configured"
+			}
+			localName := s.LocalModel
+			if localName == "" {
+				localName = "-"
+			}
+			table.Append([]string{s.ModelID, s.Endpoint, s.ServerType, localName, earningStr, status})
+		}
+		table.Render()
+		fmt.Println()
+		if newCount > 0 {
+			setup.PrintSuccess(fmt.Sprintf("Configured %d new model(s) — updated models.json and config.toml", newCount))
+			setup.PrintBullet("If the provider is running, models are hot-reloaded automatically; otherwise: computing-provider run")
+		} else {
+			setup.PrintSuccess("Best model(s) already configured — nothing to change")
+		}
+	}
+
+	if len(selected) < topN {
+		fmt.Println()
+		color.Yellow("%d of the top-scoring model(s) are not served by any running local server:", len(unserved))
+		for _, e := range unserved {
+			score := autoSelectScore(e)
+			fmt.Printf("  %s (score %.2f, min VRAM %d GB)\n", e.ModelID, score, e.MinVRAMGB)
+		}
+		fmt.Println()
+		fmt.Println("To serve one of them, start a local model server first, e.g.:")
+		fmt.Println("  SGLang: docker run -d --gpus all -p 30000:30000 --shm-size 4g --ipc=host \\")
+		fmt.Println("    lmsysorg/sglang:latest python3 -m sglang.launch_server \\")
+		fmt.Println("    --model-path <MODEL_ID> --host 0.0.0.0 --port 30000 --served-model-name <MODEL_ID>")
+		fmt.Println("  Ollama: ollama pull <model-tag>")
+		fmt.Println("Then re-run: computing-provider inference select-model --auto")
+	}
+	fmt.Println()
+
+	return nil
 }
