@@ -81,6 +81,34 @@ func TestRecordDetectedContextLocalNameMatch(t *testing.T) {
 	}
 }
 
+func TestBuildModelMetadataHeartbeatShape(t *testing.T) {
+	c := &InferenceClient{models: []string{"model-a", "model-b", "model-c"}}
+	c.SetModelContextsProvider(func() map[string]int {
+		return map[string]int{"model-a": 32768}
+	})
+	c.SetModelMappingsProvider(func() map[string]ModelMapping {
+		return map[string]ModelMapping{
+			"model-b": {Format: "awq", Quantization: "w4a16"},
+			"model-c": {}, // no metadata at all -> omitted
+		}
+	})
+
+	infos := c.buildModelMetadata()
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 entries (model-c omitted), got %d: %+v", len(infos), infos)
+	}
+	byID := map[string]ModelInfo{}
+	for _, i := range infos {
+		byID[i.ModelID] = i
+	}
+	if byID["model-a"].ContextLength != 32768 {
+		t.Errorf("expected context 32768 for model-a, got %d", byID["model-a"].ContextLength)
+	}
+	if byID["model-b"].Format != "awq" || byID["model-b"].Quantization != "w4a16" {
+		t.Errorf("expected format/quant for model-b, got %+v", byID["model-b"])
+	}
+}
+
 func TestResolveModelContextsPrecedence(t *testing.T) {
 	h := NewModelHealthChecker(DefaultHealthCheckConfig())
 	h.RegisterModel("model-a", "http://x", "", "")

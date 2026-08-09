@@ -129,7 +129,10 @@ type HeartbeatPayload struct {
 	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
-	ModelContexts map[string]int   `json:"model_contexts,omitempty"` // modelID -> real context window in tokens (#61); lets the value change on backend restart without reconnect
+	// Per-model metadata refresh (context length, format, quantization) so a
+	// backend restart with a different max_model_len propagates without a
+	// reconnect (#61). Matches the server's HeartbeatPayload.ModelHashes.
+	ModelHashes []ModelInfo `json:"model_hashes,omitempty"`
 }
 
 // AckPayload for acknowledgments
@@ -1112,11 +1115,10 @@ func (c *InferenceClient) sendHeartbeat() {
 		payload.ModelHealth = c.modelHealthProvider()
 	}
 
-	// Include real context windows so the server picks up backend restarts
-	// with a different max_model_len without waiting for a reconnect (#61)
-	if c.modelContextsProvider != nil {
-		payload.ModelContexts = c.modelContextsProvider()
-	}
+	// Include per-model metadata (real context window, format, quantization)
+	// so the server picks up backend restarts with a different max_model_len
+	// without waiting for a reconnect (#61)
+	payload.ModelHashes = c.buildModelMetadata()
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -1949,6 +1951,36 @@ func (c *InferenceClient) sendBenchmarkResponse(requestID, benchmarkID string, r
 	case <-c.stopCh:
 		logs.GetLogger().Warnf("Client stopped while sending benchmark_response for %s", requestID)
 	}
+}
+
+// buildModelMetadata builds the lightweight per-model metadata list for
+// heartbeats: context window (manual or backend-detected), format, and
+// quantization — without touching hash manifests on disk (#61).
+func (c *InferenceClient) buildModelMetadata() []ModelInfo {
+	var contexts map[string]int
+	if c.modelContextsProvider != nil {
+		contexts = c.modelContextsProvider()
+	}
+	var mappings map[string]ModelMapping
+	if c.modelMappingsProvider != nil {
+		mappings = c.modelMappingsProvider()
+	}
+
+	var infos []ModelInfo
+	for _, modelID := range c.models {
+		info := ModelInfo{
+			ModelID:       modelID,
+			ContextLength: contexts[modelID],
+		}
+		if mapping, ok := mappings[modelID]; ok {
+			info.Format = mapping.Format
+			info.Quantization = mapping.Quantization
+		}
+		if info.ContextLength > 0 || info.Format != "" || info.Quantization != "" {
+			infos = append(infos, info)
+		}
+	}
+	return infos
 }
 
 // loadModelHashes loads hash manifests for all configured models
