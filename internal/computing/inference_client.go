@@ -69,6 +69,7 @@ type ModelInfo struct {
 	HashAlgo     string `json:"hash_algo,omitempty"`     // Hash algorithm, e.g. "sha256"
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	ContextLength int   `json:"context_length,omitempty"` // Backend's real context window in tokens (#61); 0 = unknown, server assumes catalog value
 }
 
 // VerifyResponsePayload is returned after processing a verification challenge
@@ -128,6 +129,7 @@ type HeartbeatPayload struct {
 	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
 	ModelHealth map[string]string  `json:"model_health,omitempty"` // modelID -> health status (backup for health updates)
 	Hardware    *HardwareInfo      `json:"hardware,omitempty"`     // GPU hardware info (periodically updated)
+	ModelContexts map[string]int   `json:"model_contexts,omitempty"` // modelID -> real context window in tokens (#61); lets the value change on backend restart without reconnect
 }
 
 // AckPayload for acknowledgments
@@ -274,6 +276,7 @@ type InferenceClient struct {
 	warmupHandler             WarmupHandler
 	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
 	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
+	modelContextsProvider     func() map[string]int              // Returns per-model real context windows for register/heartbeat (#61)
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -367,6 +370,12 @@ func (c *InferenceClient) SetModelHealthProvider(provider func() map[string]stri
 // SetModelMappingsProvider sets the function that returns model mappings for format/quantization
 func (c *InferenceClient) SetModelMappingsProvider(provider func() map[string]ModelMapping) {
 	c.modelMappingsProvider = provider
+}
+
+// SetModelContextsProvider sets the function that returns each model's real
+// context window (manual override or backend-detected) for register/heartbeat
+func (c *InferenceClient) SetModelContextsProvider(provider func() map[string]int) {
+	c.modelContextsProvider = provider
 }
 
 // ProviderStatusResponse represents the status check response from Swan Inference
@@ -1101,6 +1110,12 @@ func (c *InferenceClient) sendHeartbeat() {
 	// Include model health in heartbeat as backup for health update messages
 	if c.modelHealthProvider != nil {
 		payload.ModelHealth = c.modelHealthProvider()
+	}
+
+	// Include real context windows so the server picks up backend restarts
+	// with a different max_model_len without waiting for a reconnect (#61)
+	if c.modelContextsProvider != nil {
+		payload.ModelContexts = c.modelContextsProvider()
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -1946,6 +1961,12 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		mappings = c.modelMappingsProvider()
 	}
 
+	// Get real per-model context windows (manual override or backend-detected)
+	var contexts map[string]int
+	if c.modelContextsProvider != nil {
+		contexts = c.modelContextsProvider()
+	}
+
 	for _, modelID := range c.models {
 		info := ModelInfo{
 			ModelID: modelID,
@@ -1956,6 +1977,7 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 			info.Format = mapping.Format
 			info.Quantization = mapping.Quantization
 		}
+		info.ContextLength = contexts[modelID]
 
 		modelDir := c.getModelDir(modelID)
 		manifest, err := models.LoadHashManifest(modelDir)

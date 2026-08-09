@@ -51,6 +51,7 @@ type ModelMapping struct {
 	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
+	ContextLength int   `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -240,6 +241,11 @@ func (s *InferenceService) Start() error {
 		}
 		return nil
 	})
+
+	// Report each model's real context window (models.json override wins,
+	// else the backend-detected max_model_len) so the server can display and
+	// route against actual capacity instead of the catalog value (#61)
+	s.client.SetModelContextsProvider(s.resolveModelContexts)
 
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
@@ -654,6 +660,28 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
 	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
+}
+
+// resolveModelContexts returns each configured model's real context window in
+// tokens: a manual context_length from models.json wins; otherwise the value
+// the health checker detected from the backend's /v1/models (max_model_len).
+// Models with no known window are omitted — the server falls back to the
+// catalog value for those (#61).
+func (s *InferenceService) resolveModelContexts() map[string]int {
+	contexts := make(map[string]int)
+	for modelID, mapping := range s.modelMappings {
+		if mapping.ContextLength > 0 {
+			contexts[modelID] = mapping.ContextLength
+		} else if s.healthChecker != nil {
+			if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
+				contexts[modelID] = detected
+			}
+		}
+	}
+	if len(contexts) == 0 {
+		return nil
+	}
+	return contexts
 }
 
 // handleWarmup processes model warmup requests from Swan Inference

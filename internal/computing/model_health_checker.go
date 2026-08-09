@@ -3,8 +3,11 @@ package computing
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,6 +81,8 @@ type ModelHealthChecker struct {
 	statuses      map[string]*ModelStatus
 	endpoints     map[string]string // modelID -> endpoint
 	apiKeys       map[string]string // modelID -> API key for authenticated endpoints
+	localNames    map[string]string // modelID -> backend-local model name (e.g. Ollama tag)
+	detectedContexts map[string]int // modelID -> context window detected from the backend (/v1/models max_model_len)
 	config        HealthCheckConfig
 	httpClient    *http.Client
 	stopCh        chan struct{}
@@ -91,6 +96,8 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 		statuses:  make(map[string]*ModelStatus),
 		endpoints: make(map[string]string),
 		apiKeys:   make(map[string]string),
+		localNames:       make(map[string]string),
+		detectedContexts: make(map[string]int),
 		config:    config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -109,8 +116,10 @@ func (h *ModelHealthChecker) SetStatusChangeCallback(cb func(modelID string, old
 	h.onStatusChange = cb
 }
 
-// RegisterModel adds a model to health checking
-func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey string) {
+// RegisterModel adds a model to health checking. localModel is the backend's
+// own name for the model (e.g. an Ollama tag) used to match /v1/models entries
+// for context detection; pass "" when it equals the model ID.
+func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey, localModel string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -119,6 +128,11 @@ func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey string) {
 		h.apiKeys[modelID] = apiKey
 	} else {
 		delete(h.apiKeys, modelID)
+	}
+	if localModel != "" {
+		h.localNames[modelID] = localModel
+	} else {
+		delete(h.localNames, modelID)
 	}
 	if _, exists := h.statuses[modelID]; !exists {
 		h.statuses[modelID] = &ModelStatus{
@@ -141,6 +155,8 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	delete(h.endpoints, modelID)
 	delete(h.apiKeys, modelID)
 	delete(h.statuses, modelID)
+	delete(h.localNames, modelID)
+	delete(h.detectedContexts, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
 }
 
@@ -219,13 +235,54 @@ func (h *ModelHealthChecker) checkAllModels() {
 		wg.Add(1)
 		go func(ep string, info *endpointInfo) {
 			defer wg.Done()
-			err := h.probeEndpoint(ep, info.apiKey)
+			contexts, err := h.probeEndpoint(ep, info.apiKey)
 			for _, modelID := range info.modelIDs {
 				h.applyProbeResult(modelID, ep, err)
+				h.recordDetectedContext(modelID, contexts)
 			}
 		}(endpoint, group)
 	}
 	wg.Wait()
+}
+
+// recordDetectedContext stores the backend-reported context window for a model
+// if the endpoint's /v1/models listing included one for it.
+func (h *ModelHealthChecker) recordDetectedContext(modelID string, contexts map[string]int) {
+	if len(contexts) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	name := h.localNames[modelID]
+	if name == "" {
+		name = modelID
+	}
+	ctx, ok := contexts[name]
+	if !ok {
+		// Backends differ in ID casing; fall back to a case-insensitive match.
+		for id, c := range contexts {
+			if strings.EqualFold(id, name) {
+				ctx, ok = c, true
+				break
+			}
+		}
+	}
+	if !ok || ctx <= 0 {
+		return
+	}
+	if h.detectedContexts[modelID] != ctx {
+		logs.GetLogger().Infof("Detected context window for %s: %d tokens (backend max_model_len)", modelID, ctx)
+		h.detectedContexts[modelID] = ctx
+	}
+}
+
+// GetDetectedContext returns the backend-reported context window for a model,
+// or 0 if the backend does not expose one (e.g. Ollama).
+func (h *ModelHealthChecker) GetDetectedContext(modelID string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.detectedContexts[modelID]
 }
 
 // checkModel performs a health check on a single model (used by ForceCheck)
@@ -239,8 +296,9 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 		return
 	}
 
-	err := h.probeEndpoint(endpoint, apiKey)
+	contexts, err := h.probeEndpoint(endpoint, apiKey)
 	h.applyProbeResult(modelID, endpoint, err)
+	h.recordDetectedContext(modelID, contexts)
 }
 
 // applyProbeResult updates a model's health status based on a probe result.
@@ -312,7 +370,10 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 // Tries /v1/models first (lightweight, just lists models) then falls back to
 // /health. This avoids triggering expensive deep health checks on proxies like
 // LiteLLM, where GET /health sends a real inference request to every backend.
-func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
+// On a successful /v1/models probe it also returns each listed model's
+// max_model_len (vLLM/SGLang expose it; Ollama does not), keyed by the
+// backend's model ID, for context-window reporting (#61).
+func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) (map[string]int, error) {
 	// Try /v1/models first — lightweight on all known serving engines
 	modelsCtx, modelsCancel := context.WithTimeout(context.Background(), h.config.Timeout)
 	defer modelsCancel()
@@ -320,7 +381,7 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 	modelsURL := endpoint + "/v1/models"
 	req, err := http.NewRequestWithContext(modelsCtx, "GET", modelsURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -328,8 +389,9 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 
 	resp, err := h.httpClient.Do(req)
 	if err == nil && resp.StatusCode == http.StatusOK {
+		contexts := parseModelContexts(resp.Body)
 		resp.Body.Close()
-		return nil
+		return contexts, nil
 	}
 	if resp != nil {
 		resp.Body.Close()
@@ -346,7 +408,7 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 	healthURL := endpoint + "/health"
 	req, err = http.NewRequestWithContext(healthCtx, "GET", healthURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -354,15 +416,37 @@ func (h *ModelHealthChecker) probeEndpoint(endpoint, apiKey string) error {
 
 	resp, err = h.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("endpoint unreachable: %w", err)
+		return nil, fmt.Errorf("endpoint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("endpoint returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("endpoint returned status %d", resp.StatusCode)
 	}
 
-	return nil
+	return nil, nil
+}
+
+// parseModelContexts extracts per-model context windows from a /v1/models
+// response body. vLLM and SGLang report max_model_len per model; backends that
+// don't (e.g. Ollama) simply yield no entries.
+func parseModelContexts(body io.Reader) map[string]int {
+	var listing struct {
+		Data []struct {
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(body, 1<<20)).Decode(&listing); err != nil {
+		return nil
+	}
+	contexts := make(map[string]int)
+	for _, m := range listing.Data {
+		if m.MaxModelLen > 0 {
+			contexts[m.ID] = m.MaxModelLen
+		}
+	}
+	return contexts
 }
 
 // GetModelStatus returns the health status of a specific model

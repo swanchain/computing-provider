@@ -232,6 +232,7 @@ type ModelConfig struct {
 	GPUMemory  int    `json:"gpu_memory"`
 	Category   string `json:"category"`
 	LocalModel string `json:"local_model,omitempty"`
+	ContextLength int `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
 }
 
 // UpdateInferenceConfig updates the Inference section in config.toml
