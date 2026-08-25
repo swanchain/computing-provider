@@ -37,10 +37,10 @@ const (
 	MsgTypeError             MessageType = "error"
 	MsgTypeStreamChunk       MessageType = "stream_chunk"        // Streaming chunk to Swan Inference
 	MsgTypeStreamEnd         MessageType = "stream_end"          // End of stream marker
-	MsgTypeWarmup             MessageType = "warmup"              // Model warmup request
-	MsgTypeModelHealthUpdate  MessageType = "model_health_update" // Model health status update
-	MsgTypeBenchmark          MessageType = "benchmark"           // Benchmark test request from server
-	MsgTypeBenchmarkResponse  MessageType = "benchmark_response"  // Benchmark test results to server
+	MsgTypeWarmup            MessageType = "warmup"              // Model warmup request
+	MsgTypeModelHealthUpdate MessageType = "model_health_update" // Model health status update
+	MsgTypeBenchmark         MessageType = "benchmark"           // Benchmark test request from server
+	MsgTypeBenchmarkResponse MessageType = "benchmark_response"  // Benchmark test results to server
 )
 
 // Message is the base WebSocket message structure
@@ -64,12 +64,12 @@ type HardwareInfo struct {
 
 // ModelInfo contains model identification and verification hash
 type ModelInfo struct {
-	ModelID      string `json:"model_id"`
-	WeightHash   string `json:"weight_hash,omitempty"`   // Composite SHA256 of all weight files
-	HashAlgo     string `json:"hash_algo,omitempty"`     // Hash algorithm, e.g. "sha256"
-	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
-	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
-	ContextLength int   `json:"context_length,omitempty"` // Backend's real context window in tokens (#61); 0 = unknown, server assumes catalog value
+	ModelID       string `json:"model_id"`
+	WeightHash    string `json:"weight_hash,omitempty"`    // Composite SHA256 of all weight files
+	HashAlgo      string `json:"hash_algo,omitempty"`      // Hash algorithm, e.g. "sha256"
+	Format        string `json:"format,omitempty"`         // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
+	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	ContextLength int    `json:"context_length,omitempty"` // Backend's real context window in tokens (#61); 0 = unknown, server assumes catalog value
 }
 
 // VerifyResponsePayload is returned after processing a verification challenge
@@ -82,17 +82,20 @@ type VerifyResponsePayload struct {
 
 // RegisterPayload is sent by provider on connection
 type RegisterPayload struct {
-	NodeID       string        `json:"node_id"`                      // Local node ID (not the DB provider ID)
-	ProviderID   string        `json:"provider_id,omitempty"`        // Deprecated: use NodeID
-	NodeName     string        `json:"node_name,omitempty"`          // Human-readable provider name from config
-	WorkerAddr   string        `json:"worker_addr"`
-	OwnerAddr    string        `json:"owner_addr"`
-	Token        string        `json:"token,omitempty"`              // API key for authentication (sk-prov-*)
-	Signature    string        `json:"signature,omitempty"`
-	Models       []string      `json:"models"`
-	ModelHashes  []ModelInfo   `json:"model_hashes,omitempty"`       // Per-model composite hashes for verification
-	Capabilities []string      `json:"capabilities"`
-	Hardware     *HardwareInfo `json:"hardware,omitempty"`
+	NodeID      string      `json:"node_id"`               // Local node ID (not the DB provider ID)
+	ProviderID  string      `json:"provider_id,omitempty"` // Deprecated: use NodeID
+	NodeName    string      `json:"node_name,omitempty"`   // Human-readable provider name from config
+	WorkerAddr  string      `json:"worker_addr"`
+	OwnerAddr   string      `json:"owner_addr"`
+	Token       string      `json:"token,omitempty"` // API key for authentication (sk-prov-*)
+	Signature   string      `json:"signature,omitempty"`
+	Models      []string    `json:"models"`
+	ModelHashes []ModelInfo `json:"model_hashes,omitempty"` // DEPRECATED (swan-inference#455): superseded by ModelDeclarations
+	// ModelDeclarations is the schema v1 per-model declaration. Sent alongside
+	// ModelHashes during the migration window; the marketplace prefers it.
+	ModelDeclarations []ModelDeclaration `json:"model_declarations,omitempty"`
+	Capabilities      []string           `json:"capabilities"`
+	Hardware          *HardwareInfo      `json:"hardware,omitempty"`
 }
 
 // InferencePayload is sent to provider for inference request
@@ -122,8 +125,8 @@ type VerifyPayload struct {
 
 // HeartbeatPayload for liveness checks
 type HeartbeatPayload struct {
-	NodeID      string             `json:"node_id"`                      // Local node ID (not the DB provider ID)
-	ProviderID  string             `json:"provider_id,omitempty"`        // Deprecated: use NodeID
+	NodeID      string             `json:"node_id"`               // Local node ID (not the DB provider ID)
+	ProviderID  string             `json:"provider_id,omitempty"` // Deprecated: use NodeID
 	Timestamp   int64              `json:"timestamp"`
 	Metrics     map[string]float64 `json:"metrics,omitempty"`
 	Models      []string           `json:"models,omitempty"`       // Current model list (allows dynamic model updates without reconnect)
@@ -132,7 +135,8 @@ type HeartbeatPayload struct {
 	// Per-model metadata refresh (context length, format, quantization) so a
 	// backend restart with a different max_model_len propagates without a
 	// reconnect (#61). Matches the server's HeartbeatPayload.ModelHashes.
-	ModelHashes []ModelInfo `json:"model_hashes,omitempty"`
+	ModelHashes       []ModelInfo        `json:"model_hashes,omitempty"`
+	ModelDeclarations []ModelDeclaration `json:"model_declarations,omitempty"`
 }
 
 // AckPayload for acknowledgments
@@ -220,9 +224,9 @@ type BenchmarkResult struct {
 
 // ModelHealthUpdatePayload is sent to Swan Inference when model health changes
 type ModelHealthUpdatePayload struct {
-	NodeID      string            `json:"node_id"`                      // Local node ID (not the DB provider ID)
-	ProviderID  string            `json:"provider_id,omitempty"`        // Deprecated: use NodeID
-	ModelHealth map[string]string `json:"model_health"` // modelID -> health status ("healthy", "degraded", "unhealthy")
+	NodeID      string            `json:"node_id"`               // Local node ID (not the DB provider ID)
+	ProviderID  string            `json:"provider_id,omitempty"` // Deprecated: use NodeID
+	ModelHealth map[string]string `json:"model_health"`          // modelID -> health status ("healthy", "degraded", "unhealthy")
 	Timestamp   int64             `json:"timestamp"`
 }
 
@@ -277,9 +281,9 @@ type InferenceClient struct {
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
 	warmupHandler             WarmupHandler
-	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
-	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
-	modelContextsProvider     func() map[string]int              // Returns per-model real context windows for register/heartbeat (#61)
+	modelHealthProvider       func() map[string]string       // Returns current model health for heartbeat
+	modelMappingsProvider     func() map[string]ModelMapping // Returns current model mappings for format/quantization
+	modelContextsProvider     func() map[string]int          // Returns per-model real context windows for register/heartbeat (#61)
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -291,13 +295,13 @@ type InferenceClient struct {
 	missedAcks       int       // Consecutive heartbeats without ack response
 
 	// Send buffer saturation tracking
-	sendFailures     int        // Consecutive send buffer full timeouts
-	sendFailuresMu   sync.Mutex // Protects sendFailures counter
-	connGeneration   uint64     // Incremented on each reconnect to invalidate stale forceReconnect calls
+	sendFailures   int        // Consecutive send buffer full timeouts
+	sendFailuresMu sync.Mutex // Protects sendFailures counter
+	connGeneration uint64     // Incremented on each reconnect to invalidate stale forceReconnect calls
 
 	// Reconnect guard
-	reconnecting     bool       // True while a reconnect is in progress
-	reconnectMu      sync.Mutex // Protects reconnecting flag
+	reconnecting bool       // True while a reconnect is in progress
+	reconnectMu  sync.Mutex // Protects reconnecting flag
 
 	// Metrics tracking
 	metrics      *InferenceMetrics
@@ -907,16 +911,17 @@ func (c *InferenceClient) register() error {
 	modelHashes := c.loadModelHashes()
 
 	payload := RegisterPayload{
-		NodeID:       c.nodeID,   // Local node ID for routing
-		ProviderID:   c.nodeID,   // Deprecated: kept for backward compatibility
-		NodeName:     conf.GetConfig().API.NodeName,
-		WorkerAddr:   c.workerAddr,
-		OwnerAddr:    c.ownerAddr,
-		Token:        c.apiKey,   // API key for authentication (provider ID resolved from this)
-		Models:       c.models,
-		ModelHashes:  modelHashes,
-		Capabilities: []string{"inference", "verification"},
-		Hardware:     hardware,
+		NodeID:            c.nodeID, // Local node ID for routing
+		ProviderID:        c.nodeID, // Deprecated: kept for backward compatibility
+		NodeName:          conf.GetConfig().API.NodeName,
+		WorkerAddr:        c.workerAddr,
+		OwnerAddr:         c.ownerAddr,
+		Token:             c.apiKey, // API key for authentication (provider ID resolved from this)
+		Models:            c.models,
+		ModelHashes:       modelHashes,
+		ModelDeclarations: c.buildModelDeclarations(),
+		Capabilities:      []string{"inference", "verification"},
+		Hardware:          hardware,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -1102,8 +1107,8 @@ func (c *InferenceClient) heartbeatPump() {
 
 func (c *InferenceClient) sendHeartbeat() {
 	payload := HeartbeatPayload{
-		NodeID:     c.nodeID,   // Local node ID for routing
-		ProviderID: c.nodeID,   // Deprecated: kept for backward compatibility
+		NodeID:     c.nodeID, // Local node ID for routing
+		ProviderID: c.nodeID, // Deprecated: kept for backward compatibility
 		Timestamp:  time.Now().Unix(),
 		Metrics:    c.collectMetrics(),
 		Models:     c.models,   // Include models so hub can rebuild routing map after restart
@@ -1119,6 +1124,7 @@ func (c *InferenceClient) sendHeartbeat() {
 	// so the server picks up backend restarts with a different max_model_len
 	// without waiting for a reconnect (#61)
 	payload.ModelHashes = c.buildModelMetadata()
+	payload.ModelDeclarations = c.buildModelDeclarations()
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -1166,8 +1172,8 @@ func (c *InferenceClient) SendModelHealthUpdate(modelHealth map[string]string) {
 	}
 
 	payload := ModelHealthUpdatePayload{
-		NodeID:      c.nodeID,   // Local node ID for routing
-		ProviderID:  c.nodeID,   // Deprecated: kept for backward compatibility
+		NodeID:      c.nodeID, // Local node ID for routing
+		ProviderID:  c.nodeID, // Deprecated: kept for backward compatibility
 		ModelHealth: modelHealth,
 		Timestamp:   time.Now().Unix(),
 	}
@@ -2195,4 +2201,182 @@ func extractTokenCounts(response json.RawMessage) (int, int) {
 	}
 
 	return 0, 0
+}
+
+// ---------------------------------------------------------------------------
+// Model capability declaration, schema v1 (swan-inference#455)
+//
+// Field shapes borrow OpenRouter's model-document schema 2.4 vocabulary so the
+// marketplace can republish them with minimal translation. Three deliberate
+// departures, all decided upstream: the version is Swan's (not OpenRouter's, so
+// their releases cannot break deployed providers), there is NO pricing (Swan
+// sets consumer and payout prices centrally), and every field is a CLAIM that
+// the marketplace verifies by measurement.
+// ---------------------------------------------------------------------------
+
+// ModelDeclarationSchemaVersion is the declaration format this client emits.
+const ModelDeclarationSchemaVersion = "1"
+
+type DeclaredQuantity struct {
+	Value int64  `json:"value"`
+	Unit  string `json:"unit"`
+}
+
+type DeclaredModality struct {
+	Type                string            `json:"type"`
+	MaxContextLength    *DeclaredQuantity `json:"max_context_length,omitempty"`
+	MaxLength           *DeclaredQuantity `json:"max_length,omitempty"`
+	SupportedParameters []string          `json:"supported_parameters,omitempty"`
+	Streaming           *bool             `json:"streaming,omitempty"`
+}
+
+type DeclaredCapacity struct {
+	Type  string `json:"type"`
+	Unit  string `json:"unit"`
+	Per   string `json:"per,omitempty"`
+	Value int64  `json:"value"`
+}
+
+type ModelDeclaration struct {
+	SchemaVersion    string             `json:"schema_version"`
+	ModelID          string             `json:"model_id"`
+	WeightHash       string             `json:"weight_hash,omitempty"`
+	HashAlgo         string             `json:"hash_algo,omitempty"`
+	Quantization     string             `json:"quantization,omitempty"`
+	Engine           string             `json:"engine,omitempty"`
+	InputModalities  []DeclaredModality `json:"input_modalities,omitempty"`
+	OutputModalities []DeclaredModality `json:"output_modalities,omitempty"`
+	Capacity         []DeclaredCapacity `json:"capacity,omitempty"`
+}
+
+// declaredQuantizations is the closed enum the marketplace accepts.
+var declaredQuantizations = map[string]bool{
+	"int4": true, "int8": true, "fp4": true, "mxfp4": true, "nvfp4": true,
+	"fp6": true, "fp8": true, "mxfp8": true, "fp16": true, "bf16": true, "fp32": true,
+}
+
+// normalizeQuantization maps our free-text models.json format/quantization onto
+// the closed enum. An unrecognised value yields "" — declaring nothing is better
+// than declaring something wrong, because this feeds the marketplace's
+// fingerprint baseline and its public listing.
+func normalizeQuantization(format, quantization string) string {
+	for _, raw := range []string{quantization, format} {
+		v := strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			continue
+		}
+		if declaredQuantizations[v] {
+			return v
+		}
+		switch {
+		case strings.Contains(v, "fp32"), strings.Contains(v, "float32"):
+			return "fp32"
+		case strings.Contains(v, "bf16"), strings.Contains(v, "bfloat16"):
+			return "bf16"
+		case strings.Contains(v, "fp16"), strings.Contains(v, "float16"):
+			return "fp16"
+		case strings.Contains(v, "fp8"):
+			return "fp8"
+		case strings.Contains(v, "int8"), strings.Contains(v, "q8"), strings.Contains(v, "8bit"):
+			return "int8"
+		case strings.Contains(v, "int4"), strings.Contains(v, "q4"), strings.Contains(v, "4bit"),
+			strings.Contains(v, "awq"), strings.Contains(v, "gptq"), strings.Contains(v, "w4a16"):
+			return "int4"
+		}
+	}
+	return ""
+}
+
+// declaredModalitiesFor maps a models.json category onto input/output modality
+// lists. Unknown categories fall back to text->text, which is what the gateway
+// assumed before this schema existed.
+func declaredModalitiesFor(category string, contextLen int) ([]DeclaredModality, []DeclaredModality) {
+	streaming := true
+	in := DeclaredModality{Type: "text"}
+	if contextLen > 0 {
+		in.MaxContextLength = &DeclaredQuantity{Value: int64(contextLen), Unit: "token"}
+	}
+	textOut := DeclaredModality{
+		Type:      "text",
+		Streaming: &streaming,
+		// Only what an OpenAI-compatible backend reliably accepts. Claiming a
+		// parameter the engine ignores would be a false capability claim.
+		SupportedParameters: []string{
+			"max_tokens", "temperature", "top_p", "stop",
+			"frequency_penalty", "presence_penalty", "seed", "logprobs",
+		},
+	}
+
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "embedding", "embeddings", "text-embedding":
+		return []DeclaredModality{in}, []DeclaredModality{{Type: "embeddings"}}
+	case "reranking", "rerank":
+		return []DeclaredModality{in}, []DeclaredModality{{Type: "rerank"}}
+	case "image", "text-to-image", "image-generation":
+		return []DeclaredModality{in}, []DeclaredModality{{Type: "image"}}
+	case "audio", "speech-to-text", "transcription":
+		return []DeclaredModality{{Type: "audio"}}, []DeclaredModality{{Type: "transcription"}}
+	case "multimodal", "vision", "image-text-to-text":
+		return []DeclaredModality{in, {Type: "image"}}, []DeclaredModality{textOut}
+	default:
+		return []DeclaredModality{in}, []DeclaredModality{textOut}
+	}
+}
+
+// buildModelDeclarations produces the schema v1 declaration for every model this
+// node serves (swan-inference#455). Sent alongside the legacy ModelHashes during
+// the migration window; the marketplace prefers this when present.
+//
+// Everything here is a claim the marketplace will verify by measurement, so it
+// must be conservative: an unmappable quantization is omitted rather than
+// guessed, and only parameters an OpenAI-compatible backend reliably accepts are
+// declared. Over-claiming is what the verification programme is designed to
+// catch, and there is nothing to gain by it.
+func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
+	var contexts map[string]int
+	if c.modelContextsProvider != nil {
+		contexts = c.modelContextsProvider()
+	}
+	var mappings map[string]ModelMapping
+	if c.modelMappingsProvider != nil {
+		mappings = c.modelMappingsProvider()
+	}
+
+	decls := make([]ModelDeclaration, 0, len(c.models))
+	for _, modelID := range c.models {
+		mapping := mappings[modelID]
+		in, out := declaredModalitiesFor(mapping.Category, contexts[modelID])
+
+		d := ModelDeclaration{
+			SchemaVersion:    ModelDeclarationSchemaVersion,
+			ModelID:          modelID,
+			Quantization:     normalizeQuantization(mapping.Format, mapping.Quantization),
+			Engine:           detectEngineName(mapping),
+			InputModalities:  in,
+			OutputModalities: out,
+		}
+		decls = append(decls, d)
+	}
+	return decls
+}
+
+// detectEngineName reports the serving runtime when models.json makes it
+// evident. Left empty when unknown — the marketplace pairs engine with
+// precision to build a fingerprint baseline, and a wrong engine would poison it.
+func detectEngineName(m ModelMapping) string {
+	hay := strings.ToLower(m.Container + " " + m.Endpoint + " " + m.Format)
+	switch {
+	case strings.Contains(hay, "vllm"):
+		return "vllm"
+	case strings.Contains(hay, "sglang"):
+		return "sglang"
+	case strings.Contains(hay, "llama.cpp"), strings.Contains(hay, "llama-server"),
+		strings.Contains(hay, "llamacpp"), strings.Contains(hay, "gguf"):
+		return "llama.cpp"
+	case strings.Contains(hay, "ollama"):
+		return "ollama"
+	case strings.Contains(hay, "tgi"):
+		return "tgi"
+	}
+	return ""
 }
