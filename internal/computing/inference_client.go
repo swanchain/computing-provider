@@ -245,6 +245,9 @@ const (
 
 	// Reconnection delay
 	reconnectDelay = 5 * time.Second
+
+	// Ceiling for the exponential reconnect backoff
+	maxReconnectDelay = 30 * time.Second
 )
 
 // InferenceHandler handles non-streaming inference requests from Inference service
@@ -593,11 +596,15 @@ func (c *InferenceClient) reconnect() {
 		case <-c.stopCh:
 			return
 		default:
-			// Immediate first attempt, then exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
+			// Immediate first attempt, then exponential backoff: 1s, 2s, 4s, 8s... capped at 30s.
+			// The shift is clamped: 1<<63 overflows int64 and yields a 0s delay, which turns
+			// a long outage into a zero-delay hot loop against the server.
 			if attempt > 0 {
-				delay := time.Duration(1<<uint(attempt-1)) * time.Second
-				if delay > 30*time.Second {
-					delay = 30 * time.Second
+				delay := maxReconnectDelay
+				if shift := attempt - 1; shift < 32 {
+					if d := time.Duration(1<<uint(shift)) * time.Second; d < maxReconnectDelay {
+						delay = d
+					}
 				}
 				logs.GetLogger().Infof("Reconnect attempt %d, waiting %v...", attempt, delay)
 				time.Sleep(delay)
