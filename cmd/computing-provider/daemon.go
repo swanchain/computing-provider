@@ -14,6 +14,7 @@ import (
 	cors "github.com/itsjamie/gin-cors"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/logging"
 	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/urfave/cli/v2"
 )
@@ -71,7 +72,12 @@ func runDaemon() error {
 	if err := conf.InitConfig(cpRepoPath, true); err != nil {
 		logs.GetLogger().Fatal(err)
 	}
+	if err := logging.Setup(conf.GetConfig().Log); err != nil {
+		logs.GetLogger().Warnf("Failed to configure logging, continuing with defaults: %v", err)
+	}
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
+	logs.GetLogger().Infof("Logging to %s (rotate at %dMB, keep %d)",
+		conf.GetConfig().Log.Dir, conf.GetConfig().Log.MaxSizeMB, conf.GetConfig().Log.MaxBackups)
 
 	// Check if private_key was copied from another machine
 	if err := computing.CheckMachineIdentity(cpRepoPath); err != nil {

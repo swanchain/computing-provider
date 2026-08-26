@@ -6,6 +6,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/db"
+	"github.com/swanchain/computing-provider-v2/internal/logging"
 	"github.com/urfave/cli/v2"
 	"os"
 	"strings"
@@ -82,6 +83,9 @@ func main() {
 				return fmt.Errorf("CP_PATH: %s, no such directory", cpRepoPath)
 			}
 			os.Setenv("CP_PATH", cpRepoPath)
+			// Point logging at the repo before anything logs; runDaemon re-applies
+			// this once config.toml (and any custom [Log] section) is loaded.
+			_ = logging.Setup(conf.DefaultLog(cpRepoPath))
 			if !strings.EqualFold(c.Args().First(), initCmd.Name) {
 				if !conf.Exists(cpRepoPath) {
 					return fmt.Errorf("repo at '%s' not exist, please initialize it", cpRepoPath)

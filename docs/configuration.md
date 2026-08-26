@@ -74,6 +74,33 @@ ServiceURL = ""                                      # Optional: HTTP API URL (a
 | `Models` | Yes | List of model names to serve (must match keys in `models.json`) |
 | `ServiceURL` | No | HTTP API URL for status checks. Auto-derived from WebSocketURL if empty |
 
+### Logging
+
+Every field is optional — omit the whole section and the provider writes rotated logs to `$CP_PATH/logs`.
+
+```toml
+[Log]
+Dir = "/mnt/data/logs/cp"   # Log directory; relative paths resolve against $CP_PATH
+Level = "info"              # trace | debug | info | warn | error
+MaxSizeMB = 100             # Rotate a file once it exceeds this size
+MaxBackups = 5              # Rotated files to keep per level
+MaxAgeDays = 30             # Delete rotated files older than this; -1 disables the age limit
+Compress = true             # gzip rotated files
+Stdout = true               # Also write to stdout
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Dir` | `$CP_PATH/logs` | Where `info.log`, `warn.log` and `error.log` are written. Set an absolute path to put logs on a different disk |
+| `Level` | `info` | Minimum level to record |
+| `MaxSizeMB` | `100` | Size at which a file rotates |
+| `MaxBackups` | `5` | Rotated files kept per level, so disk use is bounded by roughly `MaxSizeMB × (MaxBackups + 1) × 3` |
+| `MaxAgeDays` | `30` | Age-based deletion of rotated files; `-1` keeps them until `MaxBackups` evicts them |
+| `Compress` | `true` | gzip rotated files |
+| `Stdout` | `true` | Also write to stdout, for `journald`/`docker logs` setups |
+
+> **Why this matters:** without rotation a provider that loses its connection to Swan Inference logs reconnect attempts continuously and can fill the disk. Rotation caps that, and `Dir` lets you keep logs off a small root volume.
+
 ### models.json field reference
 
 Each key in `models.json` is the marketplace model ID (must match a value in `Models` above).

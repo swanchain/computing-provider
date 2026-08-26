@@ -78,16 +78,44 @@ func (p *Pricing) UnmarshalTOML(data interface{}) error {
 type ComputeNode struct {
 	API       API
 	RPC       RPC       `toml:"RPC,omitempty"`
-	Inference Inference  `toml:"Inference,omitempty"`
+	Inference Inference `toml:"Inference,omitempty"`
+	Log       Log       `toml:"Log,omitempty"`
+}
+
+// Log controls where the provider writes its log files and how they are rotated.
+// Without rotation a long-running provider can fill its disk: an unreachable
+// Swan Inference endpoint produces a steady stream of reconnect lines.
+type Log struct {
+	Dir        string `toml:"Dir"`        // Log directory; relative paths resolve against $CP_PATH. Default: $CP_PATH/logs
+	Level      string `toml:"Level"`      // trace|debug|info|warn|error. Default: info
+	MaxSizeMB  int    `toml:"MaxSizeMB"`  // Rotate a file once it exceeds this size. Default: 100
+	MaxBackups int    `toml:"MaxBackups"` // Rotated files to keep per level. Default: 5
+	MaxAgeDays int    `toml:"MaxAgeDays"` // Delete rotated files older than this. -1 disables the age limit. Default: 30
+	Compress   *bool  `toml:"Compress"`   // gzip rotated files. Default: true
+	Stdout     *bool  `toml:"Stdout"`     // Also write to stdout. Default: true
+}
+
+// CompressEnabled reports whether rotated files should be gzipped (default true).
+func (l Log) CompressEnabled() bool { return l.Compress == nil || *l.Compress }
+
+// StdoutEnabled reports whether logs also go to stdout (default true).
+func (l Log) StdoutEnabled() bool { return l.Stdout == nil || *l.Stdout }
+
+// MaxAge returns the retention in days for lumberjack, where 0 means "no limit".
+func (l Log) MaxAge() int {
+	if l.MaxAgeDays < 0 {
+		return 0
+	}
+	return l.MaxAgeDays
 }
 
 // Inference is the Swan Inference marketplace configuration (default mode)
 type Inference struct {
-	Enable             bool     `toml:"Enable"`
-	ServiceURL         string   `toml:"ServiceURL"`         // HTTP API URL (e.g., http://localhost:8080)
-	WebSocketURL       string   `toml:"WebSocketURL"`       // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
-	ApiKey             string   `toml:"ApiKey"`             // Provider API key for authentication (sk-prov-*)
-	Models             []string `toml:"Models"`             // Models this provider serves
+	Enable       bool     `toml:"Enable"`
+	ServiceURL   string   `toml:"ServiceURL"`   // HTTP API URL (e.g., http://localhost:8080)
+	WebSocketURL string   `toml:"WebSocketURL"` // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
+	ApiKey       string   `toml:"ApiKey"`       // Provider API key for authentication (sk-prov-*)
+	Models       []string `toml:"Models"`       // Models this provider serves
 }
 
 type API struct {
@@ -123,6 +151,8 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 		config.API.GpuUtilizationRejectThreshold = 1.0
 	}
 
+	applyLogDefaults(&config.Log, cpRepoPath)
+
 	// Validate MultiAddress format if provided (optional for Inference mode)
 	if config.API.MultiAddress != "" {
 		multiAddressSplit := strings.Split(config.API.MultiAddress, "/")
@@ -132,6 +162,37 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 	}
 
 	return nil
+}
+
+// DefaultLog returns the [Log] defaults for a repo, for use before config.toml
+// has been read — early startup logging still lands under the repo rather than
+// in whatever directory the process happened to start in.
+func DefaultLog(cpRepoPath string) Log {
+	var l Log
+	applyLogDefaults(&l, cpRepoPath)
+	return l
+}
+
+// applyLogDefaults fills unset [Log] fields and resolves Dir to an absolute path
+// under cpRepoPath, so the log location never depends on the process's cwd.
+func applyLogDefaults(l *Log, cpRepoPath string) {
+	if strings.TrimSpace(l.Dir) == "" {
+		l.Dir = filepath.Join(cpRepoPath, "logs")
+	} else if !filepath.IsAbs(l.Dir) {
+		l.Dir = filepath.Join(cpRepoPath, l.Dir)
+	}
+	if strings.TrimSpace(l.Level) == "" {
+		l.Level = "info"
+	}
+	if l.MaxSizeMB <= 0 {
+		l.MaxSizeMB = 100
+	}
+	if l.MaxBackups <= 0 {
+		l.MaxBackups = 5
+	}
+	if l.MaxAgeDays == 0 {
+		l.MaxAgeDays = 30
+	}
 }
 
 func GetConfig() *ComputeNode {
@@ -204,10 +265,16 @@ func generateDefaultConfig() ComputeNode {
 			Pricing:      true,
 		},
 		Inference: Inference{
-			Enable:             true,
-			ServiceURL:         build.DefaultInferenceURL,
-			WebSocketURL:       build.DefaultInferenceWSURL,
-			Models:             []string{},
+			Enable:       true,
+			ServiceURL:   build.DefaultInferenceURL,
+			WebSocketURL: build.DefaultInferenceWSURL,
+			Models:       []string{},
+		},
+		Log: Log{
+			Level:      "info",
+			MaxSizeMB:  100,
+			MaxBackups: 5,
+			MaxAgeDays: 30,
 		},
 	}
 }
@@ -227,12 +294,12 @@ func Exists(cpPath string) bool {
 
 // ModelConfig represents a model configuration for models.json
 type ModelConfig struct {
-	Container  string `json:"container,omitempty"`
-	Endpoint   string `json:"endpoint"`
-	GPUMemory  int    `json:"gpu_memory"`
-	Category   string `json:"category"`
-	LocalModel string `json:"local_model,omitempty"`
-	ContextLength int `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
+	Container     string `json:"container,omitempty"`
+	Endpoint      string `json:"endpoint"`
+	GPUMemory     int    `json:"gpu_memory"`
+	Category      string `json:"category"`
+	LocalModel    string `json:"local_model,omitempty"`
+	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
 }
 
 // UpdateInferenceConfig updates the Inference section in config.toml
