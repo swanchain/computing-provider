@@ -101,6 +101,49 @@ Stdout = true               # Also write to stdout
 
 > **Why this matters:** without rotation a provider that loses its connection to Swan Inference logs reconnect attempts continuously and can fill the disk. Rotation caps that, and `Dir` lets you keep logs off a small root volume.
 
+### Alerts
+
+Optional. Set a `WebhookURL` and the provider POSTs a JSON event when something goes wrong; leave it empty and alerting is off.
+
+```toml
+[Alerts]
+WebhookURL = "https://hooks.example.com/provider"
+CooldownMinutes = 15        # Suppress repeats of the same event
+DisconnectAfterMin = 5      # Grace period before alerting on a lost connection
+ErrorRateThreshold = 0.5    # Alert when a model fails this fraction of requests
+ErrorRateMinRequests = 10   # Ignore the ratio below this many requests per minute
+```
+
+Events:
+
+| Event | Severity | Fires when |
+|-------|----------|------------|
+| `model_unhealthy` | critical | A model failed its health checks and was dropped from the models registered with Swan Inference |
+| `model_recovered` | info | That model is answering health checks again |
+| `model_error_rate` | critical | A model passes health checks but is failing most of its actual requests |
+| `model_error_rate_normal` | info | That model's error rate returned to normal |
+| `disconnected` | critical | The WebSocket to Swan Inference has been down longer than `DisconnectAfterMin` |
+| `reconnected` | info | The connection came back |
+
+Payload:
+
+```json
+{
+  "event": "model_error_rate",
+  "severity": "critical",
+  "node_id": "04b089...",
+  "node_name": "my-provider",
+  "model_id": "openai/gpt-5.5",
+  "message": "openai/gpt-5.5 failed 6 of 6 requests (100%) — health checks pass but requests are failing",
+  "details": {"failed": "6", "total": "6", "ratio": "1.00"},
+  "timestamp": "2026-08-27T00:15:00Z"
+}
+```
+
+> **Why `model_error_rate` exists:** health checks probe `GET /v1/models`, which many backends answer without touching the inference engine. A vLLM server whose engine has died, or a proxy with expired credentials, looks healthy while failing every request. Only the request outcomes reveal it.
+
+Delivery is asynchronous and never blocks inference: events are queued and posted in order by a single worker, and are dropped (with a log line) if the endpoint is too slow to keep up.
+
 ### models.json field reference
 
 Each key in `models.json` is the marketplace model ID (must match a value in `Models` above).

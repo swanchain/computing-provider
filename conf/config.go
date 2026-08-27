@@ -80,7 +80,22 @@ type ComputeNode struct {
 	RPC       RPC       `toml:"RPC,omitempty"`
 	Inference Inference `toml:"Inference,omitempty"`
 	Log       Log       `toml:"Log,omitempty"`
+	Alerts    Alerts    `toml:"Alerts,omitempty"`
 }
+
+// Alerts configures operational notifications to a provider-run webhook. The
+// failures worth waking someone for are the ones that leave the daemon running
+// while it earns nothing, so none of them surface as a crash.
+type Alerts struct {
+	WebhookURL           string  `toml:"WebhookURL"`           // POST target; empty disables alerting
+	CooldownMinutes      int     `toml:"CooldownMinutes"`      // Suppress repeats of the same event. Default: 15
+	DisconnectAfterMin   int     `toml:"DisconnectAfterMin"`   // Alert after this long disconnected from Swan Inference. Default: 5
+	ErrorRateThreshold   float64 `toml:"ErrorRateThreshold"`   // Alert when a model's failure ratio exceeds this. Default: 0.5
+	ErrorRateMinRequests int     `toml:"ErrorRateMinRequests"` // Ignore the ratio below this many requests. Default: 10
+}
+
+// Enabled reports whether a webhook is configured.
+func (a Alerts) Enabled() bool { return strings.TrimSpace(a.WebhookURL) != "" }
 
 // Log controls where the provider writes its log files and how they are rotated.
 // Without rotation a long-running provider can fill its disk: an unreachable
@@ -152,6 +167,7 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 	}
 
 	applyLogDefaults(&config.Log, cpRepoPath)
+	applyAlertDefaults(&config.Alerts)
 
 	// Validate MultiAddress format if provided (optional for Inference mode)
 	if config.API.MultiAddress != "" {
@@ -162,6 +178,24 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 	}
 
 	return nil
+}
+
+// applyAlertDefaults fills unset [Alerts] fields. Defaults are chosen so that
+// enabling alerting needs only a WebhookURL.
+func applyAlertDefaults(a *Alerts) {
+	a.WebhookURL = strings.TrimSpace(a.WebhookURL)
+	if a.CooldownMinutes <= 0 {
+		a.CooldownMinutes = 15
+	}
+	if a.DisconnectAfterMin <= 0 {
+		a.DisconnectAfterMin = 5
+	}
+	if a.ErrorRateThreshold <= 0 || a.ErrorRateThreshold > 1 {
+		a.ErrorRateThreshold = 0.5
+	}
+	if a.ErrorRateMinRequests <= 0 {
+		a.ErrorRateMinRequests = 10
+	}
 }
 
 // DefaultLog returns the [Log] defaults for a repo, for use before config.toml

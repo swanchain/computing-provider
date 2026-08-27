@@ -19,6 +19,7 @@ import (
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/alerts"
 )
 
 // streamingHttpClient is a shared HTTP client for streaming inference requests
@@ -43,15 +44,15 @@ var streamingHttpClient = &http.Client{
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
-	Container    string `json:"container"`
-	Endpoint     string `json:"endpoint"`
-	GPUMemory    int    `json:"gpu_memory"`
-	Category     string `json:"category"`
-	LocalModel   string `json:"local_model"`             // Actual model name for local inference server (e.g., Ollama model name)
-	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
-	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
-	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
-	ContextLength int   `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
+	Container     string `json:"container"`
+	Endpoint      string `json:"endpoint"`
+	GPUMemory     int    `json:"gpu_memory"`
+	Category      string `json:"category"`
+	LocalModel    string `json:"local_model"`              // Actual model name for local inference server (e.g., Ollama model name)
+	Format        string `json:"format,omitempty"`         // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
+	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	APIKey        string `json:"api_key,omitempty"`        // API key for authenticated model endpoints (e.g., vLLM --api-key)
+	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -67,6 +68,7 @@ type InferenceService struct {
 	retryPolicy        *RetryPolicy
 	gpuCollector       *GPUMetricsCollector
 	metricsHistory     *MetricsHistory
+	alertMonitor       *alertMonitor
 }
 
 // NewInferenceService creates a new Inference service
@@ -247,6 +249,16 @@ func (s *InferenceService) Start() error {
 	// route against actual capacity instead of the catalog value (#61)
 	s.client.SetModelContextsProvider(s.resolveModelContexts)
 
+	// Alerting: the operator only learns about a silently broken model if
+	// something tells them, so wire the notifier before the client starts.
+	notifier := alerts.New(config.Alerts, s.nodeID, config.API.NodeName)
+	s.alertMonitor = newAlertMonitor(notifier, config.Alerts, s.GetMetrics, func() bool {
+		return s.client != nil && s.client.IsConnected()
+	})
+	if notifier.Enabled() {
+		logs.GetLogger().Infof("Alerts enabled, posting to %s", config.Alerts.WebhookURL)
+	}
+
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
 		if s.client != nil && s.client.IsConnected() {
@@ -255,11 +267,14 @@ func (s *InferenceService) Start() error {
 		// A health transition can change the ready set (e.g. a hot-added model
 		// passing its first health check) — re-register so Swan Inference sees it
 		s.updateClientModels()
+		s.alertMonitor.onHealthChange(modelHealth)
 	})
 
 	if err := s.client.Start(); err != nil {
 		return fmt.Errorf("failed to start Inference client: %w", err)
 	}
+
+	s.alertMonitor.Start()
 
 	// Start metrics history recorder
 	if s.metricsHistory != nil {
@@ -299,6 +314,9 @@ func (s *InferenceService) Stop() {
 	}
 	if s.metricsHistory != nil {
 		s.metricsHistory.Stop()
+	}
+	if s.alertMonitor != nil {
+		s.alertMonitor.Stop()
 	}
 }
 
@@ -394,8 +412,8 @@ func checkForOpenAIError(response json.RawMessage) error {
 
 	var errBody struct {
 		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
+			Message string      `json:"message"`
+			Type    string      `json:"type"`
 			Code    interface{} `json:"code"` // Can be string or int
 		} `json:"error"`
 	}
