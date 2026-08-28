@@ -240,6 +240,65 @@ Models = ["qwen-2.5-7b"]
 
 ## Monitoring
 
+### Self-check
+
+The failures that cost a provider money are quiet: the daemon stays up and looks healthy while a model earns nothing. `selfcheck` audits for exactly that.
+
+```bash
+computing-provider selfcheck
+```
+
+```
+  OK   models.json                     8 models mapped
+  OK   config/models.json agreement    config.toml and models.json list the same models
+  OK   Swan Inference connection       connected
+  OK   registered with Swan Inference  all 8 models registered
+  OK   model health                    all 8 models healthy
+  OK   context window                  reported context matches every backend
+ FAIL  inference probe                 openai/gpt-5.5: HTTP 401 authentication token has been invalidated
+  OK   traffic                         every model has served requests
+  OK   disk space                      /home/you/.swan/computing: 92.1 GB free of 438 GB (78% used)
+```
+
+It checks the things no error message reveals:
+
+| Check | Catches |
+|-------|---------|
+| config/models.json agreement | A model served but not advertised, or advertised but not served |
+| registered with Swan Inference | A healthy model that was never sent upstream, so it receives no traffic |
+| context window | A backend serving less context than you advertise — clients' long prompts get rejected |
+| inference probe | A backend that answers health checks but cannot serve: dead engine, expired credentials |
+| traffic | A model registered and healthy that has never been called |
+| disk space | A volume filling before it takes the node down |
+
+The inference probe sends one `max_tokens: 1` completion per model. It is the only check that exercises the engine — `GET /v1/models` is answered by most backends without touching it, so a dead engine or an expired API token looks healthy everywhere else.
+
+Exits non-zero when a check fails, so it works as a cron or monitoring check. `--json` for machine-readable output, `--no-inference` to skip the completion probe.
+
+The daemon also runs this every 24 hours and, when `[Alerts]` is configured, posts a webhook if anything **fails** — passing runs are logged locally and not sent, so a daily "all clear" never trains you to ignore it.
+
+### Alerts
+
+Set a webhook in `config.toml` and the provider tells you when something breaks:
+
+```toml
+[Alerts]
+WebhookURL = "https://hooks.example.com/provider"
+```
+
+It fires on a model going unhealthy, a model that passes health checks while failing most of its requests, a lost connection to Swan Inference, and a failed daily self-check — each with a matching recovery event. See [docs/configuration.md](docs/configuration.md#alerts) for the payload and tuning.
+
+### Logging
+
+Logs rotate under `$CP_PATH/logs` by default. Point them at another disk with:
+
+```toml
+[Log]
+Dir = "/mnt/data/logs/cp"
+MaxSizeMB = 100
+MaxBackups = 5
+```
+
 ### Web Dashboard
 
 ```bash
@@ -272,6 +331,7 @@ curl http://localhost:8085/api/v1/computing/inference/health
 | `POST /inference/models/:id/enable` | Enable a model |
 | `POST /inference/models/:id/disable` | Disable a model |
 | `POST /inference/models/reload` | Hot-reload models.json |
+| `GET /inference/status` | Connection state, active models, and the models actually registered upstream |
 
 ---
 

@@ -1,0 +1,246 @@
+package selfcheck
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// fakeBackend serves the OpenAI-ish endpoints a model backend exposes.
+type fakeBackend struct {
+	maxModelLen   int
+	completionOK  bool
+	completionMsg string
+	statusCode    int
+}
+
+func (f fakeBackend) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": []map[string]interface{}{{"id": "m", "max_model_len": f.maxModelLen}},
+		})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if !f.completionOK {
+			code := f.statusCode
+			if code == 0 {
+				code = http.StatusServiceUnavailable
+			}
+			w.WriteHeader(code)
+			fmt.Fprint(w, f.completionMsg)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{"message": map[string]string{"content": "ok"}}}})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// fakeDaemon serves the provider's own API.
+func fakeDaemon(t *testing.T, connected bool, registered []string, health map[string]string, requests map[string]int64) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/computing/inference/status", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": connected, "registered_models": registered, "active_models": registered,
+		})
+	})
+	mux.HandleFunc("/api/v1/computing/inference/health", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]map[string]interface{}{}
+		for id, h := range health {
+			out[id] = map[string]interface{}{"health_string": h}
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	mux.HandleFunc("/api/v1/computing/inference/metrics", func(w http.ResponseWriter, r *http.Request) {
+		mm := map[string]map[string]interface{}{}
+		for id, n := range requests {
+			mm[id] = map[string]interface{}{"total_requests": n}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"model_metrics": mm})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func writeModels(t *testing.T, dir string, models map[string]map[string]interface{}) {
+	t.Helper()
+	b, err := json.Marshal(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), b, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func find(t *testing.T, r Report, name string) Result {
+	t.Helper()
+	for _, res := range r.Results {
+		if res.Name == name {
+			return res
+		}
+	}
+	t.Fatalf("no result named %q in %+v", name, r.Results)
+	return Result{}
+}
+
+func TestHealthyProviderPasses(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/model-a": {"endpoint": be.URL, "context_length": 4096},
+	})
+	d := fakeDaemon(t, true, []string{"org/model-a"}, map[string]string{"org/model-a": "healthy"}, map[string]int64{"org/model-a": 12})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/model-a"}, LogDir: dir})
+	if r.Failed() {
+		t.Fatalf("healthy provider reported failures: %+v", r.Problems())
+	}
+}
+
+// The failure that cost the most: a model healthy and mapped, but never sent to
+// Swan Inference, so it earns nothing while looking fine locally.
+func TestUnregisteredModelIsAFailure(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": be.URL},
+		"org/b": {"endpoint": be.URL},
+	})
+	// Only a is registered upstream.
+	d := fakeDaemon(t, true, []string{"org/a"},
+		map[string]string{"org/a": "healthy", "org/b": "healthy"}, map[string]int64{"org/a": 5, "org/b": 5})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a", "org/b"}, LogDir: dir})
+	res := find(t, r, "registered with Swan Inference")
+	if res.Status != StatusFail {
+		t.Fatalf("status = %s, want fail; message: %s", res.Status, res.Message)
+	}
+	if !strings.Contains(res.Message, "org/b") {
+		t.Errorf("message should name the unregistered model, got %q", res.Message)
+	}
+}
+
+// A model listed in models.json but absent from config.toml may not be
+// registered at all on a cold start.
+func TestConfigDriftIsAFailure(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": be.URL},
+		"org/b": {"endpoint": be.URL},
+	})
+	d := fakeDaemon(t, true, []string{"org/a", "org/b"},
+		map[string]string{"org/a": "healthy", "org/b": "healthy"}, map[string]int64{"org/a": 1, "org/b": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	res := find(t, r, "config/models.json agreement")
+	if res.Status != StatusFail || !strings.Contains(res.Message, "org/b") {
+		t.Fatalf("got %s %q, want fail naming org/b", res.Status, res.Message)
+	}
+}
+
+// The gpt-5.x case: /v1/models answers fine, every completion fails on auth.
+func TestBackendThatCannotServeIsCaught(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 503,
+		completionMsg: `auth_unavailable: no auth available`}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 3})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+
+	if h := find(t, r, "model health"); h.Status != StatusPass {
+		t.Errorf("health check should still pass — that is the point of this case, got %s", h.Status)
+	}
+	probe := find(t, r, "inference probe")
+	if probe.Status != StatusFail {
+		t.Fatalf("inference probe = %s, want fail", probe.Status)
+	}
+	if !strings.Contains(probe.Message, "503") {
+		t.Errorf("message should carry the upstream status, got %q", probe.Message)
+	}
+}
+
+func TestContextMismatchIsCaught(t *testing.T) {
+	dir := t.TempDir()
+	// Backend serves 45056 while models.json claims the catalog's 131072.
+	be := fakeBackend{maxModelLen: 45056, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": be.URL, "context_length": 131072},
+	})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	res := find(t, r, "context window")
+	if res.Status != StatusFail {
+		t.Fatalf("status = %s, want fail", res.Status)
+	}
+	if !strings.Contains(res.Message, "131072") || !strings.Contains(res.Message, "45056") {
+		t.Errorf("message should show both values, got %q", res.Message)
+	}
+}
+
+func TestDisconnectedProviderFails(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, false, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	if res := find(t, r, "Swan Inference connection"); res.Status != StatusFail {
+		t.Fatalf("status = %s, want fail", res.Status)
+	}
+}
+
+func TestUnreachableDaemonFailsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	writeModels(t, dir, map[string]map[string]interface{}{})
+	// Port 1 is reserved and refuses connections.
+	r := Run(Options{RepoPath: dir, APIBase: "http://127.0.0.1:1", LogDir: dir, SkipCompletion: true})
+	if res := find(t, r, "daemon"); res.Status != StatusFail {
+		t.Fatalf("status = %s, want fail when the daemon is down", res.Status)
+	}
+	if !r.Failed() {
+		t.Error("report should be marked failed")
+	}
+}
+
+func TestIdleModelWarnsButDoesNotFail(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 0})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	if res := find(t, r, "traffic"); res.Status != StatusWarn {
+		t.Fatalf("status = %s, want warn", res.Status)
+	}
+	if r.Failed() {
+		t.Error("an idle model is worth noting, not failing")
+	}
+}
+
+func TestSkipCompletionOmitsTheProbe(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: false}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir, SkipCompletion: true})
+	for _, res := range r.Results {
+		if res.Name == "inference probe" {
+			t.Fatal("probe should be skipped")
+		}
+	}
+}

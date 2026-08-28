@@ -125,8 +125,9 @@ func runDaemon() error {
 	})
 	router.GET("/inference/status", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"connected":     inferenceService.IsConnected(),
-			"active_models": inferenceService.GetActiveModels(),
+			"connected":         inferenceService.IsConnected(),
+			"active_models":     inferenceService.GetActiveModels(),
+			"registered_models": inferenceService.GetRegisteredModels(),
 		})
 	})
 
