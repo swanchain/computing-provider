@@ -65,7 +65,7 @@ func TestHealthChangeAlertsOnlyOnTransition(t *testing.T) {
 	defer done()
 
 	cfg := testCfg(url)
-	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true })
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true }, nil)
 
 	// First observation is a baseline: a model that is already healthy is not news.
 	m.onHealthChange(map[string]string{"a": "healthy", "b": "healthy"})
@@ -95,7 +95,7 @@ func TestErrorRateAlertsWhenHealthyButFailing(t *testing.T) {
 		"m": {ModelName: "m", TotalRequests: 20, FailedReqs: 20},
 	}}
 	cfg := testCfg(url)
-	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true })
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
 
 	m.checkErrorRates()
 
@@ -117,7 +117,7 @@ func TestErrorRateIgnoresLowTraffic(t *testing.T) {
 		"m": {ModelName: "m", TotalRequests: 2, FailedReqs: 2},
 	}}
 	cfg := testCfg(url)
-	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true })
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
 
 	m.checkErrorRates()
 	if got := events(); len(got) != 0 {
@@ -133,7 +133,7 @@ func TestErrorRateMeasuresEachWindowSeparately(t *testing.T) {
 		"m": {ModelName: "m", TotalRequests: 20, FailedReqs: 20},
 	}}
 	cfg := testCfg(url)
-	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true })
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
 
 	m.checkErrorRates() // fires
 	// A healthy window follows: 20 more requests, none failed. The lifetime
@@ -157,7 +157,7 @@ func TestDisconnectAlertWaitsForGracePeriod(t *testing.T) {
 	connected := false
 	cfg := testCfg(url)
 	cfg.DisconnectAfterMin = 5
-	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return connected })
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return connected }, nil)
 
 	m.checkConnection() // starts the clock, no alert
 	m.checkConnection() // still inside the grace period
@@ -190,11 +190,107 @@ func TestDisabledNotifierIsInert(t *testing.T) {
 	if n.Enabled() {
 		t.Fatal("notifier with no URL should be disabled")
 	}
-	m := newAlertMonitor(n, cfg, func() *InferenceMetricsData { return nil }, func() bool { return false })
+	m := newAlertMonitor(n, cfg, func() *InferenceMetricsData { return nil }, func() bool { return false }, nil)
 	// None of these should panic or block.
 	m.Start()
 	m.onHealthChange(map[string]string{"a": "unhealthy"})
 	m.checkConnection()
 	m.checkErrorRates()
 	m.Stop()
+}
+
+// Regression: models start at "unknown" before their first health check, so
+// unknown -> healthy is a model booting, not one recovering. Alerting on it
+// meant every restart emitted a spurious recovery per model.
+func TestUnknownToHealthyIsNotARecovery(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	cfg := testCfg(url)
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true }, nil)
+
+	m.onHealthChange(map[string]string{"a": "unknown", "b": "unknown"})
+	m.onHealthChange(map[string]string{"a": "healthy", "b": "unknown"})
+	m.onHealthChange(map[string]string{"a": "healthy", "b": "healthy"})
+
+	if got := events(); len(got) != 0 {
+		t.Fatalf("startup should be silent, got %+v", got)
+	}
+}
+
+// A model that fails everything stops being routed to, so its window falls
+// under the request floor. The incident must still close.
+func TestErrorRateRecoversWhenTrafficStops(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	data := &InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+		"m": {ModelName: "m", TotalRequests: 20, FailedReqs: 20},
+	}}
+	cfg := testCfg(url)
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
+
+	m.checkErrorRates() // fires
+	// Traffic dries up entirely: no new requests at all.
+	m.checkErrorRates()
+
+	got := events()
+	if len(got) != 2 || got[1].Event != alerts.EventErrorRateNormal {
+		t.Fatalf("want the incident to close when traffic stops, got %+v", got)
+	}
+}
+
+// Recovery events must never be suppressed by the cooldown, or a receiver is
+// left holding an incident that has already resolved.
+func TestRecoveryIsNeverRateLimited(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	connected := false
+	cfg := testCfg(url)
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return connected }, nil)
+
+	for i := 0; i < 2; i++ {
+		connected = false
+		m.checkConnection()
+		m.mu.Lock()
+		m.disconnectedAt = time.Now().Add(-10 * time.Minute)
+		m.mu.Unlock()
+		m.checkConnection()
+		connected = true
+		m.checkConnection()
+	}
+
+	var recoveries int
+	for _, e := range events() {
+		if e.Event == alerts.EventReconnected {
+			recoveries++
+		}
+	}
+	if recoveries != 2 {
+		t.Fatalf("got %d reconnect events, want 2 — the second must not be swallowed by the cooldown", recoveries)
+	}
+}
+
+// A stale snapshot can latch a model in the wrong state; the periodic
+// reconciliation must correct it without waiting for another transition.
+func TestReconcileHealthClosesAStaleAlert(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	current := map[string]string{"a": "healthy"}
+	cfg := testCfg(url)
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return nil },
+		func() bool { return true }, func() map[string]string { return current })
+
+	m.onHealthChange(map[string]string{"a": "healthy"})
+	// An out-of-order snapshot leaves the model latched unhealthy.
+	m.onHealthChange(map[string]string{"a": "unhealthy"})
+	// Reality says otherwise; reconciliation should close it.
+	m.reconcileHealth()
+
+	got := events()
+	if len(got) != 2 || got[1].Event != alerts.EventModelRecovered {
+		t.Fatalf("want the stale alert closed by reconciliation, got %+v", got)
+	}
 }

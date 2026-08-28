@@ -154,10 +154,10 @@ func (s *InferenceService) updateClientModels() {
 		return
 	}
 	models := s.registry.GetReadyModelIDs()
-	if sameModelSet(s.client.models, models) {
+	if sameModelSet(s.client.ModelList(), models) {
 		return
 	}
-	s.client.models = models
+	s.client.SetModelList(models)
 	if s.client.IsConnected() {
 		s.client.register()
 	}
@@ -254,11 +254,16 @@ func (s *InferenceService) Start() error {
 	// Alerting: the operator only learns about a silently broken model if
 	// something tells them, so wire the notifier before the client starts.
 	notifier := alerts.New(config.Alerts, s.nodeID, config.API.NodeName)
-	s.alertMonitor = newAlertMonitor(notifier, config.Alerts, s.GetMetrics, func() bool {
-		return s.client != nil && s.client.IsConnected()
-	})
+	s.alertMonitor = newAlertMonitor(notifier, config.Alerts, s.GetMetrics,
+		func() bool { return s.client != nil && s.client.IsConnected() },
+		func() map[string]string {
+			if s.registry == nil {
+				return nil
+			}
+			return s.registry.GetAllModelHealthMap()
+		})
 	if notifier.Enabled() {
-		logs.GetLogger().Infof("Alerts enabled, posting to %s", config.Alerts.WebhookURL)
+		logs.GetLogger().Infof("Alerts enabled, posting to %s", alerts.RedactURL(config.Alerts.WebhookURL))
 	}
 	s.selfCheck = newSelfCheckRunner(notifier, func() selfcheck.Options {
 		return selfCheckOptions(s.cpPath)
@@ -620,11 +625,14 @@ func (s *InferenceService) GetActiveModels() []string {
 // This can differ from GetActiveModels: a model present in models.json is only
 // registered once it is enabled and passing health checks, and a stale
 // config.toml Models list can leave a healthy model unregistered.
+// An empty (non-nil) slice means "connected but nothing registered" — a real
+// and serious state. nil is reserved for "no client yet", so a caller can tell
+// the two apart.
 func (s *InferenceService) GetRegisteredModels() []string {
 	if s.client == nil {
 		return nil
 	}
-	return append([]string(nil), s.client.models...)
+	return s.client.ModelList()
 }
 
 // GetMetrics returns a snapshot of the current inference metrics

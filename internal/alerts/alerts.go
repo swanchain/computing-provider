@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -101,7 +102,10 @@ func (n *Notifier) Fire(event, modelID, message string, severity Severity, detai
 	if !n.Enabled() {
 		return
 	}
-	if !n.allow(event + "|" + modelID) {
+	// Recovery events are never rate-limited. Suppressing one leaves the
+	// receiver holding an incident that has already resolved, which is worse
+	// than an extra message.
+	if severity != SeverityInfo && !n.allow(event+"|"+modelID) {
 		return
 	}
 	e := Event{
@@ -130,7 +134,7 @@ func (n *Notifier) run() {
 }
 
 // allow reports whether key is outside its cooldown window, recording the send
-// when it is. Recovery events bypass the cooldown so an incident always closes.
+// when it is. Only failure events pass through here; see Fire.
 func (n *Notifier) allow(key string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -179,6 +183,17 @@ func (n *Notifier) post(e Event) {
 		return
 	}
 	logs.GetLogger().Infof("alerts: delivered %s%s", e.Event, modelSuffix(e.ModelID))
+}
+
+// RedactURL keeps a webhook URL loggable. Slack, Discord and PagerDuty all put
+// the secret in the path, and these logs are rotated to disk and pasted into
+// support threads.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(configured)"
+	}
+	return u.Scheme + "://" + u.Host + "/…"
 }
 
 func modelSuffix(modelID string) string {

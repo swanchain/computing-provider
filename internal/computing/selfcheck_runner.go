@@ -104,14 +104,13 @@ func (r *selfCheckRunner) runOnce() {
 
 // selfCheckOptions builds the audit's inputs from current config.
 func selfCheckOptions(cpPath string) selfcheck.Options {
+	opt := selfcheck.Options{RepoPath: cpPath}
 	cfg := conf.GetConfig()
-	opt := selfcheck.Options{
-		RepoPath: cpPath,
-		LogDir:   cfg.Log.Dir,
+	if cfg == nil {
+		return opt
 	}
-	if cfg != nil {
-		opt.APIBase = fmt.Sprintf("http://localhost:%d", cfg.API.Port)
-		opt.ConfigModels = cfg.Inference.Models
-	}
+	opt.LogDir = cfg.Log.Dir
+	opt.APIBase = fmt.Sprintf("http://localhost:%d", cfg.API.Port)
+	opt.ConfigModels = cfg.Inference.Models
 	return opt
 }

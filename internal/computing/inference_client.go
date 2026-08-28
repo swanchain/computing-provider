@@ -2152,6 +2152,26 @@ func (c *InferenceClient) sendInferenceResponse(response *InferenceResponse) {
 
 // IsConnected returns whether the client is connected, registered, and healthy.
 // A connection is considered unhealthy if 3+ consecutive heartbeats went unacknowledged.
+// ModelList returns the models most recently registered with Swan Inference.
+// The result is always non-nil: an empty list means "connected, nothing
+// registered", which callers must be able to distinguish from "unknown".
+func (c *InferenceClient) ModelList() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]string, len(c.models))
+	copy(out, c.models)
+	return out
+}
+
+// SetModelList replaces the registered model list. Writers come from registry
+// callbacks, each dispatched on its own goroutine, while the HTTP status
+// handler reads concurrently — so this field must not be touched directly.
+func (c *InferenceClient) SetModelList(models []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.models = models
+}
+
 func (c *InferenceClient) IsConnected() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

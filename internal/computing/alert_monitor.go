@@ -16,11 +16,24 @@ import (
 // The last case is the one health checks cannot see. A backend can serve
 // /v1/models perfectly while every completion returns an upstream error, so the
 // only evidence is the request outcomes themselves.
+// Health strings as reported by ModelRegistry.
+const (
+	healthUnknown   = "unknown"
+	healthHealthy   = "healthy"
+	healthUnhealthy = "unhealthy"
+)
+
 type alertMonitor struct {
 	notifier *alerts.Notifier
 	cfg      conf.Alerts
 	metrics  func() *InferenceMetricsData
 	isConn   func() bool
+	// health returns the authoritative current health of every model. The
+	// registry dispatches each health callback on its own goroutine, so two
+	// snapshots taken microseconds apart can arrive out of order and leave a
+	// model latched in the wrong state. Re-reading on the tick corrects that
+	// within a minute instead of waiting for the next transition.
+	health func() map[string]string
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -37,12 +50,13 @@ type alertMonitor struct {
 	lastHealth map[string]string
 }
 
-func newAlertMonitor(n *alerts.Notifier, cfg conf.Alerts, metrics func() *InferenceMetricsData, isConn func() bool) *alertMonitor {
+func newAlertMonitor(n *alerts.Notifier, cfg conf.Alerts, metrics func() *InferenceMetricsData, isConn func() bool, health func() map[string]string) *alertMonitor {
 	return &alertMonitor{
 		notifier:   n,
 		cfg:        cfg,
 		metrics:    metrics,
 		isConn:     isConn,
+		health:     health,
 		stopCh:     make(chan struct{}),
 		lastTotal:  make(map[string]int64),
 		lastFailed: make(map[string]int64),
@@ -67,6 +81,7 @@ func (a *alertMonitor) Start() {
 			case <-ticker.C:
 				a.checkConnection()
 				a.checkErrorRates()
+				a.reconcileHealth()
 			}
 		}
 	}()
@@ -139,12 +154,16 @@ func (a *alertMonitor) checkErrorRates() {
 		a.lastTotal[id] = mm.TotalRequests
 		a.lastFailed[id] = mm.FailedReqs
 
-		if total < int64(a.cfg.ErrorRateMinRequests) {
-			continue
+		// A model that fails everything usually stops receiving traffic, so the
+		// window falls below the floor. Evaluate recovery before the floor or a
+		// fired incident never closes.
+		belowFloor := total < int64(a.cfg.ErrorRateMinRequests)
+		var ratio float64
+		if total > 0 {
+			ratio = float64(failed) / float64(total)
 		}
-		ratio := float64(failed) / float64(total)
 		switch {
-		case ratio >= a.cfg.ErrorRateThreshold:
+		case !belowFloor && ratio >= a.cfg.ErrorRateThreshold:
 			a.rateFiring[id] = true
 			a.notifier.Fire(alerts.EventModelErrorRate, id,
 				fmt.Sprintf("%s failed %d of %d requests (%.0f%%) — health checks pass but requests are failing",
@@ -155,13 +174,25 @@ func (a *alertMonitor) checkErrorRates() {
 					"ratio":    fmt.Sprintf("%.2f", ratio),
 					"endpoint": id,
 				})
-		case a.rateFiring[id]:
+		case a.rateFiring[id] && (belowFloor || ratio < a.cfg.ErrorRateThreshold):
 			a.rateFiring[id] = false
 			a.notifier.ClearCooldown(alerts.EventModelErrorRate, id)
 			a.notifier.Fire(alerts.EventErrorRateNormal, id,
 				fmt.Sprintf("%s error rate back to normal (%d of %d failed)", id, failed, total),
 				alerts.SeverityInfo, nil)
 		}
+	}
+}
+
+// reconcileHealth re-reads current health and feeds it through the same
+// transition logic, so a snapshot that arrived out of order cannot leave a
+// stale critical alert open indefinitely.
+func (a *alertMonitor) reconcileHealth() {
+	if a.health == nil {
+		return
+	}
+	if current := a.health(); len(current) > 0 {
+		a.onHealthChange(current)
 	}
 }
 
@@ -186,8 +217,13 @@ func (a *alertMonitor) onHealthChange(modelHealth map[string]string) {
 			continue
 		}
 		a.lastHealth[id] = health
-		if !seen && health != "unhealthy" {
-			continue
+		// "unknown" is what a model reports before its first health check, so
+		// unknown -> healthy is a model starting up, not one recovering. Only a
+		// transition out of a state we have actually alerted on is news.
+		if !seen || prev == healthUnknown {
+			if health != healthUnhealthy {
+				continue
+			}
 		}
 		changes = append(changes, change{id, health})
 	}
@@ -201,11 +237,11 @@ func (a *alertMonitor) onHealthChange(modelHealth map[string]string) {
 
 	for _, c := range changes {
 		switch c.health {
-		case "unhealthy":
+		case healthUnhealthy:
 			a.notifier.Fire(alerts.EventModelUnhealthy, c.id,
 				fmt.Sprintf("%s is unhealthy — it has been dropped from the models registered with Swan Inference", c.id),
 				alerts.SeverityCritical, map[string]string{"health": c.health})
-		case "healthy":
+		case healthHealthy:
 			a.notifier.ClearCooldown(alerts.EventModelUnhealthy, c.id)
 			a.notifier.Fire(alerts.EventModelRecovered, c.id,
 				fmt.Sprintf("%s is healthy again", c.id),

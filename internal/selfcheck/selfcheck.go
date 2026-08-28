@@ -104,7 +104,29 @@ type modelEntry struct {
 	Endpoint      string `json:"endpoint"`
 	APIKey        string `json:"api_key"`
 	LocalModel    string `json:"local_model"`
+	Category      string `json:"category"`
 	ContextLength int    `json:"context_length"`
+}
+
+// servedName is the name the backend knows the model by, which differs from the
+// marketplace ID for engines like Ollama.
+func (m modelEntry) servedName(id string) string {
+	if m.LocalModel != "" {
+		return m.LocalModel
+	}
+	return id
+}
+
+// chatCompatible reports whether /v1/chat/completions is the right endpoint.
+// models.json also carries image-generation, embeddings and audio models, which
+// answer 404 or 400 there — probing them would report a permanent false failure.
+func (m modelEntry) chatCompatible() bool {
+	switch strings.ToLower(strings.TrimSpace(m.Category)) {
+	case "", "text-generation", "llm", "chat":
+		return true
+	default:
+		return false
+	}
 }
 
 type checker struct {
@@ -267,16 +289,33 @@ func (c *checker) checkHealth() {
 		c.add("model health", StatusWarn, fmt.Sprintf("could not read health: %v", err), "")
 		return
 	}
-	var bad []string
+	// Only "unhealthy" means the model is out of service. "degraded" still
+	// serves requests, and "unknown" is the normal state before the first health
+	// check completes, so neither should fail a run started right after boot.
+	var unhealthy, other []string
 	for id, h := range health {
-		if h.HealthString != "healthy" {
-			bad = append(bad, fmt.Sprintf("%s (%s)", id, h.HealthString))
+		switch h.HealthString {
+		case "healthy":
+		case "unhealthy":
+			unhealthy = append(unhealthy, id)
+		default:
+			other = append(other, fmt.Sprintf("%s (%s)", id, h.HealthString))
 		}
 	}
-	sort.Strings(bad)
-	if len(bad) > 0 {
-		c.add("model health", StatusFail, strings.Join(bad, ", "),
+	sort.Strings(unhealthy)
+	sort.Strings(other)
+	if len(unhealthy) > 0 {
+		msg := "unhealthy: " + strings.Join(unhealthy, ", ")
+		if len(other) > 0 {
+			msg += "; " + strings.Join(other, ", ")
+		}
+		c.add("model health", StatusFail, msg,
 			"Check the backend is up and serving on the endpoint in models.json.")
+		return
+	}
+	if len(other) > 0 {
+		c.add("model health", StatusWarn, strings.Join(other, ", "),
+			"Degraded models still serve; unknown means the first health check has not completed yet.")
 		return
 	}
 	c.add("model health", StatusPass, fmt.Sprintf("all %d models healthy", len(health)), "")
@@ -291,7 +330,7 @@ func (c *checker) checkContexts(models map[string]modelEntry) {
 	}
 	var mismatched, unknown []string
 	for id, m := range models {
-		actual, ok := c.backendContext(m)
+		actual, ok := c.backendContext(id, m)
 		if !ok {
 			unknown = append(unknown, id)
 			continue
@@ -312,10 +351,15 @@ func (c *checker) checkContexts(models map[string]modelEntry) {
 	}
 }
 
-func (c *checker) backendContext(m modelEntry) (int, bool) {
+// backendContext returns the context window the backend reports for this
+// specific model. One endpoint routinely serves several models (Ollama, a
+// proxy, a multi-model vLLM), so the entry must be matched by id — taking the
+// first would compare one model's limit against another's.
+func (c *checker) backendContext(id string, m modelEntry) (int, bool) {
 	var out struct {
 		Data []struct {
-			MaxModelLen int `json:"max_model_len"`
+			ID          string `json:"id"`
+			MaxModelLen int    `json:"max_model_len"`
 		} `json:"data"`
 	}
 	req, err := http.NewRequest("GET", strings.TrimRight(m.Endpoint, "/")+"/v1/models", nil)
@@ -333,10 +377,20 @@ func (c *checker) backendContext(m modelEntry) (int, bool) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.Data) == 0 {
 		return 0, false
 	}
-	if out.Data[0].MaxModelLen <= 0 {
-		return 0, false
+	want := m.servedName(id)
+	for _, d := range out.Data {
+		if strings.EqualFold(d.ID, want) || strings.EqualFold(d.ID, id) {
+			if d.MaxModelLen > 0 {
+				return d.MaxModelLen, true
+			}
+			return 0, false
+		}
 	}
-	return out.Data[0].MaxModelLen, true
+	// A single-model backend that names itself differently is still unambiguous.
+	if len(out.Data) == 1 && out.Data[0].MaxModelLen > 0 {
+		return out.Data[0].MaxModelLen, true
+	}
+	return 0, false
 }
 
 // checkCompletions sends one real, minimal completion per model. This is the
@@ -348,11 +402,14 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 		return
 	}
 	var failed []string
+	var probed, skipped int
 	for id, m := range models {
-		name := id
-		if m.LocalModel != "" {
-			name = m.LocalModel
+		if !m.chatCompatible() {
+			skipped++
+			continue
 		}
+		probed++
+		name := m.servedName(id)
 		body, _ := json.Marshal(map[string]interface{}{
 			"model":      name,
 			"messages":   []map[string]string{{"role": "user", "content": "ping"}},
@@ -384,7 +441,11 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 			"These models pass health checks but cannot serve. Check the backend engine and any upstream credentials.")
 		return
 	}
-	c.add("inference probe", StatusPass, fmt.Sprintf("all %d models completed a request", len(models)), "")
+	msg := fmt.Sprintf("all %d models completed a request", probed)
+	if skipped > 0 {
+		msg += fmt.Sprintf(" (%d non-chat models not probed)", skipped)
+	}
+	c.add("inference probe", StatusPass, msg, "")
 }
 
 // checkTraffic flags models that are registered and healthy but have never been
