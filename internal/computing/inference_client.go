@@ -302,6 +302,14 @@ type InferenceClient struct {
 	// Reconnect guard
 	reconnecting bool       // True while a reconnect is in progress
 	reconnectMu  sync.Mutex // Protects reconnecting flag
+	// A reconnect requested while one was already in progress, and the
+	// connection generation it was requested for. Recorded rather than dropped:
+	// dropping one is how computing-provider#73 left the client dark (#73).
+	reconnectPending    bool
+	reconnectPendingGen uint64
+	// Heartbeat intervals spent with a connection but no registration ack
+	// (guarded by mu). Drives the un-acked-registration watchdog.
+	unregisteredTicks int
 
 	// Metrics tracking
 	metrics      *InferenceMetrics
@@ -506,12 +514,12 @@ func (c *InferenceClient) Start() error {
 		return err
 	}
 
-	// Start read/write pumps
+	// Start read/write pumps, bound to THIS connection and generation
 	c.mu.RLock()
-	done := c.pumpDone
+	done, conn, gen := c.pumpDone, c.conn, c.connGeneration
 	c.mu.RUnlock()
-	go c.readPumpWithDone(done)
-	go c.writePumpWithDone(done)
+	go c.readPumpWithDone(done, conn, gen)
+	go c.writePumpWithDone(done, conn, gen)
 	go c.heartbeatPump()
 
 	// Send registration
@@ -549,11 +557,65 @@ func (c *InferenceClient) connect() error {
 	c.mu.Lock()
 	c.conn = conn
 	c.registered = false
+	c.unregisteredTicks = 0 // the un-acked watchdog counts from this connection, not the dial attempts before it
 	c.mu.Unlock()
 
 	c.metrics.RecordConnectionState("connected")
 	logs.GetLogger().Info("Connected to Swan Inference")
 	return nil
+}
+
+// requestReconnect is how a pump or watchdog asks for a reconnect. It never
+// drops the request. If a reconnect is already in progress, the request is
+// recorded together with the connection generation it was made for, and
+// honoured once that reconnect finishes — but only if it was for the connection
+// that reconnect produced. A request from the old, torn-down connection must
+// not trigger a spurious second cycle.
+//
+// Before this, a request arriving during an in-flight reconnect returned
+// immediately. computing-provider#73: the freshly established connection was
+// closed while the reconnect was still inside register() (a ~200ms nvidia-smi
+// call), the resulting request was dropped, and nothing ever reconnected again.
+func (c *InferenceClient) requestReconnect(gen uint64) {
+	c.reconnectMu.Lock()
+	if c.reconnecting {
+		c.reconnectPending = true
+		c.reconnectPendingGen = gen
+		c.reconnectMu.Unlock()
+		return
+	}
+	c.reconnectMu.Unlock()
+	go c.reconnect()
+}
+
+// takePendingReconnect reports whether a reconnect was requested during the
+// last cycle FOR generation gen (the connection that cycle produced), and
+// clears any pending request either way.
+func (c *InferenceClient) takePendingReconnect(gen uint64) bool {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	pending := c.reconnectPending && c.reconnectPendingGen == gen
+	c.reconnectPending = false
+	return pending
+}
+
+func (c *InferenceClient) isReconnecting() bool {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	return c.reconnecting
+}
+
+// markDisconnected records the metrics state when a connection is lost — but
+// only for the CURRENT generation. A stale pump reporting the loss of a
+// connection that has already been replaced must not overwrite the live state,
+// or /metrics would flap between the two.
+func (c *InferenceClient) markDisconnected(gen uint64) {
+	c.mu.RLock()
+	current := c.connGeneration
+	c.mu.RUnlock()
+	if gen == current {
+		c.metrics.RecordConnectionState("disconnected")
+	}
 }
 
 func (c *InferenceClient) reconnect() {
@@ -571,6 +633,24 @@ func (c *InferenceClient) reconnect() {
 		c.reconnectMu.Unlock()
 	}()
 
+	for {
+		gen, stopped := c.reconnectOnce()
+		if stopped {
+			return
+		}
+		// If the connection we just built was lost while we were still
+		// registering it, go round again rather than returning with dead pumps.
+		if !c.takePendingReconnect(gen) {
+			return
+		}
+		logs.GetLogger().Warn("Connection was lost while reconnecting; reconnecting again")
+	}
+}
+
+// reconnectOnce tears down the current connection and establishes a new,
+// registered one, retrying with backoff until it succeeds or the client stops.
+// Returns the generation of the connection it established.
+func (c *InferenceClient) reconnectOnce() (gen uint64, stopped bool) {
 	c.metrics.RecordConnectionState("reconnecting")
 	c.metrics.RecordReconnect()
 
@@ -579,6 +659,7 @@ func (c *InferenceClient) reconnect() {
 	close(c.pumpDone)
 	c.pumpDone = make(chan struct{})
 	c.connGeneration++ // Invalidate stale forceReconnect calls from old goroutines
+	gen = c.connGeneration
 	if c.conn != nil {
 		c.conn.Close()
 	}
@@ -591,7 +672,7 @@ func (c *InferenceClient) reconnect() {
 	for {
 		select {
 		case <-c.stopCh:
-			return
+			return gen, true
 		default:
 			// Immediate first attempt, then exponential backoff: 1s, 2s, 4s, 8s... capped at 30s
 			if attempt > 0 {
@@ -625,20 +706,25 @@ func (c *InferenceClient) reconnect() {
 				logs.GetLogger().Infof("Drained %d stale messages from send buffer after reconnect", drainCount)
 			}
 
-			// Start pumps before registering so the writePump can send the registration message
+			// Start pumps before registering so the writePump can send the
+			// registration message. Bound to this connection and generation.
 			c.mu.RLock()
-			done := c.pumpDone
+			done, conn := c.pumpDone, c.conn
 			c.mu.RUnlock()
-			go c.readPumpWithDone(done)
-			go c.writePumpWithDone(done)
+			go c.readPumpWithDone(done, conn, gen)
+			go c.writePumpWithDone(done, conn, gen)
 
 			// Re-register after reconnection
 			if err := c.register(); err != nil {
 				logs.GetLogger().Errorf("Re-registration failed: %v", err)
-				// Stop the pumps we just started before retrying
+				// Stop the pumps we just started before retrying. Bump the
+				// generation so a request from those pumps cannot be mistaken
+				// for one about the connection the next attempt produces.
 				c.mu.Lock()
 				close(c.pumpDone)
 				c.pumpDone = make(chan struct{})
+				c.connGeneration++
+				gen = c.connGeneration
 				if c.conn != nil {
 					c.conn.Close()
 				}
@@ -646,7 +732,7 @@ func (c *InferenceClient) reconnect() {
 				continue
 			}
 
-			return
+			return gen, false
 		}
 	}
 }
@@ -961,19 +1047,16 @@ func (c *InferenceClient) register() error {
 	return nil
 }
 
-func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
-	defer func() {
-		c.mu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
-		}
-		c.mu.Unlock()
-	}()
+func (c *InferenceClient) readPumpWithDone(done <-chan struct{}, conn *websocket.Conn, gen uint64) {
+	// This pump owns exactly one connection and closes that one, never
+	// whatever c.conn points at when it exits. A stale pump finishing late
+	// used to close a freshly established connection that way (#73).
+	defer conn.Close()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
@@ -984,9 +1067,9 @@ func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
 		case <-done:
 			return
 		default:
-			_, message, err := c.conn.ReadMessage()
+			_, message, err := conn.ReadMessage()
 			if err != nil {
-				// If pumpDone was closed, another goroutine is already reconnecting
+				// If pumpDone was closed, a reconnect has already superseded this connection
 				select {
 				case <-done:
 					return
@@ -995,7 +1078,8 @@ func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					logs.GetLogger().Errorf("WebSocket read error: %v", err)
 				}
-				go c.reconnect()
+				c.markDisconnected(gen)
+				c.requestReconnect(gen)
 				return
 			}
 
@@ -1010,19 +1094,16 @@ func (c *InferenceClient) readPumpWithDone(done <-chan struct{}) {
 	}
 }
 
-func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
+func (c *InferenceClient) writePumpWithDone(done <-chan struct{}, conn *websocket.Conn, gen uint64) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		// Close the connection so readPump also exits and triggers reconnect.
+		// Close OUR connection so readPump also exits and triggers reconnect.
 		// Without this, writePump dying on a write error leaves readPump blocked
-		// on ReadMessage, and nobody drains the send channel.
-		c.mu.RLock()
-		conn := c.conn
-		c.mu.RUnlock()
-		if conn != nil {
-			conn.Close()
-		}
+		// on ReadMessage, and nobody drains the send channel. Ours only: closing
+		// c.conn here closed the replacement connection when this pump was the
+		// stale one (#73).
+		conn.Close()
 	}()
 
 	for {
@@ -1032,14 +1113,6 @@ func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
 		case <-done:
 			return
 		case message := <-c.send:
-			c.mu.RLock()
-			conn := c.conn
-			c.mu.RUnlock()
-
-			if conn == nil {
-				continue
-			}
-
 			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			err := conn.WriteMessage(websocket.TextMessage, message)
@@ -1049,14 +1122,6 @@ func (c *InferenceClient) writePumpWithDone(done <-chan struct{}) {
 				return
 			}
 		case <-ticker.C:
-			c.mu.RLock()
-			conn := c.conn
-			c.mu.RUnlock()
-
-			if conn == nil {
-				continue
-			}
-
 			c.writeMu.Lock()
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			err := conn.WriteMessage(websocket.PingMessage, nil)
@@ -1080,9 +1145,30 @@ func (c *InferenceClient) heartbeatPump() {
 		case <-ticker.C:
 			c.mu.RLock()
 			registered := c.registered
+			conn := c.conn
+			gen := c.connGeneration
 			c.mu.RUnlock()
 
 			if !registered {
+				// Connected but never acknowledged. Skipping heartbeats here
+				// used to also disable the missed-ack watchdog — in exactly the
+				// state a lost registration leaves behind (#73). Count instead,
+				// and force a reconnect if the ack never comes. Not while a
+				// reconnect is already running: that one is handling it.
+				if conn == nil || c.isReconnecting() {
+					continue
+				}
+				c.mu.Lock()
+				c.unregisteredTicks++
+				ticks := c.unregisteredTicks
+				c.mu.Unlock()
+				if ticks >= 3 {
+					logs.GetLogger().Warnf("No registration ack for %d intervals, forcing reconnect", ticks)
+					c.mu.Lock()
+					c.unregisteredTicks = 0
+					c.mu.Unlock()
+					c.requestReconnect(gen)
+				}
 				continue
 			}
 
@@ -1095,11 +1181,10 @@ func (c *InferenceClient) heartbeatPump() {
 
 			if missed >= 3 {
 				logs.GetLogger().Warnf("No heartbeat ack received for %d intervals, forcing reconnect", missed)
-				c.mu.Lock()
-				if c.conn != nil {
-					c.conn.Close()
-				}
-				c.mu.Unlock()
+				// Ask for the reconnect directly rather than only closing the
+				// socket and hoping a pump notices: if the pumps are already
+				// dead, nobody would.
+				c.requestReconnect(gen)
 			}
 		}
 	}

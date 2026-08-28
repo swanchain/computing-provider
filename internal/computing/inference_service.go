@@ -43,15 +43,15 @@ var streamingHttpClient = &http.Client{
 
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
-	Container    string `json:"container"`
-	Endpoint     string `json:"endpoint"`
-	GPUMemory    int    `json:"gpu_memory"`
-	Category     string `json:"category"`
-	LocalModel   string `json:"local_model"`             // Actual model name for local inference server (e.g., Ollama model name)
-	Format       string `json:"format,omitempty"`        // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
-	Quantization string `json:"quantization,omitempty"`  // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
-	APIKey       string `json:"api_key,omitempty"`       // API key for authenticated model endpoints (e.g., vLLM --api-key)
-	ContextLength int   `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
+	Container     string `json:"container"`
+	Endpoint      string `json:"endpoint"`
+	GPUMemory     int    `json:"gpu_memory"`
+	Category      string `json:"category"`
+	LocalModel    string `json:"local_model"`              // Actual model name for local inference server (e.g., Ollama model name)
+	Format        string `json:"format,omitempty"`         // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
+	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
+	APIKey        string `json:"api_key,omitempty"`        // API key for authenticated model endpoints (e.g., vLLM --api-key)
+	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -155,7 +155,11 @@ func (s *InferenceService) updateClientModels() {
 	}
 	s.client.models = models
 	if s.client.IsConnected() {
-		s.client.register()
+		// The error was discarded before: a re-registration that timed out on a
+		// full send buffer (pumps dead, #73) left no trace at all.
+		if err := s.client.register(); err != nil {
+			logs.GetLogger().Errorf("Re-registration after model set change failed: %v", err)
+		}
 	}
 }
 
@@ -394,8 +398,8 @@ func checkForOpenAIError(response json.RawMessage) error {
 
 	var errBody struct {
 		Error struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
+			Message string      `json:"message"`
+			Type    string      `json:"type"`
 			Code    interface{} `json:"code"` // Can be string or int
 		} `json:"error"`
 	}
