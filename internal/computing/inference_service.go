@@ -20,6 +20,7 @@ import (
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/alerts"
+	"github.com/swanchain/computing-provider-v2/internal/selfcheck"
 )
 
 // streamingHttpClient is a shared HTTP client for streaming inference requests
@@ -69,6 +70,7 @@ type InferenceService struct {
 	gpuCollector       *GPUMetricsCollector
 	metricsHistory     *MetricsHistory
 	alertMonitor       *alertMonitor
+	selfCheck          *selfCheckRunner
 }
 
 // NewInferenceService creates a new Inference service
@@ -258,6 +260,9 @@ func (s *InferenceService) Start() error {
 	if notifier.Enabled() {
 		logs.GetLogger().Infof("Alerts enabled, posting to %s", config.Alerts.WebhookURL)
 	}
+	s.selfCheck = newSelfCheckRunner(notifier, func() selfcheck.Options {
+		return selfCheckOptions(s.cpPath)
+	})
 
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
@@ -275,6 +280,7 @@ func (s *InferenceService) Start() error {
 	}
 
 	s.alertMonitor.Start()
+	s.selfCheck.Start()
 
 	// Start metrics history recorder
 	if s.metricsHistory != nil {
@@ -317,6 +323,9 @@ func (s *InferenceService) Stop() {
 	}
 	if s.alertMonitor != nil {
 		s.alertMonitor.Stop()
+	}
+	if s.selfCheck != nil {
+		s.selfCheck.Stop()
 	}
 }
 
@@ -605,6 +614,17 @@ func (s *InferenceService) GetActiveModels() []string {
 		activeModels = append(activeModels, modelName)
 	}
 	return activeModels
+}
+
+// GetRegisteredModels returns the model IDs most recently sent to Swan Inference.
+// This can differ from GetActiveModels: a model present in models.json is only
+// registered once it is enabled and passing health checks, and a stale
+// config.toml Models list can leave a healthy model unregistered.
+func (s *InferenceService) GetRegisteredModels() []string {
+	if s.client == nil {
+		return nil
+	}
+	return append([]string(nil), s.client.models...)
 }
 
 // GetMetrics returns a snapshot of the current inference metrics

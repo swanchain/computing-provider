@@ -42,6 +42,7 @@ func main() {
 			dashboardCmd,
 			inferenceCmd,
 			modelsCmd,
+			selfcheckCmd,
 		},
 		Before: func(c *cli.Context) error {
 			// Skip repo initialization for research, dashboard, and inference commands
