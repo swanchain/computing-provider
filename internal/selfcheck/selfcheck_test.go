@@ -244,3 +244,111 @@ func TestSkipCompletionOmitsTheProbe(t *testing.T) {
 		}
 	}
 }
+
+// Regression: zero registered models is the exact state this feature exists to
+// catch. It must fail, not be mistaken for "the daemon does not report it".
+func TestZeroRegisteredModelsFails(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, true, []string{}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	res := find(t, r, "registered with Swan Inference")
+	if res.Status != StatusFail {
+		t.Fatalf("status = %s, want fail — an empty registration is a real outage", res.Status)
+	}
+	if !r.Failed() {
+		t.Error("report should be marked failed so the CLI exits non-zero")
+	}
+}
+
+// A daemon that predates the field is a different case and must only warn.
+func TestAbsentRegisteredFieldOnlyWarns(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/computing/inference/status", func(w http.ResponseWriter, r *http.Request) {
+		// No registered_models key at all.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"connected": true})
+	})
+	mux.HandleFunc("/api/v1/computing/inference/health", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]map[string]interface{}{"org/a": {"health_string": "healthy"}})
+	})
+	mux.HandleFunc("/api/v1/computing/inference/metrics", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"model_metrics": map[string]interface{}{"org/a": map[string]interface{}{"total_requests": 1}}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	r := Run(Options{RepoPath: dir, APIBase: srv.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	if res := find(t, r, "registered with Swan Inference"); res.Status != StatusWarn {
+		t.Fatalf("status = %s, want warn", res.Status)
+	}
+}
+
+// One endpoint commonly serves several models; the context check must compare
+// each model against its own entry rather than whichever is listed first.
+func TestContextMatchesModelById(t *testing.T) {
+	dir := t.TempDir()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{
+			{"id": "org/other", "max_model_len": 8192},
+			{"id": "org/a", "max_model_len": 4096},
+		}})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{}}})
+	})
+	be := httptest.NewServer(mux)
+	defer be.Close()
+
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": be.URL, "context_length": 4096},
+	})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	if res := find(t, r, "context window"); res.Status != StatusPass {
+		t.Fatalf("got %s %q — should have matched org/a (4096), not the first entry (8192)", res.Status, res.Message)
+	}
+}
+
+// Embedding and image models do not answer /v1/chat/completions; probing them
+// would report a permanent false failure.
+func TestNonChatModelsAreNotProbed(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 404}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/embed": {"endpoint": be.URL, "category": "embeddings"},
+	})
+	d := fakeDaemon(t, true, []string{"org/embed"}, map[string]string{"org/embed": "healthy"}, map[string]int64{"org/embed": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/embed"}, LogDir: dir})
+	if res := find(t, r, "inference probe"); res.Status != StatusPass {
+		t.Fatalf("got %s %q, want pass — an embeddings model should be skipped", res.Status, res.Message)
+	}
+	if r.Failed() {
+		t.Error("a healthy embeddings-only provider must not fail the audit")
+	}
+}
+
+// degraded still serves and unknown means the first check has not run; neither
+// should fail a provider that is working.
+func TestDegradedAndUnknownOnlyWarn(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/a": {"endpoint": be.URL}})
+	d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "degraded"}, map[string]int64{"org/a": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+	if res := find(t, r, "model health"); res.Status != StatusWarn {
+		t.Fatalf("status = %s, want warn for a degraded model", res.Status)
+	}
+	if r.Failed() {
+		t.Error("a degraded but serving model should not fail the audit")
+	}
+}
