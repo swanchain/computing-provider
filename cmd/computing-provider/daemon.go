@@ -138,6 +138,10 @@ func runDaemon() error {
 		c.JSON(200, gin.H{
 			"models":  models,
 			"summary": summary,
+			// Which window is reported upstream for each model and where it came
+			// from, so an operator can see an unreported window without reading
+			// the log (#75).
+			"contexts": inferenceService.ModelContexts(),
 		})
 	})
 	router.GET("/inference/models/:model_id", func(c *gin.Context) {

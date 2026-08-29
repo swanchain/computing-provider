@@ -39,20 +39,20 @@ func (h ModelHealth) String() string {
 
 // ModelStatus tracks the health status of a single model
 type ModelStatus struct {
-	ModelID         string      `json:"model_id"`
-	Endpoint        string      `json:"endpoint"`
-	Health          ModelHealth `json:"health"`
-	HealthString    string      `json:"health_string"`
-	LastCheck       time.Time   `json:"last_check"`
-	LastSuccess     time.Time   `json:"last_success"`
-	LastError       string      `json:"last_error,omitempty"`
-	LatencyMs       float64     `json:"latency_ms"`
-	AvgLatencyMs    float64     `json:"avg_latency_ms"`
-	ConsecutiveFails int        `json:"consecutive_fails"`
-	TotalChecks     int64       `json:"total_checks"`
-	TotalSuccesses  int64       `json:"total_successes"`
-	TotalFailures   int64       `json:"total_failures"`
-	CircuitOpen     bool        `json:"circuit_open"`
+	ModelID          string      `json:"model_id"`
+	Endpoint         string      `json:"endpoint"`
+	Health           ModelHealth `json:"health"`
+	HealthString     string      `json:"health_string"`
+	LastCheck        time.Time   `json:"last_check"`
+	LastSuccess      time.Time   `json:"last_success"`
+	LastError        string      `json:"last_error,omitempty"`
+	LatencyMs        float64     `json:"latency_ms"`
+	AvgLatencyMs     float64     `json:"avg_latency_ms"`
+	ConsecutiveFails int         `json:"consecutive_fails"`
+	TotalChecks      int64       `json:"total_checks"`
+	TotalSuccesses   int64       `json:"total_successes"`
+	TotalFailures    int64       `json:"total_failures"`
+	CircuitOpen      bool        `json:"circuit_open"`
 }
 
 // HealthCheckConfig configures the health checker behavior
@@ -77,28 +77,30 @@ func DefaultHealthCheckConfig() HealthCheckConfig {
 
 // ModelHealthChecker performs periodic health checks on model endpoints
 type ModelHealthChecker struct {
-	mu            sync.RWMutex
-	statuses      map[string]*ModelStatus
-	endpoints     map[string]string // modelID -> endpoint
-	apiKeys       map[string]string // modelID -> API key for authenticated endpoints
-	localNames    map[string]string // modelID -> backend-local model name (e.g. Ollama tag)
-	detectedContexts map[string]int // modelID -> context window detected from the backend (/v1/models max_model_len)
-	config        HealthCheckConfig
-	httpClient    *http.Client
-	stopCh        chan struct{}
-	running       bool
-	onStatusChange func(modelID string, oldHealth, newHealth ModelHealth)
+	mu               sync.RWMutex
+	statuses         map[string]*ModelStatus
+	endpoints        map[string]string // modelID -> endpoint
+	apiKeys          map[string]string // modelID -> API key for authenticated endpoints
+	localNames       map[string]string // modelID -> backend-local model name (e.g. Ollama tag)
+	detectedContexts map[string]int    // modelID -> context window detected from the backend (/v1/models max_model_len)
+	contextProbed    map[string]bool   // modelID -> a probe has completed, whether or not it yielded a window
+	config           HealthCheckConfig
+	httpClient       *http.Client
+	stopCh           chan struct{}
+	running          bool
+	onStatusChange   func(modelID string, oldHealth, newHealth ModelHealth)
 }
 
 // NewModelHealthChecker creates a new health checker
 func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 	return &ModelHealthChecker{
-		statuses:  make(map[string]*ModelStatus),
-		endpoints: make(map[string]string),
-		apiKeys:   make(map[string]string),
+		statuses:         make(map[string]*ModelStatus),
+		endpoints:        make(map[string]string),
+		apiKeys:          make(map[string]string),
 		localNames:       make(map[string]string),
 		detectedContexts: make(map[string]int),
-		config:    config,
+		contextProbed:    make(map[string]bool),
+		config:           config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 			Transport: &http.Transport{
@@ -157,6 +159,7 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	delete(h.statuses, modelID)
 	delete(h.localNames, modelID)
 	delete(h.detectedContexts, modelID)
+	delete(h.contextProbed, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
 }
 
@@ -248,11 +251,17 @@ func (h *ModelHealthChecker) checkAllModels() {
 // recordDetectedContext stores the backend-reported context window for a model
 // if the endpoint's /v1/models listing included one for it.
 func (h *ModelHealthChecker) recordDetectedContext(modelID string, contexts map[string]int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Record the attempt even when the backend declares nothing: only then can
+	// a caller distinguish "this backend has no window to report" from "the
+	// first health check has not run yet".
+	h.contextProbed[modelID] = true
+
 	if len(contexts) == 0 {
 		return
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
 
 	name := h.localNames[modelID]
 	if name == "" {
@@ -275,6 +284,15 @@ func (h *ModelHealthChecker) recordDetectedContext(modelID string, contexts map[
 		logs.GetLogger().Infof("Detected context window for %s: %d tokens (backend max_model_len)", modelID, ctx)
 		h.detectedContexts[modelID] = ctx
 	}
+}
+
+// ContextProbed reports whether a health check has completed for this model,
+// so an empty detected context can be read as "the backend declares none"
+// rather than "not yet known".
+func (h *ModelHealthChecker) ContextProbed(modelID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.contextProbed[modelID]
 }
 
 // GetDetectedContext returns the backend-reported context window for a model,

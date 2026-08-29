@@ -101,6 +101,19 @@ Stdout = true               # Also write to stdout
 
 > **Why this matters:** without rotation a provider that loses its connection to Swan Inference logs reconnect attempts continuously and can fill the disk. Rotation caps that, and `Dir` lets you keep logs off a small root volume.
 
+### Context windows
+
+`context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose** — for Ollama, llama.cpp, LiteLLM or any OpenAI-compatible proxy, detection yields nothing and Swan Inference assumes the catalog value instead, so long prompts are rejected with `400 exceeds the available context size`.
+
+| Source | Meaning |
+|--------|---------|
+| `override` | `context_length` set in `models.json` — always wins |
+| `detected` | Read from the backend's `max_model_len` |
+| `not reported` | Neither available; the catalog value is assumed |
+| `health check pending` | The first health check has not completed yet |
+
+`computing-provider inference status` prints the window and source per model, and the provider logs a warning once per model when nothing is reported.
+
 ### Alerts
 
 Optional. Set a `WebhookURL` and the provider POSTs a JSON event when something goes wrong; leave it empty and alerting is off.

@@ -216,8 +216,41 @@ Map Swan Inference model IDs to your local inference endpoints:
 | `gpu_memory` | GPU memory required (MB) |
 | `category` | Model category (`text-generation`, `image-generation`, etc.) |
 | `local_model` | (Optional) Actual model name for local server (e.g., Ollama model name) |
+| `context_length` | (Optional) The real context window this backend accepts, in tokens. **Set this for any backend other than vLLM or SGLang** — see below |
 
 > **Note:** The `local_model` field is used when your local server uses different model names than Swan Inference. For example, Ollama uses `qwen2.5:7b` while Swan Inference expects `qwen-2.5-7b`. The setup wizard handles this mapping automatically.
+
+#### Context windows
+
+The provider reports each model's real context window so the marketplace advertises what you actually serve. It is detected automatically from `max_model_len` in the backend's `/v1/models` — but **that field is a vLLM and SGLang convention**. Ollama, llama.cpp, LiteLLM and other OpenAI-compatible proxies expose nothing, so no window is reported and Swan Inference falls back to the catalog's theoretical value for that model. Clients then size prompts to a window your backend will reject.
+
+Set it explicitly for those backends:
+
+```json
+{
+  "openai/gpt-5.5": {
+    "endpoint": "http://localhost:8317",
+    "local_model": "gpt-5.5",
+    "context_length": 128000
+  }
+}
+```
+
+An explicit `context_length` always wins over detection. To see what each model currently reports:
+
+```bash
+computing-provider inference status
+```
+
+```
+Reported context windows
+----------------------------------------
+  TheDrummer/Cydonia-24B-v4.3                 45056  (detected)
+  openai/gpt-5.5                             128000  (override)
+  Qwen/Qwen3.8-27B                                -  (not reported)
+```
+
+Anything showing `not reported` is being advertised at its catalog value, not yours. The provider also logs a warning once per model at startup.
 
 ### Provider Configuration (`config.toml`)
 

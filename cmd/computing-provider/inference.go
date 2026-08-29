@@ -426,6 +426,62 @@ var inferenceRequestApprovalCmd = &cli.Command{
 	},
 }
 
+// printLocalContexts shows the context window this node reports for each model
+// and where it came from. Detection only works on backends that expose
+// max_model_len (vLLM, SGLang); anything else reports nothing and the platform
+// silently assumes the catalog value, so an operator needs to see it (#75).
+func printLocalContexts(apiPort int) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/api/v1/computing/inference/models", apiPort))
+	if err != nil {
+		return // The daemon is not running; the server-side status above still stands.
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Contexts map[string]struct {
+			Length int    `json:"context_length"`
+			Source string `json:"context_source"`
+		} `json:"contexts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil || len(payload.Contexts) == 0 {
+		return
+	}
+
+	ids := make([]string, 0, len(payload.Contexts))
+	for id := range payload.Contexts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	fmt.Println()
+	fmt.Println("Reported context windows")
+	fmt.Println(strings.Repeat("-", 40))
+	var unknown int
+	for _, id := range ids {
+		info := payload.Contexts[id]
+		switch info.Source {
+		case "override", "detected":
+			fmt.Printf("  %-40s %8d  (%s)\n", id, info.Length, info.Source)
+		case "pending":
+			fmt.Printf("  %-40s %8s  (health check pending)\n", id, "-")
+		default:
+			unknown++
+			fmt.Printf("  %-40s %8s  ", id, "-")
+			color.Yellow("(not reported)")
+		}
+	}
+	if unknown > 0 {
+		fmt.Println()
+		color.Yellow(fmt.Sprintf("%d model(s) report no context window.", unknown))
+		fmt.Println("Swan Inference will assume the catalog value for these, which may not match")
+		fmt.Println("what the backend accepts. Only vLLM and SGLang expose max_model_len; for any")
+		fmt.Println("other backend set the window explicitly in models.json:")
+		fmt.Println()
+		fmt.Println("      \"your/model-id\": { \"endpoint\": \"...\", \"context_length\": 128000 }")
+	}
+}
+
 var inferenceStatusCmd = &cli.Command{
 	Name:  "status",
 	Usage: "Check provider status on Swan Inference",
@@ -555,6 +611,8 @@ var inferenceStatusCmd = &cli.Command{
 		} else {
 			color.Yellow("Disabled (requires admin approval)")
 		}
+
+		printLocalContexts(cfg.API.Port)
 
 		fmt.Println()
 		fmt.Println(status.Message)
@@ -806,7 +864,7 @@ type modelDemandAPIEntry struct {
 	Tokens24h        int64   `json:"tokens_24h"`
 	Revenue24h       float64 `json:"revenue_24h"`
 	AvgLatencyMs     float64 `json:"avg_latency_ms"`
-	DemandTrend      string  `json:"demand_trend"`       // "up", "down", "stable"
+	DemandTrend      string  `json:"demand_trend"` // "up", "down", "stable"
 	DemandChangePct  float64 `json:"demand_change_pct"`
 	EstDailyEarnings float64 `json:"est_daily_earnings"`
 	MinVRAMGB        int     `json:"min_vram_gb"`
@@ -1193,8 +1251,8 @@ func demandTrendSymbol(trend string) string {
 }
 
 var inferenceSelectModelCmd = &cli.Command{
-	Name:  "select-model",
-	Usage: "Interactively pick a model from the marketplace and add it to your config",
+	Name:    "select-model",
+	Usage:   "Interactively pick a model from the marketplace and add it to your config",
 	Aliases: []string{"select"},
 	Description: `Browse the Swan Inference model marketplace, pick a model that fits your
 hardware, and automatically configure it in models.json and config.toml.

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
@@ -71,6 +72,9 @@ type InferenceService struct {
 	metricsHistory     *MetricsHistory
 	alertMonitor       *alertMonitor
 	selfCheck          *selfCheckRunner
+
+	contextWarnMu sync.Mutex
+	contextWarned map[string]bool
 }
 
 // NewInferenceService creates a new Inference service
@@ -719,19 +723,81 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 // catalog value for those (#61).
 func (s *InferenceService) resolveModelContexts() map[string]int {
 	contexts := make(map[string]int)
-	for modelID, mapping := range s.modelMappings {
-		if mapping.ContextLength > 0 {
-			contexts[modelID] = mapping.ContextLength
-		} else if s.healthChecker != nil {
-			if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
-				contexts[modelID] = detected
-			}
+	for modelID := range s.modelMappings {
+		if info := s.ModelContext(modelID); info.Length > 0 {
+			contexts[modelID] = info.Length
+		} else if info.Source == ContextSourceUnknown {
+			s.warnUnknownContext(modelID)
 		}
 	}
 	if len(contexts) == 0 {
 		return nil
 	}
 	return contexts
+}
+
+// Where a model's reported context window came from.
+const (
+	ContextSourceOverride = "override" // context_length in models.json
+	ContextSourceDetected = "detected" // max_model_len from the backend's /v1/models
+	ContextSourceUnknown  = "unknown"  // the backend declares none and no override is set
+	ContextSourcePending  = "pending"  // no health check has completed yet
+)
+
+// ModelContextInfo is a model's context window and how it was determined.
+type ModelContextInfo struct {
+	Length int    `json:"context_length"`
+	Source string `json:"context_source"`
+}
+
+// ModelContext resolves one model's context window. A models.json override wins
+// over backend detection, because an operator who sets it knows something the
+// backend will not say.
+func (s *InferenceService) ModelContext(modelID string) ModelContextInfo {
+	mapping, ok := s.modelMappings[modelID]
+	if ok && mapping.ContextLength > 0 {
+		return ModelContextInfo{Length: mapping.ContextLength, Source: ContextSourceOverride}
+	}
+	if s.healthChecker == nil {
+		return ModelContextInfo{Source: ContextSourcePending}
+	}
+	if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
+		return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
+	}
+	if s.healthChecker.ContextProbed(modelID) {
+		return ModelContextInfo{Source: ContextSourceUnknown}
+	}
+	return ModelContextInfo{Source: ContextSourcePending}
+}
+
+// ModelContexts returns the context window and source for every mapped model.
+func (s *InferenceService) ModelContexts() map[string]ModelContextInfo {
+	out := make(map[string]ModelContextInfo, len(s.modelMappings))
+	for modelID := range s.modelMappings {
+		out[modelID] = s.ModelContext(modelID)
+	}
+	return out
+}
+
+// warnUnknownContext tells the operator once per model that nothing is being
+// reported. max_model_len is a vLLM/SGLang convention; a proxy, Ollama or
+// llama.cpp backend declares nothing, the platform falls back to the catalog's
+// theoretical window, and until now the only log line was the success case — so
+// this failed silently and indefinitely (#75).
+func (s *InferenceService) warnUnknownContext(modelID string) {
+	s.contextWarnMu.Lock()
+	defer s.contextWarnMu.Unlock()
+	if s.contextWarned == nil {
+		s.contextWarned = make(map[string]bool)
+	}
+	if s.contextWarned[modelID] {
+		return
+	}
+	s.contextWarned[modelID] = true
+	logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
+		"Swan Inference will assume the catalog value, which may not match what this backend accepts. "+
+		"Set \"context_length\" for this model in models.json to report the real window.",
+		modelID, s.modelMappings[modelID].Endpoint)
 }
 
 // handleWarmup processes model warmup requests from Swan Inference
