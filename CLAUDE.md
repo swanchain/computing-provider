@@ -19,10 +19,22 @@ removed after the fact — deletion did not unpublish it.
   are probes, or how probe traffic is selected — publishing these tells a
   dishonest provider exactly how to stay under them
 - Credentials, API keys, private keys, or customer data
+- **Cross-repo issue links into the private repo** — `swanchain/swan-inference#NNN`
+  or the bare `swan-inference#NNN` short form. This covers code comments, docs,
+  commit messages, and issue and PR descriptions and comments alike. The link
+  resolves for nobody outside the org, yet still discloses that the issue
+  exists, its number, and by implication the work going on there. Say what was
+  found instead: "the server stores a zero context length for most
+  provider-model pairs" tells a reader everything useful without pointing at an
+  internal tracker.
 
 **Where that material belongs:** the private `swanchain/swan-inference`
 repository. This repo is the provider *client*; if a document is about the
 marketplace rather than about running a node, it almost certainly belongs there.
+
+Naming the service in operational context is fine — a dev-setup guide may say
+"confirm swan-inference is running on port 8081". The rule is about *links into
+the private tracker*, not the word.
 
 **What is fine here:** anything a provider operator needs in order to run a
 node — protocol shapes, configuration, model setup, declared capability formats,

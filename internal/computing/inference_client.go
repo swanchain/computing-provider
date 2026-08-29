@@ -90,7 +90,7 @@ type RegisterPayload struct {
 	Token       string      `json:"token,omitempty"` // API key for authentication (sk-prov-*)
 	Signature   string      `json:"signature,omitempty"`
 	Models      []string    `json:"models"`
-	ModelHashes []ModelInfo `json:"model_hashes,omitempty"` // DEPRECATED (swan-inference#455): superseded by ModelDeclarations
+	ModelHashes []ModelInfo `json:"model_hashes,omitempty"` // DEPRECATED: superseded by ModelDeclarations
 	// ModelDeclarations is the schema v1 per-model declaration. Sent alongside
 	// ModelHashes during the migration window; the marketplace prefers it.
 	ModelDeclarations []ModelDeclaration `json:"model_declarations,omitempty"`
@@ -2316,7 +2316,7 @@ func extractTokenCounts(response json.RawMessage) (int, int) {
 }
 
 // ---------------------------------------------------------------------------
-// Model capability declaration, schema v1 (swan-inference#455)
+// Model capability declaration, schema v1
 //
 // Field shapes borrow OpenRouter's model-document schema 2.4 vocabulary so the
 // marketplace can republish them with minimal translation. Three deliberate
@@ -2436,7 +2436,7 @@ func declaredModalitiesFor(category string, contextLen int) ([]DeclaredModality,
 }
 
 // buildModelDeclarations produces the schema v1 declaration for every model this
-// node serves (swan-inference#455). Sent alongside the legacy ModelHashes during
+// node serves. Sent alongside the legacy ModelHashes during
 // the migration window; the marketplace prefers this when present.
 //
 // Everything here is a claim the marketplace will verify by measurement, so it

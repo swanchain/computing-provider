@@ -54,6 +54,9 @@ jobs:
           # has no reason to discuss these; the marketplace repo does.
           economics='subscription pool|pool settlement|projected (settlement )?ratio|payout ratio|platform margin|gross margin|competitive landscape|competitor analysis'
           verification='logprob_sample_rate|sampling rate of [0-9]|detection threshold|probe selection|which requests are probes'
+          # Links into the private tracker: they resolve for nobody outside the
+          # org, yet still disclose the issue number and the work behind it.
+          crossrepo='(swanchain/)?swan-inference#[0-9]+'
 
           while IFS= read -r f; do
             [ -f "$f" ] || continue
@@ -70,6 +73,12 @@ jobs:
             if grep -nEi "$economics" "$f" >/dev/null 2>&1; then
               echo "::error file=$f::Mentions marketplace economics, which belong in the private swan-inference repo, not the public provider client."
               grep -nEi "$economics" "$f" | head -3 | sed 's/^/    /'
+              fail=1
+            fi
+
+            if grep -nE "$crossrepo" "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::Links to an issue in the private swan-inference repo. Describe the finding in its own words instead."
+              grep -nE "$crossrepo" "$f" | head -3 | sed 's/^/    /'
               fail=1
             fi
 

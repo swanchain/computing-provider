@@ -2,7 +2,7 @@ package computing
 
 import "testing"
 
-// swan-inference#455: the declaration must be conservative. Everything in it is
+// The declaration must be conservative. Everything in it is
 // a claim the marketplace verifies by measurement, so an unmappable value is
 // omitted rather than guessed.
 

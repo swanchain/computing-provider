@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/swanchain/computing-provider-v2/build"
@@ -81,6 +82,36 @@ type ComputeNode struct {
 	Inference Inference `toml:"Inference,omitempty"`
 	Log       Log       `toml:"Log,omitempty"`
 	Alerts    Alerts    `toml:"Alerts,omitempty"`
+	SelfCheck SelfCheck `toml:"SelfCheck,omitempty"`
+}
+
+// SelfCheck controls the periodic audit and what it does about a model that
+// cannot serve. A backend can pass health checks while failing every request —
+// health checks probe /v1/models, which most backends answer without touching
+// the inference engine — so without this the node keeps accepting traffic it
+// cannot fulfil and its reliability score pays for it.
+type SelfCheck struct {
+	Enable          *bool `toml:"Enable"`          // Run the periodic audit. Default: true
+	IntervalMinutes int   `toml:"IntervalMinutes"` // How often to audit. Default: 10
+	AutoDisable     *bool `toml:"AutoDisable"`     // Deregister a model whose backend cannot serve. Default: true
+	AutoRecover     *bool `toml:"AutoRecover"`     // Re-register it once the backend works again. Default: true
+	// FailuresBeforeDisable is how many consecutive failed probes are required
+	// before deregistering, so a single transient blip does not pull a model.
+	FailuresBeforeDisable int `toml:"FailuresBeforeDisable"` // Default: 2
+}
+
+// Enabled reports whether the periodic audit runs (default true).
+func (s SelfCheck) Enabled() bool { return s.Enable == nil || *s.Enable }
+
+// AutoDisableEnabled reports whether failing models are deregistered (default true).
+func (s SelfCheck) AutoDisableEnabled() bool { return s.AutoDisable == nil || *s.AutoDisable }
+
+// AutoRecoverEnabled reports whether recovered models are re-registered (default true).
+func (s SelfCheck) AutoRecoverEnabled() bool { return s.AutoRecover == nil || *s.AutoRecover }
+
+// Interval is the audit period.
+func (s SelfCheck) Interval() time.Duration {
+	return time.Duration(s.IntervalMinutes) * time.Minute
 }
 
 // Alerts configures operational notifications to a provider-run webhook. The
@@ -168,6 +199,7 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 
 	applyLogDefaults(&config.Log, cpRepoPath)
 	applyAlertDefaults(&config.Alerts)
+	applySelfCheckDefaults(&config.SelfCheck)
 
 	// Validate MultiAddress format if provided (optional for Inference mode)
 	if config.API.MultiAddress != "" {
@@ -195,6 +227,16 @@ func applyAlertDefaults(a *Alerts) {
 	}
 	if a.ErrorRateMinRequests <= 0 {
 		a.ErrorRateMinRequests = 10
+	}
+}
+
+// applySelfCheckDefaults fills unset [SelfCheck] fields.
+func applySelfCheckDefaults(s *SelfCheck) {
+	if s.IntervalMinutes <= 0 {
+		s.IntervalMinutes = 10
+	}
+	if s.FailuresBeforeDisable <= 0 {
+		s.FailuresBeforeDisable = 2
 	}
 }
 
