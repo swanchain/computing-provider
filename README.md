@@ -330,6 +330,7 @@ To = ["you@example.com"]
 ```
 
 ```bash
+# Most providers (Gmail, Outlook, Yahoo) need an app password, not your login password
 export SMTP_PASSWORD='your-app-password'   # keep it out of config.toml
 computing-provider alerts test             # verify before you need it
 ```

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/swanchain/computing-provider-v2/conf"
@@ -79,6 +80,14 @@ var alertsTestCmd = &cli.Command{
 		notifier := alerts.New(cfg.Alerts, computing.GetNodeId(cpRepoPath), cfg.API.NodeName)
 		if err := notifier.SendTest(cctx.String("message")); err != nil {
 			color.Red(fmt.Sprintf("Delivery failed: %v", err))
+			// The most common cause by far, and the least obvious.
+			if strings.Contains(err.Error(), "smtp auth") {
+				fmt.Println()
+				fmt.Println("Most providers require an app password rather than your login password:")
+				fmt.Println("  Gmail:   Account -> Security -> 2-Step Verification -> App passwords")
+				fmt.Println("  Outlook: Security -> Advanced security options -> App passwords")
+				fmt.Println("Then: export SMTP_PASSWORD='<app password>'")
+			}
 			return cli.Exit("", 1)
 		}
 

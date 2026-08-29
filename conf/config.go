@@ -130,12 +130,16 @@ type Alerts struct {
 // machine and no monitoring stack, so requiring a webhook receiver would leave
 // alerting switched off for the people who need it most.
 type Email struct {
-	Host     string   `toml:"Host"`     // SMTP server; empty disables email
-	Port     int      `toml:"Port"`     // 587 (STARTTLS) or 465 (implicit TLS). Default: 587
-	Username string   `toml:"Username"` // SMTP auth user; omit for an unauthenticated relay
-	Password string   `toml:"Password"` // Prefer the SMTP_PASSWORD env var over storing this
-	From     string   `toml:"From"`     // Envelope sender. Defaults to Username
-	To       []string `toml:"To"`       // Recipients
+	Host     string `toml:"Host"`     // SMTP server; empty disables email
+	Port     int    `toml:"Port"`     // 587 (STARTTLS) or 465 (implicit TLS). Default: 587
+	Username string `toml:"Username"` // SMTP auth user; omit for an unauthenticated relay
+	// Password is the SMTP credential. For Gmail, Outlook, Yahoo and most
+	// consumer providers this must be a generated app password — a login
+	// password is rejected once 2FA is on. Prefer the SMTP_PASSWORD env var
+	// over storing it here.
+	Password string   `toml:"Password"`
+	From     string   `toml:"From"` // Envelope sender. Defaults to Username
+	To       []string `toml:"To"`   // Recipients
 }
 
 // Enabled reports whether email alerting is configured.

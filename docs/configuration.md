@@ -176,9 +176,13 @@ CooldownMinutes = 15
 | `Host` | — | Empty disables email |
 | `Port` | `587` | `465` switches to implicit TLS; anything else upgrades with STARTTLS when the server offers it |
 | `Username` | — | Omit for an unauthenticated relay, e.g. on localhost |
-| `Password` | — | **Prefer the `SMTP_PASSWORD` environment variable**; it overrides the file |
+| `Password` | — | The SMTP credential — for most providers an **app password**, not your login password. **Prefer the `SMTP_PASSWORD` environment variable**; it overrides the file |
 | `From` | `Username` | Envelope sender |
 | `To` | — | One or more recipients |
+
+**App password, not your account password.** Gmail, Outlook, Yahoo and most other consumer providers reject a login password over SMTP once 2FA is on, and Google removed plain-password access entirely — you need a generated app password (Google: *Account → Security → App passwords*). A company or self-hosted relay usually takes the account password, or no authentication at all on localhost.
+
+`computing-provider alerts test` tells you which case you are in: a wrong credential comes back as `smtp auth: 535 ...` rather than failing silently later.
 
 Keep the password out of `config.toml` where you can — that file is often world-readable and ends up pasted into support threads:
 
