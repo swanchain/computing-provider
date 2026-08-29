@@ -329,9 +329,11 @@ Username = "you@example.com"
 To = ["you@example.com"]
 ```
 
+Keep the password out of `config.toml` — the provider reads `$CP_PATH/.env` at startup:
+
 ```bash
 # Most providers (Gmail, Outlook, Yahoo) need an app password, not your login password
-export SMTP_PASSWORD='your-app-password'   # keep it out of config.toml
+umask 077 && printf "SMTP_PASSWORD='your-app-password'\n" > $CP_PATH/.env
 computing-provider alerts test             # verify before you need it
 ```
 

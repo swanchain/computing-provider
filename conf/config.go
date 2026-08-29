@@ -218,6 +218,12 @@ type RPC struct {
 }
 
 func InitConfig(cpRepoPath string, standalone bool) error {
+	// Before anything reads the environment: $CP_PATH/.env supplies secrets
+	// that should not live in config.toml.
+	if err := LoadEnvFile(cpRepoPath); err != nil {
+		log.Printf("Warning: %v\n", err)
+	}
+
 	configFile := filepath.Join(cpRepoPath, "config.toml")
 
 	if _, err := os.Stat(configFile); err != nil {

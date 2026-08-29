@@ -184,11 +184,17 @@ CooldownMinutes = 15
 
 `computing-provider alerts test` tells you which case you are in: a wrong credential comes back as `smtp auth: 535 ...` rather than failing silently later.
 
-Keep the password out of `config.toml` where you can — that file is often world-readable and ends up pasted into support threads:
+Keep the password out of `config.toml` — that file is often world-readable and ends up pasted into support threads. The provider reads `$CP_PATH/.env` at startup, so the secret lives in one file that only it needs:
 
 ```bash
-export SMTP_PASSWORD='your-app-password'
+umask 077
+printf "SMTP_PASSWORD='your-app-password'\n" > $CP_PATH/.env
+chmod 600 $CP_PATH/.env
 ```
+
+`.env` takes `KEY=value` lines, ignores blanks and `#` comments, tolerates a leading `export`, and honours single or double quotes — which you need if the password contains a space or a `#`. A variable already set in the real environment wins, so you can override the file for one run without editing it. The provider warns if the file is readable by anyone but its owner.
+
+An exported `SMTP_PASSWORD` works too, if you prefer to manage it yourself.
 
 Subjects are `[node-name] SEVERITY: event — model`, so they can be filtered.
 
