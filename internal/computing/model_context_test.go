@@ -1,116 +1,138 @@
 package computing
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
-func newContextService(mappings map[string]ModelMapping) *InferenceService {
-	return &InferenceService{
-		modelMappings: mappings,
-		healthChecker: NewModelHealthChecker(DefaultHealthCheckConfig()),
+func TestParseModelContexts(t *testing.T) {
+	// vLLM/SGLang style listing
+	body := `{"object":"list","data":[
+		{"id":"TheDrummer/Cydonia-24B-v4.3","object":"model","max_model_len":131072},
+		{"id":"meta-llama/Llama-3.2-3B-Instruct","object":"model","max_model_len":8192},
+		{"id":"no-context-model","object":"model"}
+	]}`
+	contexts := parseModelContexts(strings.NewReader(body))
+	if contexts["TheDrummer/Cydonia-24B-v4.3"] != 131072 {
+		t.Errorf("expected 131072, got %d", contexts["TheDrummer/Cydonia-24B-v4.3"])
+	}
+	if contexts["meta-llama/Llama-3.2-3B-Instruct"] != 8192 {
+		t.Errorf("expected 8192, got %d", contexts["meta-llama/Llama-3.2-3B-Instruct"])
+	}
+	if _, ok := contexts["no-context-model"]; ok {
+		t.Error("model without max_model_len should be omitted")
 	}
 }
 
-func TestModelContextSources(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/override": {Endpoint: "http://backend", ContextLength: 128000},
-		"org/detected": {Endpoint: "http://backend"},
-		"org/unknown":  {Endpoint: "http://proxy"},
-		"org/pending":  {Endpoint: "http://backend"},
-	})
+func TestParseModelContextsOllamaStyle(t *testing.T) {
+	// Ollama's /v1/models has no max_model_len at all
+	body := `{"object":"list","data":[{"id":"qwen2.5:7b","object":"model","owned_by":"library"}]}`
+	if contexts := parseModelContexts(strings.NewReader(body)); len(contexts) != 0 {
+		t.Errorf("expected no contexts from Ollama-style listing, got %v", contexts)
+	}
+	if contexts := parseModelContexts(strings.NewReader("not json")); contexts != nil {
+		t.Errorf("expected nil on invalid JSON, got %v", contexts)
+	}
+}
 
-	// vLLM-style backend declares a window.
-	s.healthChecker.recordDetectedContext("org/detected", map[string]int{"org/detected": 45056})
-	// A proxy answers /v1/models with no max_model_len: probed, nothing found.
-	s.healthChecker.recordDetectedContext("org/unknown", nil)
-	// org/pending has not been checked at all.
-
-	for _, tc := range []struct {
-		id         string
-		wantLen    int
-		wantSource string
-	}{
-		{"org/override", 128000, ContextSourceOverride},
-		{"org/detected", 45056, ContextSourceDetected},
-		{"org/unknown", 0, ContextSourceUnknown},
-		{"org/pending", 0, ContextSourcePending},
-	} {
-		got := s.ModelContext(tc.id)
-		if got.Length != tc.wantLen || got.Source != tc.wantSource {
-			t.Errorf("%s: got %d/%s, want %d/%s", tc.id, got.Length, got.Source, tc.wantLen, tc.wantSource)
+func TestProbeEndpointDetectsContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			w.Write([]byte(`{"data":[{"id":"m1","max_model_len":32768}]}`))
+			return
 		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	contexts, err := h.probeEndpoint(srv.URL, "")
+	if err != nil {
+		t.Fatalf("probe failed: %v", err)
+	}
+	if contexts["m1"] != 32768 {
+		t.Errorf("expected detected context 32768, got %v", contexts)
 	}
 }
 
-// An operator-set window must win over detection: they know something the
-// backend will not say, and detection can be wrong for a proxied model.
-func TestOverrideBeatsDetection(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/a": {Endpoint: "http://backend", ContextLength: 32768},
-	})
-	s.healthChecker.recordDetectedContext("org/a", map[string]int{"org/a": 131072})
+func TestRecordDetectedContextLocalNameMatch(t *testing.T) {
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	h.RegisterModel("google/gemma-4-31b-it", "http://x", "", "gemma4:31b-it-qat")
+	h.RegisterModel("TheDrummer/Cydonia-24B-v4.3", "http://y", "", "")
 
-	got := s.ModelContext("org/a")
-	if got.Length != 32768 || got.Source != ContextSourceOverride {
-		t.Fatalf("got %d/%s, want 32768/%s", got.Length, got.Source, ContextSourceOverride)
+	// Matched via local name
+	h.recordDetectedContext("google/gemma-4-31b-it", map[string]int{"gemma4:31b-it-qat": 8192})
+	if got := h.GetDetectedContext("google/gemma-4-31b-it"); got != 8192 {
+		t.Errorf("expected 8192 via local name, got %d", got)
+	}
+
+	// Matched via model ID, case-insensitive
+	h.recordDetectedContext("TheDrummer/Cydonia-24B-v4.3", map[string]int{"thedrummer/cydonia-24b-v4.3": 131072})
+	if got := h.GetDetectedContext("TheDrummer/Cydonia-24B-v4.3"); got != 131072 {
+		t.Errorf("expected 131072 via case-insensitive ID, got %d", got)
+	}
+
+	// Unregister clears detection
+	h.UnregisterModel("google/gemma-4-31b-it")
+	if got := h.GetDetectedContext("google/gemma-4-31b-it"); got != 0 {
+		t.Errorf("expected 0 after unregister, got %d", got)
 	}
 }
 
-// resolveModelContexts feeds registration and heartbeats; it must carry every
-// known window and omit the ones nobody can determine.
-func TestResolveModelContextsOmitsUnknown(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/known":   {Endpoint: "http://backend"},
-		"org/unknown": {Endpoint: "http://proxy"},
+func TestBuildModelMetadataHeartbeatShape(t *testing.T) {
+	c := &InferenceClient{models: []string{"model-a", "model-b", "model-c"}}
+	c.SetModelContextsProvider(func() map[string]int {
+		return map[string]int{"model-a": 32768}
 	})
-	s.healthChecker.recordDetectedContext("org/known", map[string]int{"org/known": 8192})
-	s.healthChecker.recordDetectedContext("org/unknown", nil)
+	c.SetModelMappingsProvider(func() map[string]ModelMapping {
+		return map[string]ModelMapping{
+			"model-b": {Format: "awq", Quantization: "w4a16"},
+			"model-c": {}, // no metadata at all -> omitted
+		}
+	})
 
-	got := s.resolveModelContexts()
-	if len(got) != 1 || got["org/known"] != 8192 {
-		t.Fatalf("got %v, want only org/known=8192", got)
+	infos := c.buildModelMetadata()
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 entries (model-c omitted), got %d: %+v", len(infos), infos)
+	}
+	byID := map[string]ModelInfo{}
+	for _, i := range infos {
+		byID[i.ModelID] = i
+	}
+	if byID["model-a"].ContextLength != 32768 {
+		t.Errorf("expected context 32768 for model-a, got %d", byID["model-a"].ContextLength)
+	}
+	if byID["model-b"].Format != "awq" || byID["model-b"].Quantization != "w4a16" {
+		t.Errorf("expected format/quant for model-b, got %+v", byID["model-b"])
 	}
 }
 
-// The warning is the whole point of the change, but it must not repeat: this
-// runs on every registration and heartbeat.
-func TestUnknownContextWarnsOnlyOnce(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/unknown": {Endpoint: "http://proxy"},
-	})
-	s.healthChecker.recordDetectedContext("org/unknown", nil)
+func TestResolveModelContextsPrecedence(t *testing.T) {
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	h.RegisterModel("model-a", "http://x", "", "")
+	h.recordDetectedContext("model-a", map[string]int{"model-a": 32768})
+	h.RegisterModel("model-b", "http://x", "", "")
+	h.recordDetectedContext("model-b", map[string]int{"model-b": 65536})
 
-	for i := 0; i < 5; i++ {
-		s.resolveModelContexts()
+	s := &InferenceService{
+		healthChecker: h,
+		modelMappings: map[string]ModelMapping{
+			"model-a": {Endpoint: "http://x"},                       // detected only
+			"model-b": {Endpoint: "http://x", ContextLength: 16384}, // manual override wins
+			"model-c": {Endpoint: "http://x"},                       // unknown -> omitted
+		},
 	}
-	if !s.contextWarned["org/unknown"] {
-		t.Fatal("expected the model to be marked warned")
-	}
-	if len(s.contextWarned) != 1 {
-		t.Fatalf("warned map = %v, want exactly one entry", s.contextWarned)
-	}
-}
 
-// A model whose first health check has not run yet is not "unknown" — warning
-// there would fire on every restart before anything had been probed.
-func TestPendingModelIsNotWarned(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/pending": {Endpoint: "http://backend"},
-	})
-	s.resolveModelContexts()
-	if len(s.contextWarned) != 0 {
-		t.Fatalf("warned before any probe: %v", s.contextWarned)
+	contexts := s.resolveModelContexts()
+	if contexts["model-a"] != 32768 {
+		t.Errorf("expected detected 32768 for model-a, got %d", contexts["model-a"])
 	}
-}
-
-func TestModelContextsCoversEveryMapping(t *testing.T) {
-	s := newContextService(map[string]ModelMapping{
-		"org/a": {Endpoint: "http://backend", ContextLength: 4096},
-		"org/b": {Endpoint: "http://proxy"},
-	})
-	got := s.ModelContexts()
-	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2", len(got))
+	if contexts["model-b"] != 16384 {
+		t.Errorf("expected manual override 16384 for model-b, got %d", contexts["model-b"])
 	}
-	if got["org/b"].Source != ContextSourcePending {
-		t.Errorf("org/b source = %s, want %s", got["org/b"].Source, ContextSourcePending)
+	if _, ok := contexts["model-c"]; ok {
+		t.Error("model with unknown context should be omitted")
 	}
 }
