@@ -118,6 +118,7 @@ func (s SelfCheck) Interval() time.Duration {
 // failures worth waking someone for are the ones that leave the daemon running
 // while it earns nothing, so none of them surface as a crash.
 type Alerts struct {
+	Email                Email   `toml:"Email,omitempty"`      // SMTP delivery; independent of the webhook
 	WebhookURL           string  `toml:"WebhookURL"`           // POST target; empty disables alerting
 	CooldownMinutes      int     `toml:"CooldownMinutes"`      // Suppress repeats of the same event. Default: 15
 	DisconnectAfterMin   int     `toml:"DisconnectAfterMin"`   // Alert after this long disconnected from Swan Inference. Default: 5
@@ -125,8 +126,40 @@ type Alerts struct {
 	ErrorRateMinRequests int     `toml:"ErrorRateMinRequests"` // Ignore the ratio below this many requests. Default: 10
 }
 
-// Enabled reports whether a webhook is configured.
-func (a Alerts) Enabled() bool { return strings.TrimSpace(a.WebhookURL) != "" }
+// Email delivers alerts over SMTP. Most providers are one operator with one
+// machine and no monitoring stack, so requiring a webhook receiver would leave
+// alerting switched off for the people who need it most.
+type Email struct {
+	Host     string   `toml:"Host"`     // SMTP server; empty disables email
+	Port     int      `toml:"Port"`     // 587 (STARTTLS) or 465 (implicit TLS). Default: 587
+	Username string   `toml:"Username"` // SMTP auth user; omit for an unauthenticated relay
+	Password string   `toml:"Password"` // Prefer the SMTP_PASSWORD env var over storing this
+	From     string   `toml:"From"`     // Envelope sender. Defaults to Username
+	To       []string `toml:"To"`       // Recipients
+}
+
+// Enabled reports whether email alerting is configured.
+func (e Email) Enabled() bool {
+	return strings.TrimSpace(e.Host) != "" && len(e.To) > 0
+}
+
+// ImplicitTLS reports whether to open the connection wrapped in TLS (port 465)
+// rather than upgrading with STARTTLS (587 and most other ports).
+func (e Email) ImplicitTLS() bool { return e.Port == 465 }
+
+// Sender returns the envelope sender, falling back to the auth username.
+func (e Email) Sender() string {
+	if strings.TrimSpace(e.From) != "" {
+		return e.From
+	}
+	return e.Username
+}
+
+// WebhookEnabled reports whether a webhook is configured.
+func (a Alerts) WebhookEnabled() bool { return strings.TrimSpace(a.WebhookURL) != "" }
+
+// Enabled reports whether any delivery transport is configured.
+func (a Alerts) Enabled() bool { return a.WebhookEnabled() || a.Email.Enabled() }
 
 // Log controls where the provider writes its log files and how they are rotated.
 // Without rotation a long-running provider can fill its disk: an unreachable
@@ -216,6 +249,15 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 // enabling alerting needs only a WebhookURL.
 func applyAlertDefaults(a *Alerts) {
 	a.WebhookURL = strings.TrimSpace(a.WebhookURL)
+	a.Email.Host = strings.TrimSpace(a.Email.Host)
+	if a.Email.Port <= 0 {
+		a.Email.Port = 587
+	}
+	// Keeping the password out of config.toml is the point: that file is often
+	// world-readable and gets pasted into support threads.
+	if env := strings.TrimSpace(os.Getenv("SMTP_PASSWORD")); env != "" {
+		a.Email.Password = env
+	}
 	if a.CooldownMinutes <= 0 {
 		a.CooldownMinutes = 15
 	}

@@ -58,6 +58,7 @@ type Event struct {
 // callers never need to check whether alerting is enabled.
 type Notifier struct {
 	url      string
+	email    *emailSender
 	cooldown time.Duration
 	nodeID   string
 	nodeName string
@@ -84,6 +85,7 @@ const queueSize = 64
 func New(cfg conf.Alerts, nodeID, nodeName string) *Notifier {
 	return &Notifier{
 		url:      cfg.WebhookURL,
+		email:    newEmailSender(cfg.Email, nodeName),
 		cooldown: time.Duration(cfg.CooldownMinutes) * time.Minute,
 		nodeID:   nodeID,
 		nodeName: nodeName,
@@ -93,8 +95,10 @@ func New(cfg conf.Alerts, nodeID, nodeName string) *Notifier {
 	}
 }
 
-// Enabled reports whether a webhook is configured.
-func (n *Notifier) Enabled() bool { return n != nil && n.url != "" }
+// Enabled reports whether any delivery transport is configured.
+func (n *Notifier) Enabled() bool {
+	return n != nil && (n.url != "" || n.email.enabled())
+}
 
 // Fire delivers an event in the background. It never blocks the caller and
 // never returns an error: alerting must not be able to break inference.
@@ -129,8 +133,49 @@ func (n *Notifier) Fire(event, modelID, message string, severity Severity, detai
 // run delivers queued events one at a time, preserving their order.
 func (n *Notifier) run() {
 	for e := range n.queue {
+		n.deliver(e)
+	}
+}
+
+// deliver sends an event over every configured transport. One failing must not
+// stop the other.
+func (n *Notifier) deliver(e Event) {
+	if n.url != "" {
 		n.post(e)
 	}
+	if n.email.enabled() {
+		if err := n.email.send(e); err != nil {
+			logs.GetLogger().Warnf("alerts: email delivery failed for %s%s: %v", e.Event, modelSuffix(e.ModelID), err)
+			return
+		}
+		logs.GetLogger().Infof("alerts: emailed %s%s", e.Event, modelSuffix(e.ModelID))
+	}
+}
+
+// SendTest delivers a synthetic event over every configured transport and
+// reports the outcome. Configuring SMTP and finding out it was wrong during the
+// first real incident is the worst possible time to learn it.
+func (n *Notifier) SendTest(message string) error {
+	if !n.Enabled() {
+		return fmt.Errorf("no alert transport configured: set [Alerts] WebhookURL or [Alerts.Email]")
+	}
+	e := Event{
+		Event:     "test",
+		Severity:  SeverityInfo,
+		NodeID:    n.nodeID,
+		NodeName:  n.nodeName,
+		Message:   message,
+		Timestamp: time.Now().UTC(),
+	}
+	if n.email.enabled() {
+		if err := n.email.send(e); err != nil {
+			return err
+		}
+	}
+	if n.url != "" {
+		n.post(e)
+	}
+	return nil
 }
 
 // allow reports whether key is outside its cooldown window, recording the send

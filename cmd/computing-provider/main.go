@@ -43,6 +43,7 @@ func main() {
 			inferenceCmd,
 			modelsCmd,
 			selfcheckCmd,
+			alertsCmd,
 		},
 		Before: func(c *cli.Context) error {
 			// Skip repo initialization for research, dashboard, and inference commands
@@ -52,7 +53,8 @@ func main() {
 				if strings.EqualFold(firstArg, researchCmd.Name) ||
 					strings.EqualFold(firstArg, dashboardCmd.Name) ||
 					strings.EqualFold(firstArg, inferenceCmd.Name) ||
-					strings.EqualFold(firstArg, modelsCmd.Name) {
+					strings.EqualFold(firstArg, modelsCmd.Name) ||
+					strings.EqualFold(firstArg, alertsCmd.Name) {
 					return nil
 				}
 			}

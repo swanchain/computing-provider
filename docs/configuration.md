@@ -155,7 +155,48 @@ Payload:
 
 > **Why `model_error_rate` exists:** health checks probe `GET /v1/models`, which many backends answer without touching the inference engine. A vLLM server whose engine has died, or a proxy with expired credentials, looks healthy while failing every request. Only the request outcomes reveal it.
 
-Delivery is asynchronous and never blocks inference: events are queued and posted in order by a single worker, and are dropped (with a log line) if the endpoint is too slow to keep up.
+#### Email
+
+Alerts can go to a mailbox instead of, or as well as, a webhook — no receiver to run:
+
+```toml
+[Alerts]
+CooldownMinutes = 15
+
+  [Alerts.Email]
+  Host = "smtp.gmail.com"
+  Port = 587                 # 587 = STARTTLS, 465 = implicit TLS
+  Username = "you@example.com"
+  From = "you@example.com"   # defaults to Username
+  To = ["you@example.com"]
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `Host` | — | Empty disables email |
+| `Port` | `587` | `465` switches to implicit TLS; anything else upgrades with STARTTLS when the server offers it |
+| `Username` | — | Omit for an unauthenticated relay, e.g. on localhost |
+| `Password` | — | **Prefer the `SMTP_PASSWORD` environment variable**; it overrides the file |
+| `From` | `Username` | Envelope sender |
+| `To` | — | One or more recipients |
+
+Keep the password out of `config.toml` where you can — that file is often world-readable and ends up pasted into support threads:
+
+```bash
+export SMTP_PASSWORD='your-app-password'
+```
+
+Subjects are `[node-name] SEVERITY: event — model`, so they can be filtered.
+
+#### Testing delivery
+
+```bash
+computing-provider alerts test
+```
+
+Sends one message through every configured transport and reports what failed. Worth running right after configuring SMTP — the alternative is discovering the password is wrong during your first real incident.
+
+Delivery is asynchronous and never blocks inference: events are queued and sent in order by a single worker, and are dropped (with a log line) if a transport is too slow to keep up. A failing transport never stops the other.
 
 ### models.json field reference
 

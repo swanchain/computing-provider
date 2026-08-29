@@ -58,3 +58,27 @@ func TestApplyLogDefaults(t *testing.T) {
 		}
 	})
 }
+
+func TestSMTPPasswordComesFromEnv(t *testing.T) {
+	t.Setenv("SMTP_PASSWORD", "from-env")
+	a := Alerts{Email: Email{Host: "smtp.example.com", To: []string{"a@b.c"}, Password: "in-file"}}
+	applyAlertDefaults(&a)
+	if a.Email.Password != "from-env" {
+		t.Errorf("Password = %q, want the env var to win so it need not sit in config.toml", a.Email.Password)
+	}
+	if a.Email.Port != 587 {
+		t.Errorf("Port = %d, want the 587 default", a.Email.Port)
+	}
+}
+
+func TestAlertsEnabledByEitherTransport(t *testing.T) {
+	if (Alerts{}).Enabled() {
+		t.Error("no transport configured should be disabled")
+	}
+	if !(Alerts{WebhookURL: "https://x"}).Enabled() {
+		t.Error("webhook alone should enable alerting")
+	}
+	if !(Alerts{Email: Email{Host: "smtp.example.com", To: []string{"a@b.c"}}}).Enabled() {
+		t.Error("email alone should enable alerting")
+	}
+}
