@@ -279,6 +279,7 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `stream_chunk` / `stream_end` | → Server | Streaming response |
 | `warmup` | ← Server | Pre-load model (sends `max_tokens: 1` request) |
 | `heartbeat` | → Server | Liveness with metrics |
+| `notice` | ← Server | Operational notice, forwarded to the operator's configured `[Alerts]` transports |
 | `ack` | Both | Acknowledgment |
 
 ### Request sources
@@ -323,6 +324,48 @@ never arrived.
 
 Keep `AlertAfterFailures` at or below `FailuresBeforeDisable`: alerting later
 than the node acts means a model is deregistered before anyone is told why.
+### Hub notices
+
+Swan Inference can see things a node cannot observe about itself — that its
+reputation dropped, that traffic is being withheld, that a model declaration was
+rejected. A `notice` message carries one of those down the existing WebSocket,
+and the provider forwards it to whatever the operator configured under
+`[Alerts]` (webhook, email, or both):
+
+```json
+{
+  "type": "notice",
+  "payload": {
+    "event": "provider_suspended",
+    "severity": "critical",
+    "model_id": "Qwen/Qwen3.8-27B",
+    "message": "Routing paused: three consecutive failed verifications.",
+    "details": {"until": "2026-08-30T14:00:00Z"}
+  }
+}
+```
+
+Forwarding rather than having the server mail the operator directly keeps the
+operator's address on their own machine, reuses the cooldown and ordering the
+Notifier already applies, and reaches the webhook as well as email.
+
+The server is a remote party, so `internal/computing/hub_notice.go` treats every
+field as untrusted before it can reach a transport:
+
+- `event` is whitelisted to `[a-z0-9_]`, max 64 chars. It is interpolated into
+  an SMTP `Subject:` header, so an embedded CRLF would let a notice append
+  headers of its own — this check is what closes that.
+- `event` is always prefixed `hub_` on delivery, so a notice can never arrive
+  impersonating a local event such as `model_auto_disabled`.
+- `severity` is clamped to `info`/`warning`/`critical`; anything else becomes
+  `warning`.
+- `message` and `details` values have control characters stripped and are
+  truncated visibly; `details` is capped at 16 entries.
+- Delivery is rate-limited to 20 notices per hour, so a server-side bug cannot
+  drain an operator's mail quota or bury a real local alert.
+
+Notices are dropped with a log line when `[Alerts]` is unconfigured — nothing is
+queued for later.
 
 ## CLI Structure (urfave/cli v2)
 

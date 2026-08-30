@@ -72,6 +72,7 @@ type InferenceService struct {
 	metricsHistory     *MetricsHistory
 	alertMonitor       *alertMonitor
 	selfCheck          *selfCheckRunner
+	noticeLimiter      *noticeLimiter
 
 	contextWarnMu sync.Mutex
 	contextWarned map[string]bool
@@ -297,6 +298,16 @@ func (s *InferenceService) Start() error {
 	if notifier.Enabled() {
 		logs.GetLogger().Infof("Alerts enabled, posting to %s", alerts.RedactURL(config.Alerts.WebhookURL))
 	}
+
+	// Swan Inference can push notices about things this node cannot observe
+	// about itself — suspension, withheld traffic, a rejected declaration. They
+	// are forwarded to the operator's own transports so their address never has
+	// to leave this machine.
+	s.noticeLimiter = newNoticeLimiter(noticeRateLimit, noticeRateWindow)
+	s.client.SetNoticeHandler(func(p NoticePayload) {
+		s.handleHubNotice(notifier, p)
+	})
+
 	// The audit probes every model with a real completion; record those too.
 	s.selfCheck = newSelfCheckRunner(notifier,
 		func() selfcheck.Options { return selfCheckOptions(s.cpPath) },
@@ -1281,4 +1292,36 @@ func (s *InferenceService) GetMetricsHistory(duration, resolution time.Duration)
 		return nil, nil
 	}
 	return s.metricsHistory.GetHistory(duration, resolution)
+}
+
+// handleHubNotice forwards a validated notice from Swan Inference to the
+// operator's alert transports.
+//
+// A malformed or abusive notice is dropped with a log line rather than being
+// passed through: the operator's inbox is the thing being protected, and a hub
+// that has been compromised or has simply shipped a bug must not be able to
+// reach it unchecked.
+func (s *InferenceService) handleHubNotice(notifier *alerts.Notifier, p NoticePayload) {
+	if !notifier.Enabled() {
+		return // Nothing configured to deliver to; the log below would be noise.
+	}
+
+	notice, err := p.sanitize()
+	if err != nil {
+		logs.GetLogger().Warnf("Rejected notice from Swan Inference: %v", err)
+		return
+	}
+
+	allowed, dropped := s.noticeLimiter.allow(time.Now())
+	if !allowed {
+		logs.GetLogger().Warnf("Rate limit reached for notices from Swan Inference (%d/%s); dropped %s",
+			noticeRateLimit, noticeRateWindow, notice.Event)
+		return
+	}
+	if dropped > 0 {
+		logs.GetLogger().Warnf("%d notice(s) from Swan Inference were dropped by the rate limit", dropped)
+	}
+
+	logs.GetLogger().Infof("Notice from Swan Inference [%s] %s: %s", notice.Severity, notice.Event, notice.Message)
+	notifier.Fire(notice.Event, notice.ModelID, notice.Message, notice.Severity, notice.Details)
 }

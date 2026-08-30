@@ -41,6 +41,7 @@ const (
 	MsgTypeModelHealthUpdate MessageType = "model_health_update" // Model health status update
 	MsgTypeBenchmark         MessageType = "benchmark"           // Benchmark test request from server
 	MsgTypeBenchmarkResponse MessageType = "benchmark_response"  // Benchmark test results to server
+	MsgTypeNotice            MessageType = "notice"              // Operational notice from Swan Inference for the operator
 )
 
 // Message is the base WebSocket message structure
@@ -273,6 +274,11 @@ type StreamingInferenceHandler func(requestID string, payload InferencePayload, 
 // WarmupHandler handles model warmup requests
 type WarmupHandler func(payload WarmupPayload) (*WarmupResponse, error)
 
+// NoticeHandler forwards an operational notice from Swan Inference to the
+// operator's configured alert transports. It returns nothing: a notice is
+// informational, and the hub does not wait on the operator's mail server.
+type NoticeHandler func(payload NoticePayload)
+
 // InferenceClient manages WebSocket connection to Swan Inference service
 type InferenceClient struct {
 	nodeID                    string // Local node ID (not the DB provider ID which is resolved via API key)
@@ -290,6 +296,7 @@ type InferenceClient struct {
 	inferenceHandler          InferenceHandler
 	streamingInferenceHandler StreamingInferenceHandler
 	warmupHandler             WarmupHandler
+	noticeHandler             NoticeHandler
 	modelHealthProvider       func() map[string]string       // Returns current model health for heartbeat
 	modelMappingsProvider     func() map[string]ModelMapping // Returns current model mappings for format/quantization
 	modelContextsProvider     func() map[string]int          // Returns per-model real context windows for register/heartbeat (#61)
@@ -385,6 +392,11 @@ func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenc
 // the same history the dashboard reads.
 func (c *InferenceClient) Metrics() *InferenceMetrics {
 	return c.metrics
+}
+
+// SetNoticeHandler sets the handler for operational notices from Swan Inference.
+func (c *InferenceClient) SetNoticeHandler(handler NoticeHandler) {
+	c.noticeHandler = handler
 }
 
 // SetWarmupHandler sets the handler for model warmup requests
@@ -1419,6 +1431,18 @@ func (c *InferenceClient) handleMessage(msg Message) {
 			return
 		}
 		go c.handleWarmup(msg.RequestID, payload)
+
+	case MsgTypeNotice:
+		var payload NoticePayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse notice payload: %v", err)
+			return
+		}
+		if c.noticeHandler != nil {
+			// Delivery can block on an SMTP server, which must never stall the
+			// read loop that also carries inference requests.
+			go c.noticeHandler(payload)
+		}
 
 	case MsgTypeBenchmark:
 		var payload BenchmarkPayload
