@@ -59,8 +59,8 @@ func TestProbeEndpointDetectsContext(t *testing.T) {
 
 func TestRecordDetectedContextLocalNameMatch(t *testing.T) {
 	h := NewModelHealthChecker(DefaultHealthCheckConfig())
-	h.RegisterModel("google/gemma-4-31b-it", "http://x", "", "gemma4:31b-it-qat")
-	h.RegisterModel("TheDrummer/Cydonia-24B-v4.3", "http://y", "", "")
+	h.RegisterModel("google/gemma-4-31b-it", "http://x", "", "gemma4:31b-it-qat", "")
+	h.RegisterModel("TheDrummer/Cydonia-24B-v4.3", "http://y", "", "", "")
 
 	// Matched via local name
 	h.recordDetectedContext("google/gemma-4-31b-it", map[string]int{"gemma4:31b-it-qat": 8192})
@@ -111,9 +111,9 @@ func TestBuildModelMetadataHeartbeatShape(t *testing.T) {
 
 func TestResolveModelContextsPrecedence(t *testing.T) {
 	h := NewModelHealthChecker(DefaultHealthCheckConfig())
-	h.RegisterModel("model-a", "http://x", "", "")
+	h.RegisterModel("model-a", "http://x", "", "", "")
 	h.recordDetectedContext("model-a", map[string]int{"model-a": 32768})
-	h.RegisterModel("model-b", "http://x", "", "")
+	h.RegisterModel("model-b", "http://x", "", "", "")
 	h.recordDetectedContext("model-b", map[string]int{"model-b": 65536})
 
 	s := &InferenceService{

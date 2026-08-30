@@ -227,7 +227,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 				// Update health checker with new endpoint
 				if r.healthChecker != nil {
-					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel)
+					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 				}
 
 				logs.GetLogger().Infof("Updated model configuration: %s", modelID)
@@ -267,7 +267,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 			// Register with health checker
 			if r.healthChecker != nil {
-				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel)
+				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 			}
 
 			logs.GetLogger().Infof("Registered new model: %s -> %s (local: %s)", modelID, mapping.Endpoint, mapping.LocalModel)

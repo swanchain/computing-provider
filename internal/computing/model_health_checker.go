@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/swanchain/computing-provider-v2/internal/selfcheck"
 )
 
 // ModelHealth represents the health state of a model endpoint
@@ -53,6 +55,16 @@ type ModelStatus struct {
 	TotalSuccesses   int64       `json:"total_successes"`
 	TotalFailures    int64       `json:"total_failures"`
 	CircuitOpen      bool        `json:"circuit_open"`
+
+	// Engine-probe results are tracked separately from the cheap probe so an
+	// operator can tell "the engine cannot serve" from "the HTTP server is
+	// unreachable". The two have different causes and different fixes, and
+	// collapsing them into LastError loses the distinction that makes the
+	// alert actionable.
+	LastDeepCheck    time.Time `json:"last_deep_check,omitempty"`
+	LastDeepSuccess  time.Time `json:"last_deep_success,omitempty"`
+	LastDeepError    string    `json:"last_deep_error,omitempty"`
+	DeepCheckSkipped bool      `json:"deep_check_skipped,omitempty"` // Not a chat model
 }
 
 // HealthCheckConfig configures the health checker behavior
@@ -62,6 +74,17 @@ type HealthCheckConfig struct {
 	UnhealthyThreshold int           // Consecutive failures before marking unhealthy
 	HealthyThreshold   int           // Consecutive successes to recover from unhealthy
 	CircuitOpenTime    time.Duration // How long to keep circuit open before retrying
+
+	// DeepCheckEvery runs a real one-token completion on every Nth check.
+	// GET /v1/models is served from a static registry on most backends, so it
+	// keeps returning 200 after the inference engine behind it has died — the
+	// model reads healthy while failing every request. 0 disables the engine
+	// probe and restores the cheap-probe-only behaviour.
+	DeepCheckEvery int
+	// DeepCheckTimeout bounds that completion. Deliberately longer than
+	// Timeout: a cold or loaded engine can take seconds to return its first
+	// token, and timing that out would mark a working backend unhealthy.
+	DeepCheckTimeout time.Duration
 }
 
 // DefaultHealthCheckConfig returns default health check configuration
@@ -72,6 +95,11 @@ func DefaultHealthCheckConfig() HealthCheckConfig {
 		UnhealthyThreshold: 3,
 		HealthyThreshold:   2,
 		CircuitOpenTime:    60 * time.Second,
+		// Every 10th check at a 30s interval is one token per model every five
+		// minutes: negligible for a local backend, and a bounded window in
+		// which a dead engine can go unnoticed.
+		DeepCheckEvery:   10,
+		DeepCheckTimeout: 30 * time.Second,
 	}
 }
 
@@ -84,8 +112,11 @@ type ModelHealthChecker struct {
 	localNames       map[string]string // modelID -> backend-local model name (e.g. Ollama tag)
 	detectedContexts map[string]int    // modelID -> context window detected from the backend (/v1/models max_model_len)
 	contextProbed    map[string]bool   // modelID -> a probe has completed, whether or not it yielded a window
+	categories       map[string]string // modelID -> models.json category, to skip non-chat models
+	sinceDeep        map[string]int    // modelID -> cheap checks since the last engine probe
 	config           HealthCheckConfig
 	httpClient       *http.Client
+	deepClient       *http.Client
 	stopCh           chan struct{}
 	running          bool
 	onStatusChange   func(modelID string, oldHealth, newHealth ModelHealth)
@@ -100,6 +131,8 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 		localNames:       make(map[string]string),
 		detectedContexts: make(map[string]int),
 		contextProbed:    make(map[string]bool),
+		categories:       make(map[string]string),
+		sinceDeep:        make(map[string]int),
 		config:           config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -115,8 +148,27 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 				DisableKeepAlives: true,
 			},
 		},
+		// A separate client: the engine probe needs a longer timeout than the
+		// cheap probe and must not inherit one tuned for a static listing.
+		deepClient: &http.Client{
+			Timeout: deepTimeoutOrDefault(config),
+			Transport: &http.Transport{
+				TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+				DisableKeepAlives: true,
+			},
+		},
 		stopCh: make(chan struct{}),
 	}
+}
+
+// deepTimeoutOrDefault stops a caller-built config that predates
+// DeepCheckTimeout from producing a client with no timeout at all, which would
+// leak a goroutine per probe against a backend that never answers.
+func deepTimeoutOrDefault(c HealthCheckConfig) time.Duration {
+	if c.DeepCheckTimeout > 0 {
+		return c.DeepCheckTimeout
+	}
+	return 30 * time.Second
 }
 
 // SetStatusChangeCallback sets a callback for health status changes
@@ -129,7 +181,7 @@ func (h *ModelHealthChecker) SetStatusChangeCallback(cb func(modelID string, old
 // RegisterModel adds a model to health checking. localModel is the backend's
 // own name for the model (e.g. an Ollama tag) used to match /v1/models entries
 // for context detection; pass "" when it equals the model ID.
-func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey, localModel string) {
+func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey, localModel, category string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -144,6 +196,11 @@ func (h *ModelHealthChecker) RegisterModel(modelID, endpoint, apiKey, localModel
 	} else {
 		delete(h.localNames, modelID)
 	}
+	// Outside the branch above: the category decides whether this model can be
+	// probed at all, and most models have no local_model override. Storing it
+	// only for Ollama-style entries left every other embedding model looking
+	// chat-compatible.
+	h.categories[modelID] = category
 	if _, exists := h.statuses[modelID]; !exists {
 		h.statuses[modelID] = &ModelStatus{
 			ModelID:      modelID,
@@ -166,6 +223,8 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	delete(h.apiKeys, modelID)
 	delete(h.statuses, modelID)
 	delete(h.localNames, modelID)
+	delete(h.categories, modelID)
+	delete(h.sinceDeep, modelID)
 	delete(h.detectedContexts, modelID)
 	delete(h.contextProbed, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
@@ -323,8 +382,144 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 	}
 
 	contexts, err := h.probeEndpoint(endpoint, apiKey)
+	if err == nil {
+		// Only worth asking whether the engine can serve once the HTTP server
+		// has answered; if the cheap probe already failed, the model is going
+		// to be marked down anyway and a completion would just add latency.
+		err = h.maybeDeepCheck(modelID, endpoint, apiKey)
+	}
 	h.applyProbeResult(modelID, endpoint, err)
 	h.recordDetectedContext(modelID, contexts)
+}
+
+// maybeDeepCheck runs a real one-token completion every DeepCheckEvery-th call
+// and returns an error only when the backend is genuinely at fault.
+//
+// This is the check that catches the failure GET /v1/models cannot see: a vLLM
+// engine that has died behind a FastAPI process still serving its static model
+// list, or a proxy backend answering completions with 503 auth_unavailable
+// while listing models normally.
+func (h *ModelHealthChecker) maybeDeepCheck(modelID, endpoint, apiKey string) error {
+	h.mu.Lock()
+	every := h.config.DeepCheckEvery
+	if every <= 0 {
+		h.mu.Unlock()
+		return nil
+	}
+	category := h.categories[modelID]
+	served := h.localNames[modelID]
+	// Count first so the very first check of a newly registered model runs the
+	// probe: that is when a misconfigured backend is most likely, and waiting
+	// DeepCheckEvery intervals to find out wastes the whole window.
+	h.sinceDeep[modelID]++
+	due := h.sinceDeep[modelID] >= every || h.statuses[modelID] == nil || h.statuses[modelID].LastDeepCheck.IsZero()
+	if due {
+		h.sinceDeep[modelID] = 0
+	}
+	h.mu.Unlock()
+
+	if !due {
+		return nil
+	}
+
+	if !selfcheck.ChatCompatible(category) {
+		h.recordDeepResult(modelID, selfcheck.ProbeResult{Skipped: true})
+		return nil
+	}
+	if served == "" {
+		served = modelID
+	}
+
+	result := h.deepProbe(endpoint, apiKey, served)
+	h.recordDeepResult(modelID, result)
+
+	if !result.BackendAtFault() {
+		// A 400/422 is the backend rejecting this particular prompt — a chat
+		// template that will not accept "ping", most often — and says nothing
+		// about whether it can serve real traffic. A 429 is load, not failure.
+		if !result.OK && !result.Skipped {
+			logs.GetLogger().Debugf("Engine probe for %s returned HTTP %d (%s); not counted against health",
+				modelID, result.StatusCode, result.Error)
+		}
+		return nil
+	}
+	return fmt.Errorf("engine probe failed: %s", describeProbeFailure(result))
+}
+
+// describeProbeFailure says which kind of failure this was, because "cannot
+// serve" has several causes an operator fixes differently.
+func describeProbeFailure(r selfcheck.ProbeResult) string {
+	switch {
+	case r.StatusCode == 0:
+		return fmt.Sprintf("no response from backend (%s)", r.Error)
+	case r.StatusCode == 401 || r.StatusCode == 403:
+		return fmt.Sprintf("backend rejected credentials (HTTP %d: %s)", r.StatusCode, r.Error)
+	case r.StatusCode == 404:
+		return fmt.Sprintf("model not served at this endpoint (HTTP 404: %s)", r.Error)
+	case r.StatusCode >= 500:
+		return fmt.Sprintf("engine error (HTTP %d: %s)", r.StatusCode, r.Error)
+	default:
+		return fmt.Sprintf("HTTP %d: %s", r.StatusCode, r.Error)
+	}
+}
+
+// deepProbe asks the backend for a single token.
+func (h *ModelHealthChecker) deepProbe(endpoint, apiKey, servedName string) selfcheck.ProbeResult {
+	body, err := json.Marshal(map[string]interface{}{
+		"model": servedName,
+		// A one-word user turn: an empty prompt is rejected outright by some
+		// chat templates, and a system-only message by others.
+		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
+		"max_tokens": 1,
+	})
+	if err != nil {
+		return selfcheck.ProbeResult{Error: err.Error()}
+	}
+
+	url := strings.TrimRight(endpoint, "/") + "/v1/chat/completions"
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return selfcheck.ProbeResult{Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := h.deepClient.Do(req)
+	if err != nil {
+		// No status code: the request never reached the backend at all.
+		return selfcheck.ProbeResult{Error: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+	if resp.StatusCode >= 300 {
+		return selfcheck.ProbeResult{StatusCode: resp.StatusCode, Error: strings.TrimSpace(string(snippet))}
+	}
+	return selfcheck.ProbeResult{OK: true, StatusCode: resp.StatusCode}
+}
+
+// recordDeepResult stores the engine-probe outcome for the status API.
+func (h *ModelHealthChecker) recordDeepResult(modelID string, r selfcheck.ProbeResult) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	status := h.statuses[modelID]
+	if status == nil {
+		return // applyProbeResult creates it moments later; nothing to attach to yet.
+	}
+	status.DeepCheckSkipped = r.Skipped
+	if r.Skipped {
+		return
+	}
+	status.LastDeepCheck = time.Now()
+	if r.OK {
+		status.LastDeepSuccess = status.LastDeepCheck
+		status.LastDeepError = ""
+		return
+	}
+	status.LastDeepError = describeProbeFailure(r)
 }
 
 // applyProbeResult updates a model's health status based on a probe result.

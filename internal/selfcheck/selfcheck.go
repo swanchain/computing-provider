@@ -166,10 +166,21 @@ func (m modelEntry) servedName(id string) string {
 }
 
 // chatCompatible reports whether /v1/chat/completions is the right endpoint.
-// models.json also carries image-generation, embeddings and audio models, which
-// answer 404 or 400 there — probing them would report a permanent false failure.
 func (m modelEntry) chatCompatible() bool {
-	switch strings.ToLower(strings.TrimSpace(m.Category)) {
+	return ChatCompatible(m.Category)
+}
+
+// ChatCompatible reports whether a models.json category can be probed with a
+// chat completion. models.json also carries image-generation, embeddings and
+// audio models, which answer 404 or 400 there — probing them would report a
+// permanent false failure.
+//
+// Exported so the periodic health checker classifies models exactly as this
+// audit does. Two definitions of which models are probeable would drift, and
+// the symptom would be a model held unhealthy by one subsystem and healthy by
+// the other.
+func ChatCompatible(category string) bool {
+	switch strings.ToLower(strings.TrimSpace(category)) {
 	case "", "text-generation", "llm", "chat":
 		return true
 	default:

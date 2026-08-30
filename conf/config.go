@@ -83,6 +83,7 @@ type ComputeNode struct {
 	Log           Log           `toml:"Log,omitempty"`
 	Alerts        Alerts        `toml:"Alerts,omitempty"`
 	SelfCheck     SelfCheck     `toml:"SelfCheck,omitempty"`
+	HealthCheck   HealthCheck   `toml:"HealthCheck,omitempty"`
 	RequestLimits RequestLimits `toml:"RequestLimits,omitempty"`
 	Dashboard     Dashboard     `toml:"Dashboard,omitempty"`
 }
@@ -104,6 +105,43 @@ type Dashboard struct {
 type RequestLimits struct {
 	RequestsPerSecond float64 `toml:"RequestsPerSecond"`
 	MaxConcurrent     int     `toml:"MaxConcurrent"`
+}
+
+// HealthCheck tunes the periodic endpoint probe.
+//
+// The cheap probe (GET /v1/models) is served from a static registry on most
+// backends, so it keeps returning 200 after the inference engine behind it has
+// died. DeepCheckEvery adds a real one-token completion on every Nth check to
+// catch that, at a cost of one token per model per DeepCheckEvery intervals.
+//
+// Providers fronting a metered upstream — a proxy billing per request rather
+// than a local GPU — are the reason this is tunable: raise the number, or set
+// it to -1 to switch the engine probe off entirely.
+type HealthCheck struct {
+	DeepCheckEvery   int `toml:"DeepCheckEvery"`   // Engine probe every Nth check. Default: 10. -1 disables.
+	DeepCheckTimeout int `toml:"DeepCheckTimeout"` // Seconds to wait for that completion. Default: 30
+}
+
+// HealthCheckConfig overlays configured values on the built-in defaults. A zero
+// field means "unset" and keeps the default, so an operator who names only one
+// knob does not silently reset the others.
+func (h HealthCheck) DeepEvery(def int) int {
+	switch {
+	case h.DeepCheckEvery < 0:
+		return 0 // Explicitly disabled.
+	case h.DeepCheckEvery == 0:
+		return def
+	default:
+		return h.DeepCheckEvery
+	}
+}
+
+// DeepTimeout returns the configured probe timeout, or def when unset.
+func (h HealthCheck) DeepTimeout(def time.Duration) time.Duration {
+	if h.DeepCheckTimeout <= 0 {
+		return def
+	}
+	return time.Duration(h.DeepCheckTimeout) * time.Second
 }
 
 // SelfCheck controls the periodic audit and what it does about a model that

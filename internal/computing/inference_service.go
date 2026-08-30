@@ -83,7 +83,12 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	gpuCollector := NewGPUMetricsCollector()
 
 	// Create health checker with default config
-	healthChecker := NewModelHealthChecker(DefaultHealthCheckConfig())
+	healthCheckCfg := DefaultHealthCheckConfig()
+	if c := conf.GetConfig(); c != nil {
+		healthCheckCfg.DeepCheckEvery = c.HealthCheck.DeepEvery(healthCheckCfg.DeepCheckEvery)
+		healthCheckCfg.DeepCheckTimeout = c.HealthCheck.DeepTimeout(healthCheckCfg.DeepCheckTimeout)
+	}
+	healthChecker := NewModelHealthChecker(healthCheckCfg)
 
 	// Create model registry with health checker
 	registry := NewModelRegistry(cpPath, healthChecker)

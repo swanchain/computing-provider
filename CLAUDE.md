@@ -201,6 +201,26 @@ InferenceService (inference_service.go)  ← orchestrates everything
 
 Rate limiting and concurrency limits are enforced in `handleInference`/`handleStreamingInference` (rejected requests return HTTP 429 to Swan Inference). Transient upstream failures (connection refused/reset, 502/503/504, timeouts) are retried with exponential backoff via RetryPolicy on the non-streaming path.
 
+**ModelHealthChecker** runs two probes. The cheap one (`GET /v1/models`, falling
+back to `/health`) runs every `Interval`; because most backends serve it from a
+static registry, it stays 200 after the inference engine behind it has died. So
+every `DeepCheckEvery`-th check also sends a real one-token completion, and only
+that probe can tell a live HTTP server from a backend that can actually serve
+(#70). Failures are classified: a 400/422/429 is the prompt or load, not the
+backend, and never counts against health; a 5xx, a 401/403/404 or no response at
+all does. Non-chat models (embeddings, image, audio) are skipped, since they
+answer 404 at `/v1/chat/completions`.
+
+```toml
+[HealthCheck]
+DeepCheckEvery = 10    # engine probe every Nth check (default 10; -1 disables)
+DeepCheckTimeout = 30  # seconds to wait for that completion
+```
+
+Raise `DeepCheckEvery`, or set it to `-1`, when a model is backed by a metered
+upstream rather than a local GPU — the probe is one request per model per
+`DeepCheckEvery` intervals.
+
 **ModelRegistry** uses callback pattern (`onModelAdded`, `onModelRemoved`, `onHealthUpdate`) to notify InferenceService of changes.
 
 **Dashboard:** `internal/dashboard/` — embedded React/Vite frontend served by Go (port 3060). Proxies API requests to the main provider.
