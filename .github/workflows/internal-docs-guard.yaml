@@ -17,6 +17,13 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    # Defined once at job level: a second copy in the metadata step below would
+    # drift, and the half that stopped matching would be the half nobody notices.
+    env:
+      MARKERS: 'Internal — not for external distribution|Internal - not for external distribution|not for external distribution|CONFIDENTIAL|Confidential — |INTERNAL ONLY|Internal only, do not distribute'
+      ECONOMICS: 'subscription pool|pool settlement|projected (settlement )?ratio|payout ratio|platform margin|gross margin|competitive landscape|competitor analysis'
+      VERIFICATION: 'logprob_sample_rate|sampling rate of [0-9]|detection threshold|probe selection|which requests are probes'
+      CROSSREPO: '(swanchain/)?swan-inference#[0-9]+'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,15 +55,15 @@ jobs:
 
           # Explicit markers. These are unambiguous: a document that says it is
           # internal must not be in a public repository.
-          markers='Internal — not for external distribution|Internal - not for external distribution|not for external distribution|CONFIDENTIAL|Confidential — |INTERNAL ONLY|Internal only, do not distribute'
+          markers="$MARKERS"
 
           # Marketplace economics and verification internals. A provider client
           # has no reason to discuss these; the marketplace repo does.
-          economics='subscription pool|pool settlement|projected (settlement )?ratio|payout ratio|platform margin|gross margin|competitive landscape|competitor analysis'
-          verification='logprob_sample_rate|sampling rate of [0-9]|detection threshold|probe selection|which requests are probes'
+          economics="$ECONOMICS"
+          verification="$VERIFICATION"
           # Links into the private tracker: they resolve for nobody outside the
           # org, yet still disclose the issue number and the work behind it.
-          crossrepo='(swanchain/)?swan-inference#[0-9]+'
+          crossrepo="$CROSSREPO"
 
           while IFS= read -r f; do
             [ -f "$f" ] || continue
@@ -97,3 +104,70 @@ jobs:
             exit 1
           fi
           echo "No internal material detected in the changed files."
+
+      # Files are only half the surface. All three leaks this repo has had
+      # reached GitHub through a commit message or a PR description, each while
+      # the file scan above passed — the material never appeared in a diff.
+      #
+      # PR titles and bodies are written by anyone who can open a PR, so they
+      # are passed in through env and quoted, never interpolated into the shell.
+      # `${{ github.event.pull_request.body }}` inlined into a run: block is a
+      # command-injection hole, not a style preference.
+      - name: Scan commit messages and PR metadata
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -uo pipefail
+          fail=0
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              base="${head}~1"
+            fi
+          fi
+
+          # Only the commits this change introduces. Scanning all of history
+          # would fail every PR over material that is already public and cannot
+          # be unpublished by failing a build.
+          git log --format='%H%n%B%n---COMMIT---' "$base..$head" > messages.txt 2>/dev/null || : > messages.txt
+
+          check() {
+            # $1 = what is being scanned, $2 = pattern, $3 = message, $4 = file
+            if grep -nEi "$2" "$4" >/dev/null 2>&1; then
+              echo "::error::$1: $3"
+              grep -nEi "$2" "$4" | head -3 | sed 's/^/    /'
+              fail=1
+            fi
+          }
+
+          if [ -s messages.txt ]; then
+            echo "Scanning $(grep -c -- '---COMMIT---' messages.txt) commit message(s)."
+            check "commit message" "$CROSSREPO" "Links to an issue in the private swan-inference repo. Reword the commit and force-push — once merged this is permanent." messages.txt
+            check "commit message" "$MARKERS" "Contains an explicit internal-only marker." messages.txt
+            check "commit message" "$ECONOMICS" "Mentions marketplace economics." messages.txt
+            check "commit message" "$VERIFICATION" "Mentions verification internals." messages.txt
+          fi
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" > prmeta.txt
+            check "PR title/description" "$CROSSREPO" "Links to an issue in the private swan-inference repo. Describe the finding in its own words instead." prmeta.txt
+            check "PR title/description" "$MARKERS" "Contains an explicit internal-only marker." prmeta.txt
+            check "PR title/description" "$ECONOMICS" "Mentions marketplace economics." prmeta.txt
+            check "PR title/description" "$VERIFICATION" "Mentions verification internals." prmeta.txt
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "See the '⚠️ This repository is PUBLIC' section of CLAUDE.md."
+            echo "A commit message can be fixed with an interactive rebase and a"
+            echo "force-push; a PR description can be edited in place. Both are"
+            echo "cheap now and impossible after merge."
+            exit 1
+          fi
+          echo "No internal material detected in commit messages or PR metadata."
