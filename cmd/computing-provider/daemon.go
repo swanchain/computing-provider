@@ -15,6 +15,7 @@ import (
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
 	cors "github.com/itsjamie/gin-cors"
+	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/dashboard"
@@ -225,6 +226,13 @@ func runDaemon(cctx *cli.Context) error {
 			"connected":         inferenceService.IsConnected(),
 			"active_models":     inferenceService.GetActiveModels(),
 			"registered_models": inferenceService.GetRegisteredModels(),
+			// The build actually serving requests, which is what the operator
+			// needs to see. `update` replaces the binary without restarting, so
+			// after an update this deliberately keeps reporting the old version
+			// until the provider is restarted — the same version the platform
+			// was told at registration.
+			"version": build.BuildVersion,
+			"build":   build.UserVersion(),
 		})
 	})
 

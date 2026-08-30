@@ -119,7 +119,19 @@ function App() {
             </div>
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold tracking-tight text-white sm:text-xl">Provider Console</h1>
-              <p className="text-xs text-slate-400">Inference operations</p>
+              <p className="text-xs text-slate-400">
+                Inference operations
+                {status?.version && (
+                  <>
+                    {' · '}
+                    {/* The full build string carries the network tag and commit,
+                        which is what to quote in a bug report. */}
+                    <span title={status.build ?? undefined} className="font-mono text-slate-500">
+                      v{status.version}
+                    </span>
+                  </>
+                )}
+              </p>
             </div>
           </div>
 

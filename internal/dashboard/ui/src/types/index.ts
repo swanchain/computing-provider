@@ -187,6 +187,10 @@ export interface RetryMetrics {
 export interface ConnectionStatus {
   connected: boolean;
   active_models: string[];
+  /** Semantic version of the running provider, e.g. "0.5.0". */
+  version?: string;
+  /** Full build string, e.g. "0.5.0+mainnet+git.5f7e316". */
+  build?: string;
 }
 
 export interface RequestManagement {
