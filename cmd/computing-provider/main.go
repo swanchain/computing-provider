@@ -43,20 +43,30 @@ func main() {
 			inferenceCmd,
 			modelsCmd,
 			selfcheckCmd,
-		versionCmd,
-		updateCmd,
+			versionCmd,
+			updateCmd,
 			alertsCmd,
 		},
 		Before: func(c *cli.Context) error {
-			// Skip repo initialization for research, dashboard, and inference commands
-			// (these commands handle their own config loading)
+			// Skip repo initialization for commands that handle their own config
+			// loading, or that must work before a repo exists at all.
+			//
+			// version and update are in this list because both run on machines
+			// with no $CP_PATH yet: `version` is the first thing a fresh install
+			// is told to run, and `update` is documented as `sudo`, where
+			// env_reset points HOME at root's home and the repo path resolves
+			// somewhere that has never existed. Without this they fail with
+			// "no such directory" — or worse, sit in a database retry loop —
+			// on exactly the machines they are for.
 			if c.Args().Present() {
 				firstArg := c.Args().First()
 				if strings.EqualFold(firstArg, researchCmd.Name) ||
 					strings.EqualFold(firstArg, dashboardCmd.Name) ||
 					strings.EqualFold(firstArg, inferenceCmd.Name) ||
 					strings.EqualFold(firstArg, modelsCmd.Name) ||
-					strings.EqualFold(firstArg, alertsCmd.Name) {
+					strings.EqualFold(firstArg, alertsCmd.Name) ||
+					strings.EqualFold(firstArg, versionCmd.Name) ||
+					strings.EqualFold(firstArg, updateCmd.Name) {
 					return nil
 				}
 			}
@@ -105,5 +115,6 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		os.Stderr.WriteString("Error: " + err.Error() + "\n")
+		os.Exit(1)
 	}
 }

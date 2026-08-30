@@ -617,9 +617,10 @@ sudo systemctl restart computing-provider   # under systemd
 # otherwise stop the process and run `computing-provider run` again
 ```
 
-Swan Inference also tells you at startup when a newer release exists — the
-registration acknowledgement carries the advisory, so `computing-provider run`
-logs it whether or not you ever run `update --check`.
+Swan Inference may also mention a newer release in the message it returns when
+the agent registers, which `computing-provider run` logs verbatim at startup.
+That depends on the server sending it, so treat it as a convenience rather than
+something to rely on — `update --check` is what actually asks.
 
 If a release has no binary for your platform, `update` says so and prints the
 source-build commands instead.
