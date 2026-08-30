@@ -135,6 +135,16 @@ type Options struct {
 	// model. Useful in tests and on metered backends.
 	SkipCompletion bool
 	HTTPTimeout    time.Duration
+	// ProbeTimeout bounds the real completion. It is deliberately far longer
+	// than HTTPTimeout: a max_tokens:1 request still queues behind in-flight
+	// work, and timing out a merely busy backend would look identical to a
+	// broken one — which, with auto-disable, would pull a model precisely when
+	// it is earning most.
+	ProbeTimeout time.Duration
+	// ExpectedProbeFailures are models already known to be out of service. Their
+	// probe still runs, so recovery can be detected, but a failure is not
+	// reported as a new problem — otherwise a handled state alerts on every tick.
+	ExpectedProbeFailures map[string]bool
 }
 
 // modelEntry mirrors the parts of models.json this audit needs.
@@ -168,10 +178,11 @@ func (m modelEntry) chatCompatible() bool {
 }
 
 type checker struct {
-	opt    Options
-	client *http.Client
-	res    []Result
-	probes map[string]ProbeResult
+	opt         Options
+	client      *http.Client
+	probeClient *http.Client
+	res         []Result
+	probes      map[string]ProbeResult
 }
 
 func (c *checker) add(name string, status Status, msg, hint string) {
@@ -187,7 +198,15 @@ func Run(opt Options) Report {
 	if opt.MinFreeGB == 0 {
 		opt.MinFreeGB = 10
 	}
-	c := &checker{opt: opt, client: &http.Client{Timeout: opt.HTTPTimeout}, probes: make(map[string]ProbeResult)}
+	if opt.ProbeTimeout <= 0 {
+		opt.ProbeTimeout = 60 * time.Second
+	}
+	c := &checker{
+		opt:         opt,
+		client:      &http.Client{Timeout: opt.HTTPTimeout},
+		probeClient: &http.Client{Timeout: opt.ProbeTimeout},
+		probes:      make(map[string]ProbeResult),
+	}
 	start := time.Now()
 
 	models := c.checkModelsConfig()
@@ -446,7 +465,7 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 		return
 	}
 	var failed []string
-	var probed, skipped int
+	var probed, skipped, expected int
 	for id, m := range models {
 		if !m.chatCompatible() {
 			skipped++
@@ -457,6 +476,12 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 		res := c.probeModel(id, m)
 		c.probes[id] = res
 		if res.OK {
+			continue
+		}
+		if c.opt.ExpectedProbeFailures[id] {
+			// Already out of service and known to be failing; the probe exists
+			// here only to notice when it starts working again.
+			expected++
 			continue
 		}
 		if res.StatusCode > 0 {
@@ -471,9 +496,12 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 			"These models pass health checks but cannot serve. Check the backend engine and any upstream credentials.")
 		return
 	}
-	msg := fmt.Sprintf("all %d models completed a request", probed)
+	msg := fmt.Sprintf("all %d models completed a request", probed-expected)
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (%d non-chat models not probed)", skipped)
+	}
+	if expected > 0 {
+		msg += fmt.Sprintf(" (%d already disabled and still failing)", expected)
 	}
 	c.add("inference probe", StatusPass, msg, "")
 }
@@ -493,7 +521,7 @@ func (c *checker) probeModel(id string, m modelEntry) ProbeResult {
 	if m.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+m.APIKey)
 	}
-	resp, err := c.client.Do(req)
+	resp, err := c.probeClient.Do(req)
 	if err != nil {
 		// No status: the request never reached the backend.
 		return ProbeResult{Error: err.Error()}

@@ -281,7 +281,7 @@ func (s *InferenceService) Start() error {
 			}
 			return conf.SelfCheck{}
 		},
-		s.registry)
+		s)
 
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
@@ -381,6 +381,14 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
 		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
+	} else if _, disabled := s.disabledInRegistry(payload.ModelID); disabled {
+		// The registry knows this model and has taken it out of service. The
+		// mapping below still exists, so without this check a disabled model
+		// would keep being forwarded to the backend it was disabled for.
+		return nil, &ModelServerError{
+			StatusCode: 503,
+			Message:    fmt.Sprintf("model %s is disabled on this provider", payload.ModelID),
+		}
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -635,6 +643,25 @@ func (s *InferenceService) GetActiveModels() []string {
 	return activeModels
 }
 
+// IsModelEnabled reports a model's enabled flag and whether the registry knows
+// it at all.
+func (s *InferenceService) IsModelEnabled(modelID string) (enabled, known bool) {
+	if s.registry == nil {
+		return false, false
+	}
+	return s.registry.IsModelEnabled(modelID)
+}
+
+// disabledInRegistry reports whether the registry knows this model and has it
+// disabled. A model it does not know at all is left to the legacy mapping path.
+func (s *InferenceService) disabledInRegistry(modelID string) (known, disabled bool) {
+	if s.registry == nil {
+		return false, false
+	}
+	enabled, known := s.registry.IsModelEnabled(modelID)
+	return known, known && !enabled
+}
+
 // GetRegisteredModels returns the model IDs most recently sent to Swan Inference.
 // This can differ from GetActiveModels: a model present in models.json is only
 // registered once it is enabled and passing health checks, and a stale
@@ -699,6 +726,14 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
 		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
+	} else if _, disabled := s.disabledInRegistry(payload.ModelID); disabled {
+		// The registry knows this model and has taken it out of service. The
+		// mapping below still exists, so without this check a disabled model
+		// would keep being forwarded to the backend it was disabled for.
+		return &StreamResult{Error: &ModelServerError{
+			StatusCode: 503,
+			Message:    fmt.Sprintf("model %s is disabled on this provider", payload.ModelID),
+		}}
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -819,6 +854,14 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
 		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
+	} else if _, disabled := s.disabledInRegistry(payload.ModelID); disabled {
+		// The registry knows this model and has taken it out of service. The
+		// mapping below still exists, so without this check a disabled model
+		// would keep being forwarded to the backend it was disabled for.
+		return nil, &ModelServerError{
+			StatusCode: 503,
+			Message:    fmt.Sprintf("model %s is disabled on this provider", payload.ModelID),
+		}
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
 		mapping, mapOk := s.modelMappings[payload.ModelID]
@@ -1036,19 +1079,31 @@ func (s *InferenceService) GetAllModelHealth() map[string]*ModelStatus {
 }
 
 // EnableModel enables a model for serving requests
+// EnableModel returns a model to service and re-registers it upstream.
 func (s *InferenceService) EnableModel(modelID string) error {
 	if s.registry == nil {
 		return fmt.Errorf("registry not initialized")
 	}
-	return s.registry.EnableModel(modelID)
+	if err := s.registry.EnableModel(modelID); err != nil {
+		return err
+	}
+	s.updateClientModels()
+	return nil
 }
 
 // DisableModel disables a model from serving requests
+// DisableModel takes a model out of service and, crucially, out of the set
+// registered with Swan Inference — otherwise the marketplace keeps routing to a
+// model this node has decided it cannot serve.
 func (s *InferenceService) DisableModel(modelID string) error {
 	if s.registry == nil {
 		return fmt.Errorf("registry not initialized")
 	}
-	return s.registry.DisableModel(modelID)
+	if err := s.registry.DisableModel(modelID); err != nil {
+		return err
+	}
+	s.updateClientModels()
+	return nil
 }
 
 // ReloadModels manually triggers a reload of the models configuration

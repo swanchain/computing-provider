@@ -559,7 +559,6 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 	return nil
 }
 
-// DisableModel disables a model from serving
 // IsModelEnabled reports a model's enabled flag, and whether the registry knows
 // the model at all — a caller acting on stale information must be able to tell
 // "disabled" from "gone".

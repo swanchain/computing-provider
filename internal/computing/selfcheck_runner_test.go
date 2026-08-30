@@ -1,6 +1,8 @@
 package computing
 
 import (
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -229,5 +231,139 @@ func TestIntervalComesFromConfig(t *testing.T) {
 	cfg := conf.SelfCheck{IntervalMinutes: 10}
 	if got := cfg.Interval(); got != 10*time.Minute {
 		t.Errorf("Interval() = %v, want 10m", got)
+	}
+}
+
+// Regression: disabling must change what is registered upstream. The first
+// version only flipped a registry flag, so the alert claimed the model was
+// deregistered while the marketplace kept routing to it.
+type recordingController struct {
+	fakeModels
+	registered []string
+}
+
+func (c *recordingController) DisableModel(id string) error {
+	if err := c.fakeModels.DisableModel(id); err != nil {
+		return err
+	}
+	c.reRegister()
+	return nil
+}
+
+func (c *recordingController) EnableModel(id string) error {
+	if err := c.fakeModels.EnableModel(id); err != nil {
+		return err
+	}
+	c.reRegister()
+	return nil
+}
+
+// reRegister mirrors InferenceService.updateClientModels: the registered set is
+// exactly the enabled models.
+func (c *recordingController) reRegister() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for id, en := range c.enabled {
+		if en {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	c.registered = out
+}
+
+func TestDisableRemovesTheModelFromTheRegisteredSet(t *testing.T) {
+	c := &recordingController{fakeModels: fakeModels{enabled: map[string]bool{"org/a": true, "org/b": true}}}
+	c.reRegister()
+	r := newTestRunner(c, testSelfCheckCfg())
+
+	fail := probeReport(map[string]selfcheck.ProbeResult{"org/a": {StatusCode: 503}})
+	r.act(fail)
+	r.act(fail)
+
+	if got := strings.Join(c.registered, ","); got != "org/b" {
+		t.Fatalf("registered = %q, want only org/b — a disabled model must leave the registered set", got)
+	}
+
+	r.act(probeReport(map[string]selfcheck.ProbeResult{"org/a": {OK: true}}))
+	if got := strings.Join(c.registered, ","); got != "org/a,org/b" {
+		t.Fatalf("registered = %q, want both back after recovery", got)
+	}
+}
+
+// Regression: an operator re-enabling a model by hand must clear our claim on
+// it, or a later deliberate disable gets undone on the next successful probe.
+func TestOperatorReEnableClearsOurClaim(t *testing.T) {
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := newTestRunner(models, testSelfCheckCfg())
+
+	fail := probeReport(map[string]selfcheck.ProbeResult{"org/a": {StatusCode: 503}})
+	r.act(fail)
+	r.act(fail) // auto-disabled
+
+	// Operator fixes the backend and switches it back on themselves.
+	models.EnableModel("org/a")
+	r.act(probeReport(map[string]selfcheck.ProbeResult{"org/a": {OK: true}}))
+
+	// Later, they disable it deliberately for maintenance.
+	models.DisableModel("org/a")
+	before := len(models.history())
+	r.act(probeReport(map[string]selfcheck.ProbeResult{"org/a": {OK: true}}))
+
+	if got := models.history(); len(got) != before {
+		t.Fatalf("history = %v, want no action — a deliberate disable must survive", got[before:])
+	}
+	if enabled, _ := models.IsModelEnabled("org/a"); enabled {
+		t.Error("the operator's disable was undone by a stale auto-disabled flag")
+	}
+}
+
+// Bookkeeping must not grow without bound as models come and go.
+func TestForgetsModelsTheRegistryNoLongerKnows(t *testing.T) {
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := newTestRunner(models, testSelfCheckCfg())
+
+	r.act(probeReport(map[string]selfcheck.ProbeResult{"org/a": {StatusCode: 503}}))
+	r.mu.Lock()
+	tracked := len(r.failures)
+	r.mu.Unlock()
+	if tracked != 1 {
+		t.Fatalf("expected the failure to be tracked, got %d entries", tracked)
+	}
+
+	// The model disappears from models.json.
+	delete(models.enabled, "org/a")
+	r.act(probeReport(map[string]selfcheck.ProbeResult{"org/a": {StatusCode: 503}}))
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.failures) != 0 || len(r.autoDisabled) != 0 {
+		t.Errorf("bookkeeping not pruned: failures=%v autoDisabled=%v", r.failures, r.autoDisabled)
+	}
+}
+
+// Once a model is disabled its probe keeps failing every tick. That is a
+// handled state and must not be reported as a new problem, or a 10-minute
+// period turns one outage into a permanent alert stream.
+func TestDisabledModelsAreReportedAsExpected(t *testing.T) {
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := newTestRunner(models, testSelfCheckCfg())
+
+	fail := probeReport(map[string]selfcheck.ProbeResult{"org/a": {StatusCode: 503}})
+	r.act(fail)
+	r.act(fail)
+
+	if got := r.disabledByUs(); !got["org/a"] {
+		t.Fatalf("disabledByUs = %v, want org/a so the audit can suppress its failure", got)
+	}
+}
+
+func TestZeroIntervalFallsBackToTheDefault(t *testing.T) {
+	if got := (conf.SelfCheck{IntervalMinutes: 0}).Interval(); got != 0 {
+		t.Fatalf("Interval() = %v; the clamp lives in the runner, not the config", got)
+	}
+	if defaultSelfCheckInterval != 10*time.Minute {
+		t.Errorf("defaultSelfCheckInterval = %v, want 10m", defaultSelfCheckInterval)
 	}
 }

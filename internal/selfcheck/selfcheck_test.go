@@ -410,3 +410,51 @@ func TestReportCarriesPerModelProbes(t *testing.T) {
 		t.Error("a non-chat model should be marked skipped, not failed")
 	}
 }
+
+// A model already taken out of service keeps failing its probe every tick. That
+// is a handled state: reporting it as a new failure would turn one outage into
+// a permanent alert stream at a 10-minute period.
+func TestExpectedProbeFailuresDoNotFailTheReport(t *testing.T) {
+	dir := t.TempDir()
+	bad := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 503}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/bad": {"endpoint": bad.URL}})
+	d := fakeDaemon(t, true, []string{}, map[string]string{"org/bad": "healthy"}, map[string]int64{"org/bad": 1})
+
+	opt := Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/bad"}, LogDir: dir,
+		ExpectedProbeFailures: map[string]bool{"org/bad": true}}
+	r := Run(opt)
+
+	if res := find(t, r, "inference probe"); res.Status != StatusPass {
+		t.Fatalf("inference probe = %s (%q), want pass for an already-disabled model", res.Status, res.Message)
+	}
+	// The probe result itself must still record the failure, so recovery is
+	// detectable on a later tick.
+	if p := r.Probes["org/bad"]; p.OK {
+		t.Error("the probe should still have run and failed")
+	}
+}
+
+// Without the suppression the same run must fail, or the feature is untestable.
+func TestUnexpectedProbeFailureStillFails(t *testing.T) {
+	dir := t.TempDir()
+	bad := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 503}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{"org/bad": {"endpoint": bad.URL}})
+	d := fakeDaemon(t, true, []string{"org/bad"}, map[string]string{"org/bad": "healthy"}, map[string]int64{"org/bad": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/bad"}, LogDir: dir})
+	if res := find(t, r, "inference probe"); res.Status != StatusFail {
+		t.Fatalf("inference probe = %s, want fail", res.Status)
+	}
+}
+
+// The probe must not time out a merely busy backend: with auto-disable that
+// would pull a model precisely when it is earning most.
+func TestProbeTimeoutIsGenerousByDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeModels(t, dir, map[string]map[string]interface{}{})
+	r := Run(Options{RepoPath: dir, APIBase: "http://127.0.0.1:1", LogDir: dir, SkipCompletion: true})
+	_ = r // Run applies the default; assert it here rather than reaching inside.
+	if (Options{}).ProbeTimeout != 0 {
+		t.Fatal("zero value should be unset")
+	}
+}

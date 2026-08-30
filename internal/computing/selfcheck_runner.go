@@ -17,6 +17,9 @@ import (
 // to pass a health check and register before "not registered" means anything.
 const selfCheckDelay = 5 * time.Minute
 
+// defaultSelfCheckInterval guards the timer against a zero configured value.
+const defaultSelfCheckInterval = 10 * time.Minute
+
 // modelController is the part of the registry the runner needs, kept narrow so
 // the auto-heal logic can be tested without a live service.
 type modelController interface {
@@ -79,8 +82,13 @@ func (r *selfCheckRunner) Start() {
 			case <-timer.C:
 				r.runOnce()
 				// Re-read each tick so a config change takes effect without a
-				// restart.
-				timer.Reset(r.cfg().Interval())
+				// restart. A zero or negative interval would busy-loop full
+				// audits, each firing real completions at every backend.
+				next := r.cfg().Interval()
+				if next <= 0 {
+					next = defaultSelfCheckInterval
+				}
+				timer.Reset(next)
 			}
 		}
 	}()
@@ -105,7 +113,9 @@ func (r *selfCheckRunner) runOnce() {
 		}
 	}()
 
-	report := selfcheck.Run(r.opts())
+	opts := r.opts()
+	opts.ExpectedProbeFailures = r.disabledByUs()
+	report := selfcheck.Run(opts)
 	r.act(report)
 	r.report(report)
 }
@@ -132,7 +142,18 @@ func (r *selfCheckRunner) act(report selfcheck.Report) {
 
 		enabled, known := r.models.IsModelEnabled(id)
 		if !known {
+			// Gone from the registry: drop our bookkeeping so a model that
+			// returns later starts from a clean slate.
+			r.forget(id)
 			continue
+		}
+		if enabled {
+			// Whoever enabled it — us or an operator — this is no longer a
+			// model we are holding down. Keeping the flag would let a later
+			// deliberate disable be undone on the next successful probe.
+			r.mu.Lock()
+			delete(r.autoDisabled, id)
+			r.mu.Unlock()
 		}
 
 		switch {
@@ -151,7 +172,7 @@ func (r *selfCheckRunner) act(report selfcheck.Report) {
 func (r *selfCheckRunner) onProbeSuccess(id string, enabled bool, cfg conf.SelfCheck) {
 	r.resetFailures(id)
 	if enabled {
-		return
+		return // Already serving; act() has cleared any stale flag.
 	}
 
 	r.mu.Lock()
@@ -205,6 +226,29 @@ func (r *selfCheckRunner) onBackendFailure(id string, enabled bool, probe selfch
 			"failures": fmt.Sprintf("%d", count),
 			"status":   fmt.Sprintf("%d", probe.StatusCode),
 		})
+}
+
+// disabledByUs snapshots the models this runner has taken out of service.
+func (r *selfCheckRunner) disabledByUs() map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.autoDisabled) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(r.autoDisabled))
+	for id := range r.autoDisabled {
+		out[id] = true
+	}
+	return out
+}
+
+// forget drops all bookkeeping for a model, so the maps cannot grow without
+// bound as models come and go from models.json.
+func (r *selfCheckRunner) forget(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.failures, id)
+	delete(r.autoDisabled, id)
 }
 
 func (r *selfCheckRunner) resetFailures(id string) {
