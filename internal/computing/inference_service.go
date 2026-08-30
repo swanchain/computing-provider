@@ -273,9 +273,15 @@ func (s *InferenceService) Start() error {
 	if notifier.Enabled() {
 		logs.GetLogger().Infof("Alerts enabled, posting to %s", alerts.RedactURL(config.Alerts.WebhookURL))
 	}
-	s.selfCheck = newSelfCheckRunner(notifier, func() selfcheck.Options {
-		return selfCheckOptions(s.cpPath)
-	})
+	s.selfCheck = newSelfCheckRunner(notifier,
+		func() selfcheck.Options { return selfCheckOptions(s.cpPath) },
+		func() conf.SelfCheck {
+			if c := conf.GetConfig(); c != nil {
+				return c.SelfCheck
+			}
+			return conf.SelfCheck{}
+		},
+		s.registry)
 
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {

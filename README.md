@@ -308,7 +308,9 @@ The inference probe sends one `max_tokens: 1` completion per model. It is the on
 
 Exits non-zero when a check fails, so it works as a cron or monitoring check. `--json` for machine-readable output, `--no-inference` to skip the completion probe.
 
-The daemon also runs this every 24 hours and, when `[Alerts]` is configured, posts a webhook if anything **fails** — passing runs are logged locally and not sent, so a daily "all clear" never trains you to ignore it.
+The daemon runs the same audit every 10 minutes and acts on it: a model whose backend fails two consecutive inference probes is **deregistered from Swan Inference**, and re-registered automatically once it serves again. No traffic is better than traffic that fails, which is what a failing model costs your reliability score. Only backend-owned failures count — a client's over-long prompt or your own rate limit never pulls a model, and one you disabled by hand is never switched back on. Tune it under `[SelfCheck]`; see [docs/configuration.md](docs/configuration.md#self-check-and-auto-heal).
+
+When `[Alerts]` is configured, a failing audit posts a webhook or email; passing runs are logged locally and not sent, so an "all clear" never trains you to ignore it.
 
 ### Alerts
 

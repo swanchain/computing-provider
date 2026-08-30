@@ -114,6 +114,35 @@ Stdout = true               # Also write to stdout
 
 `computing-provider inference status` prints the window and source per model, and the provider logs a warning once per model when nothing is reported.
 
+### Self-check and auto-heal
+
+The provider audits itself on a timer and, when a backend cannot serve, takes the model out of routing until it can again.
+
+```toml
+[SelfCheck]
+Enable = true
+IntervalMinutes = 10
+AutoDisable = true
+AutoRecover = true
+FailuresBeforeDisable = 2
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Enable` | `true` | Run the periodic audit |
+| `IntervalMinutes` | `10` | How often to audit; re-read each tick, so a change applies without a restart |
+| `AutoDisable` | `true` | Deregister a model whose backend cannot serve |
+| `AutoRecover` | `true` | Re-register it once the backend works again |
+| `FailuresBeforeDisable` | `2` | Consecutive failed probes required, so one blip does not pull a model |
+
+**Why deregister.** Health checks probe `GET /v1/models`, which most backends answer without touching the inference engine. A model can therefore look healthy while failing every request — a dead engine, expired upstream credentials — and the marketplace keeps routing to it. Every failure is attributed to your node. No traffic is better than traffic that fails.
+
+**Which failures count.** Only ones the backend owns: 5xx, 401, 403, 404, and connection errors or timeouts. A `400` is the client's — an over-long prompt against a wider advertised window looks identical to a broken model in a raw failure count, and disabling on it would remove a healthy, earning model. A `429` is your own rate limiter. Neither counts.
+
+**A model you disabled by hand is never re-enabled.** The provider only re-registers models it deregistered itself.
+
+Both transitions raise `model_auto_disabled` and `model_auto_recovered` alerts.
+
 ### Alerts
 
 Optional. Set a `WebhookURL` and the provider POSTs a JSON event when something goes wrong; leave it empty and alerting is off.

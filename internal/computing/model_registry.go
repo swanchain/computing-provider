@@ -40,23 +40,23 @@ func (s ModelState) String() string {
 
 // RegisteredModel represents a fully configured model in the registry
 type RegisteredModel struct {
-	ID           string       `json:"id"`
-	Container    string       `json:"container"`
-	Endpoint     string       `json:"endpoint"`
-	GPUMemory    int          `json:"gpu_memory"`
-	Category     string       `json:"category"`
-	LocalModel   string       `json:"local_model,omitempty"`   // Actual model name for local inference server
-	Format       string       `json:"format,omitempty"`        // Weight format: fp16, awq, gptq, gguf, etc.
-	Quantization string       `json:"quantization,omitempty"`  // Quantization detail: q4_k_m, q8_0, w4a16, etc.
-	APIKey       string       `json:"api_key,omitempty"`       // API key for authenticated model endpoints
+	ID            string      `json:"id"`
+	Container     string      `json:"container"`
+	Endpoint      string      `json:"endpoint"`
+	GPUMemory     int         `json:"gpu_memory"`
+	Category      string      `json:"category"`
+	LocalModel    string      `json:"local_model,omitempty"`    // Actual model name for local inference server
+	Format        string      `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
+	Quantization  string      `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
+	APIKey        string      `json:"api_key,omitempty"`        // API key for authenticated model endpoints
 	ContextLength int         `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
-	State        ModelState   `json:"state"`
-	StateString  string       `json:"state_string"`
-	Health       ModelHealth  `json:"health"`
-	HealthString string       `json:"health_string"`
-	LoadedAt     time.Time    `json:"loaded_at,omitempty"`
-	UpdatedAt    time.Time    `json:"updated_at"`
-	Enabled      bool         `json:"enabled"`
+	State         ModelState  `json:"state"`
+	StateString   string      `json:"state_string"`
+	Health        ModelHealth `json:"health"`
+	HealthString  string      `json:"health_string"`
+	LoadedAt      time.Time   `json:"loaded_at,omitempty"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	Enabled       bool        `json:"enabled"`
 }
 
 // ModelRegistry manages the lifecycle of model configurations
@@ -70,10 +70,10 @@ type ModelRegistry struct {
 	running       bool
 
 	// Callbacks
-	onModelAdded       func(model *RegisteredModel)
-	onModelRemoved     func(modelID string)
-	onModelUpdated     func(model *RegisteredModel)
-	onHealthUpdate     func(modelHealth map[string]string) // Called when any model health changes
+	onModelAdded   func(model *RegisteredModel)
+	onModelRemoved func(modelID string)
+	onModelUpdated func(model *RegisteredModel)
+	onHealthUpdate func(modelHealth map[string]string) // Called when any model health changes
 }
 
 // NewModelRegistry creates a new model registry
@@ -245,23 +245,23 @@ func (r *ModelRegistry) loadConfig() error {
 		} else {
 			// Add new model
 			model := &RegisteredModel{
-				ID:           modelID,
-				Container:    mapping.Container,
-				Endpoint:     mapping.Endpoint,
-				GPUMemory:    mapping.GPUMemory,
-				Category:     mapping.Category,
-				LocalModel:   mapping.LocalModel,
-				Format:       mapping.Format,
-				Quantization: mapping.Quantization,
-				APIKey:       mapping.APIKey,
+				ID:            modelID,
+				Container:     mapping.Container,
+				Endpoint:      mapping.Endpoint,
+				GPUMemory:     mapping.GPUMemory,
+				Category:      mapping.Category,
+				LocalModel:    mapping.LocalModel,
+				Format:        mapping.Format,
+				Quantization:  mapping.Quantization,
+				APIKey:        mapping.APIKey,
 				ContextLength: mapping.ContextLength,
-				State:        ModelStateLoading,
-				StateString:  ModelStateLoading.String(),
-				Health:       ModelHealthUnknown,
-				HealthString: ModelHealthUnknown.String(),
-				LoadedAt:     now,
-				UpdatedAt:    now,
-				Enabled:      true,
+				State:         ModelStateLoading,
+				StateString:   ModelStateLoading.String(),
+				Health:        ModelHealthUnknown,
+				HealthString:  ModelHealthUnknown.String(),
+				LoadedAt:      now,
+				UpdatedAt:     now,
+				Enabled:       true,
 			}
 			r.models[modelID] = model
 
@@ -560,6 +560,19 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 }
 
 // DisableModel disables a model from serving
+// IsModelEnabled reports a model's enabled flag, and whether the registry knows
+// the model at all — a caller acting on stale information must be able to tell
+// "disabled" from "gone".
+func (r *ModelRegistry) IsModelEnabled(modelID string) (enabled bool, known bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	model, exists := r.models[modelID]
+	if !exists {
+		return false, false
+	}
+	return model.Enabled, true
+}
+
 func (r *ModelRegistry) DisableModel(modelID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
