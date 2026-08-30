@@ -101,6 +101,26 @@ Stdout = true               # Also write to stdout
 
 > **Why this matters:** without rotation a provider that loses its connection to Swan Inference logs reconnect attempts continuously and can fill the disk. Rotation caps that, and `Dir` lets you keep logs off a small root volume.
 
+### Where the provider repo lives
+
+`$CP_PATH` (default `~/.swan/computing`) holds this node's identity, not just its settings:
+
+| File | Why it matters |
+|------|----------------|
+| `private_key` | **This is the node.** Lose it and the provider identity, its reputation and its collateral association are gone; there is no recovery. |
+| `machine_fingerprint` | Pins the key to this machine; a mismatch warns that the key was copied |
+| `config.toml` | Contains the `sk-prov-` API key |
+| `models.json` | May contain per-backend API keys |
+| `.env` | Secrets read into the environment |
+
+Two rules follow.
+
+**Keep it out of any git working tree.** `.gitignore` stops the files being committed, but `git clean -xfd` removes *ignored* files too — one routine command deletes `private_key` and the node's identity with it. The provider warns at startup if `$CP_PATH` sits inside a checkout.
+
+**Keep it owner-only.** The provider creates these `0600` (directories `0700`) and repairs anything looser at startup, reporting what it changed. Early versions created them world-readable, so an existing install will tighten itself on the next start.
+
+Back up `private_key` somewhere safe. It is 32 bytes and irreplaceable.
+
 ### Context windows
 
 `context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose** — for Ollama, llama.cpp, LiteLLM or any OpenAI-compatible proxy, detection yields nothing and Swan Inference assumes the catalog value instead, so long prompts are rejected with `400 exceeds the available context size`.

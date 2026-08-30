@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/swanchain/computing-provider-v2/conf"
 	"log"
 	"net"
 	"os"
@@ -45,7 +46,8 @@ func GenerateNodeID(cpRepoPath string) (string, string, string) {
 			log.Fatalf("Error creating directory for private key: %v", err)
 		}
 
-		err = os.WriteFile(privateKeyPath, privateKeyBytes, 0644)
+		// Owner-only: this key is the node's identity.
+		err = os.WriteFile(privateKeyPath, privateKeyBytes, conf.SecretFileMode)
 		if err != nil {
 			log.Fatalf("Error writing private key: %v", err)
 		}
@@ -141,14 +143,14 @@ func CheckMachineIdentity(cpRepoPath string) error {
 	stored, err := os.ReadFile(fingerprintPath)
 	if err != nil {
 		// First run or file missing — write fingerprint and continue
-		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), conf.SecretFileMode)
 		return nil
 	}
 
 	storedFingerprint := strings.TrimSpace(string(stored))
 	if storedFingerprint == currentFingerprint {
 		// Fingerprint matches — no issue
-		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), conf.SecretFileMode)
 		return nil
 	}
 
@@ -156,7 +158,7 @@ func CheckMachineIdentity(cpRepoPath string) error {
 		// Legacy fingerprint (pre-versioning, hostname + all MACs including
 		// Docker veths) — unstable by design, so migrate rather than mismatch
 		logs.GetLogger().Infof("Migrating machine fingerprint to %s format", strings.TrimSuffix(fingerprintVersion, ":"))
-		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), conf.SecretFileMode)
 		return nil
 	}
 
@@ -185,12 +187,12 @@ func CheckMachineIdentity(cpRepoPath string) error {
 		}
 		logs.GetLogger().Infof("Removed old private_key. A new node-id will be generated on startup.")
 		// Write current machine fingerprint so the next startup won't trigger mismatch again
-		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+		_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), conf.SecretFileMode)
 		return nil
 	}
 
 	// User chose to keep existing key on this machine
 	logs.GetLogger().Warnf("Continuing with existing private_key — both machines will share the same node-id.")
-	_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), 0644)
+	_ = os.WriteFile(fingerprintPath, []byte(currentFingerprint), conf.SecretFileMode)
 	return nil
 }

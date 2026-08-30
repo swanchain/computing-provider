@@ -240,6 +240,17 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 		config.API.GpuUtilizationRejectThreshold = 1.0
 	}
 
+	// Early versions created these world-readable. Repair rather than warn:
+	// an operator has no reason to know their node key is exposed.
+	if fixed := SecureRepo(cpRepoPath); len(fixed) > 0 {
+		log.Printf("Tightened permissions on provider secrets: %s\n", strings.Join(fixed, ", "))
+	}
+	if root, inRepo := GitRepoContaining(cpRepoPath); inRepo {
+		log.Printf("Warning: %s is inside the git working tree at %s.\n"+
+			"  `git clean -xfd` removes ignored files, which would delete private_key and this node's identity.\n"+
+			"  Move the provider repo outside any checkout, e.g. CP_PATH=~/.swan/computing\n", cpRepoPath, root)
+	}
+
 	applyLogDefaults(&config.Log, cpRepoPath)
 	applyAlertDefaults(&config.Alerts)
 	applySelfCheckDefaults(&config.SelfCheck)
@@ -366,7 +377,7 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 	// Atomic write of config file
 	if err := atomicWriteFile(configFilePath, func(w io.Writer) error {
 		return toml.NewEncoder(w).Encode(configTmpl)
-	}, 0644); err != nil {
+	}, SecretFileMode); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -376,7 +387,7 @@ func GenerateAndUpdateConfigFile(cpRepoPath string, multiAddress, nodeName strin
 	}
 	defer file.Close()
 
-	if err = os.MkdirAll(path.Join(cpRepoPath, "keystore"), 0755); err != nil {
+	if err = os.MkdirAll(path.Join(cpRepoPath, "keystore"), SecretDirMode); err != nil {
 		return fmt.Errorf("failed to create keystore, error: %v", err)
 	}
 
@@ -453,7 +464,7 @@ func UpdateInferenceConfig(cpRepoPath, apiKey string, models []string) error {
 	// Atomic write
 	return atomicWriteFile(configFilePath, func(w io.Writer) error {
 		return toml.NewEncoder(w).Encode(configTmpl)
-	}, 0644)
+	}, SecretFileMode)
 }
 
 // WriteModelsJson writes the models.json file from model configurations
@@ -469,7 +480,7 @@ func WriteModelsJson(cpRepoPath string, models map[string]ModelConfig) error {
 	return atomicWriteFile(modelsPath, func(w io.Writer) error {
 		_, err := w.Write(data)
 		return err
-	}, 0644)
+	}, SecretFileMode)
 }
 
 // LoadModelsJson loads the models.json file
