@@ -105,6 +105,14 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 			Timeout: config.Timeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				// Probes run once per model per interval — tens of seconds
+				// apart — so a pooled connection buys nothing and costs
+				// correctness. uvicorn, which serves vLLM and SGLang, closes
+				// idle connections after 5s by default; the client would keep
+				// reusing one and get "connection reset by peer" on the next
+				// probe. That reads as an unhealthy backend when the backend is
+				// fine, and the model flaps out of routing.
+				DisableKeepAlives: true,
 			},
 		},
 		stopCh: make(chan struct{}),
