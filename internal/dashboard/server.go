@@ -3,6 +3,7 @@ package dashboard
 import (
 	"embed"
 	"io/fs"
+	"net"
 	"net/http"
 	"strings"
 
@@ -16,13 +17,15 @@ var staticFiles embed.FS
 // Server serves the dashboard UI
 type Server struct {
 	router    *gin.Engine
+	host      string
 	port      string
 	apiTarget string
 }
 
 // NewServer creates a new dashboard server
-func NewServer(port string, apiTarget string) *Server {
+func NewServer(host string, port string, apiTarget string) *Server {
 	return &Server{
+		host:      host,
 		port:      port,
 		apiTarget: apiTarget,
 	}
@@ -32,6 +35,8 @@ func NewServer(port string, apiTarget string) *Server {
 func (s *Server) Start() error {
 	gin.SetMode(gin.ReleaseMode)
 	s.router = gin.New()
+	s.router.UseRawPath = true
+	s.router.UnescapePathValues = true
 	s.router.Use(gin.Recovery())
 
 	// Serve static files from embedded filesystem
@@ -58,14 +63,17 @@ func (s *Server) Start() error {
 		c.FileFromFS("/", http.FS(staticFS))
 	})
 
-	logs.GetLogger().Infof("Dashboard server starting on port %s", s.port)
-	return s.router.Run(":" + s.port)
+	address := net.JoinHostPort(s.host, s.port)
+	logs.GetLogger().Infof("Dashboard server starting on %s", address)
+	return s.router.Run(address)
 }
 
 // proxyAPI proxies requests to the main API server
 func (s *Server) proxyAPI(c *gin.Context) {
 	// Create proxy request
-	targetURL := s.apiTarget + c.Request.URL.Path
+	// EscapedPath preserves encoded slashes in model IDs. Rebuilding the target
+	// from URL.Path would turn openai%2Fgpt-5.4 back into two route segments.
+	targetURL := s.apiTarget + c.Request.URL.EscapedPath()
 	if c.Request.URL.RawQuery != "" {
 		targetURL += "?" + c.Request.URL.RawQuery
 	}

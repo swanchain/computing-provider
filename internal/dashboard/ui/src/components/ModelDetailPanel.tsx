@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, CheckCircle, XCircle, AlertCircle, Activity, Clock, Zap } from 'lucide-react';
+import { X, CheckCircle, XCircle, AlertCircle, Activity, Clock, Zap, CircleDollarSign } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { api } from '../api/client';
 import type { ModelDetailedMetrics, RequestLog } from '../types';
@@ -43,6 +43,25 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
     return `${(ms / 1000).toFixed(2)}s`;
   };
 
+  const formatTokenCount = (tokens: number) => {
+    if (tokens < 1_000) return tokens.toLocaleString();
+    if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(1)}K`;
+    return `${(tokens / 1_000_000).toFixed(1)}M`;
+  };
+
+  const formatPrice = (amount: number) => new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(amount);
+
+  const estimatedPayout = data?.price
+    ? ((data.metrics?.total_tokens_in ?? 0) * data.price.provider_input_price
+      + (data.metrics?.total_tokens_out ?? 0) * data.price.provider_output_price) / 1_000_000
+    : null;
+  const healthy = data?.health?.health_string === 'healthy' || data?.model?.health_string === 'healthy';
+
   // Generate latency history data from recent requests
   const latencyData = (data?.recent_requests ?? [])
     .slice()
@@ -53,15 +72,15 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
     }));
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="model-detail-title">
       <div
-        className="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-3xl max-h-[90vh] overflow-y-auto m-4"
+        className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-xl border border-slate-700 bg-slate-900"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-700">
           <div>
-            <h2 className="text-xl font-semibold text-slate-100">{modelId}</h2>
+            <h2 id="model-detail-title" className="break-words text-xl font-semibold text-slate-100">{modelId}</h2>
             <p className="text-sm text-slate-400">Model Details</p>
           </div>
           <button
@@ -69,6 +88,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
             className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
           >
             <X size={20} />
+            <span className="sr-only">Close model details</span>
           </button>
         </div>
 
@@ -88,19 +108,19 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="bg-slate-700/50 rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  {data?.health?.healthy ? (
+                  {healthy ? (
                     <CheckCircle size={20} className="text-green-400" />
                   ) : (
                     <XCircle size={20} className="text-red-400" />
                   )}
                   <span className="text-sm font-medium text-slate-300">Health Status</span>
                 </div>
-                <p className={`text-lg font-semibold ${data?.health?.healthy ? 'text-green-400' : 'text-red-400'}`}>
-                  {data?.health?.healthy ? 'Healthy' : 'Unhealthy'}
+                <p className={`text-lg font-semibold ${healthy ? 'text-green-400' : 'text-red-400'}`}>
+                  {healthy ? 'Healthy' : 'Unhealthy'}
                 </p>
-                {data?.health?.consecutive_failures ? (
+                {data?.health?.consecutive_fails ? (
                   <p className="text-xs text-slate-500 mt-1">
-                    {data.health.consecutive_failures} consecutive failures
+                    {data.health.consecutive_fails} consecutive failures
                   </p>
                 ) : null}
               </div>
@@ -132,38 +152,151 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
               </div>
             </div>
 
-            {/* Token Stats */}
-            <div className="bg-slate-700/50 rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Zap size={20} className="text-purple-400" />
-                <span className="text-sm font-medium text-slate-300">Token Statistics</span>
-              </div>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <p className="text-2xl font-semibold text-slate-100">
-                    {((data?.metrics?.total_tokens_in ?? 0) / 1000).toFixed(1)}K
-                  </p>
-                  <p className="text-xs text-slate-500">Input Tokens</p>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Token Stats */}
+              <div className="rounded-lg bg-slate-700/50 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Zap size={20} className="text-purple-400" />
+                  <span className="text-sm font-medium text-slate-300">Token usage</span>
                 </div>
-                <div>
+                <div className="grid grid-cols-3 gap-2 text-center sm:gap-4">
+                  <div>
                   <p className="text-2xl font-semibold text-slate-100">
-                    {((data?.metrics?.total_tokens_out ?? 0) / 1000).toFixed(1)}K
+                    {formatTokenCount(data?.metrics?.total_tokens_in ?? 0)}
                   </p>
-                  <p className="text-xs text-slate-500">Output Tokens</p>
-                </div>
-                <div>
+                    <p className="text-xs text-blue-200">Input tokens</p>
+                  </div>
+                  <div>
+                  <p className="text-2xl font-semibold text-slate-100">
+                    {formatTokenCount(data?.metrics?.total_tokens_out ?? 0)}
+                  </p>
+                    <p className="text-xs text-violet-200">Output tokens</p>
+                  </div>
+                  <div>
                   <p className="text-2xl font-semibold text-slate-100">
                     {(data?.metrics?.tokens_per_second ?? 0).toFixed(1)}
                   </p>
-                  <p className="text-xs text-slate-500">Tokens/sec</p>
+                    <p className="text-xs text-slate-500">Tokens/sec</p>
+                  </div>
                 </div>
               </div>
+
+              {/* Model pricing */}
+              <div className="rounded-lg border border-emerald-800/50 bg-emerald-950/20 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <CircleDollarSign size={20} className="text-emerald-400" />
+                  <span className="text-sm font-medium text-slate-300">Provider payout / 1M tokens</span>
+                  {data?.price?.tier && (
+                    <span className="ml-auto rounded-full border border-slate-600 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+                      {data.price.tier}
+                    </span>
+                  )}
+                </div>
+                {data?.price ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-xl font-semibold text-blue-100">{formatPrice(data.price.provider_input_price)}</p>
+                        <p className="text-xs text-blue-300">Input</p>
+                      </div>
+                      <div>
+                        <p className="text-xl font-semibold text-violet-100">{formatPrice(data.price.provider_output_price)}</p>
+                        <p className="text-xs text-violet-300">Output</p>
+                      </div>
+                    </div>
+                    {estimatedPayout !== null && (
+                      <p className="mt-3 border-t border-emerald-900/60 pt-2 text-xs text-slate-400">
+                        Estimated payout for recorded tokens: <span className="font-medium text-emerald-300">{formatPrice(estimatedPayout)}</span>
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-slate-400">Current catalog price is unavailable.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Model transactions */}
+            <div className="bg-slate-700/50 rounded-lg p-4">
+              <h4 className="text-sm font-medium text-slate-200">Transactions for this model</h4>
+              <p className="mb-3 mt-1 text-xs text-slate-500">Latest 20 local requests, with input and output tokens shown separately.</p>
+              {(data?.recent_requests ?? []).length === 0 ? (
+                <p className="text-slate-500 text-center py-4">No transactions recorded for this model</p>
+              ) : (
+                <>
+                <div className="space-y-2 sm:hidden">
+                  {(data?.recent_requests ?? []).map((req: RequestLog) => (
+                    <div key={req.request_id} className="rounded-lg border border-slate-600 bg-slate-800/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate font-mono text-xs text-slate-300" title={req.request_id}>{req.request_id}</p>
+                          <p className="mt-1 text-xs text-slate-500">{formatTime(req.start_time)} · {formatLatency(req.latency_ms)}</p>
+                        </div>
+                        {req.success ? <CheckCircle size={16} className="shrink-0 text-green-400" /> : <XCircle size={16} className="shrink-0 text-red-400" />}
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                        <div className="rounded bg-blue-950/30 px-2 py-1.5 text-blue-200">Input <span className="float-right font-mono">{req.tokens_in.toLocaleString()}</span></div>
+                        <div className="rounded bg-violet-950/30 px-2 py-1.5 text-violet-200">Output <span className="float-right font-mono">{req.tokens_out.toLocaleString()}</span></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden overflow-x-auto sm:block">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-slate-400 border-b border-slate-600">
+                        <th className="text-left py-2 px-2 font-medium">Transaction</th>
+                        <th className="text-left py-2 px-2 font-medium">Time</th>
+                        <th className="text-right py-2 px-2 font-medium">Latency</th>
+                        <th className="text-right py-2 px-2 font-medium">Input</th>
+                        <th className="text-right py-2 px-2 font-medium">Output</th>
+                        <th className="text-center py-2 px-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(data?.recent_requests ?? []).map((req: RequestLog) => (
+                        <tr key={req.request_id} className="border-b border-slate-600/50">
+                          <td className="max-w-36 truncate px-2 py-2 font-mono text-xs text-slate-400" title={req.request_id}>{req.request_id}</td>
+                          <td className="py-2 px-2 text-slate-300 text-xs">{formatTime(req.start_time)}</td>
+                          <td className="py-2 px-2 text-right font-mono text-xs">
+                            <span
+                              className={
+                                req.latency_ms > 5000
+                                  ? 'text-red-400'
+                                  : req.latency_ms > 2000
+                                  ? 'text-yellow-400'
+                                  : 'text-green-400'
+                              }
+                            >
+                              {formatLatency(req.latency_ms)}
+                            </span>
+                          </td>
+                          <td className="py-2 px-2 text-right text-blue-200 font-mono text-xs">
+                            {req.tokens_in.toLocaleString()}
+                          </td>
+                          <td className="py-2 px-2 text-right text-violet-200 font-mono text-xs">
+                            {req.tokens_out.toLocaleString()}
+                          </td>
+                          <td className="py-2 px-2 text-center">
+                            {req.success ? (
+                              <CheckCircle size={14} className="inline text-green-400" />
+                            ) : (
+                              <XCircle size={14} className="inline text-red-400" />
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                </>
+              )}
             </div>
 
             {/* Latency Chart */}
             {latencyData.length > 1 && (
               <div className="bg-slate-700/50 rounded-lg p-4">
-                <h4 className="text-sm font-medium text-slate-300 mb-3">Request Latency (Recent)</h4>
+                <h4 className="text-sm font-medium text-slate-300 mb-3">Recent transaction latency</h4>
                 <div className="h-40">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={latencyData}>
@@ -192,57 +325,6 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                 </div>
               </div>
             )}
-
-            {/* Recent Requests */}
-            <div className="bg-slate-700/50 rounded-lg p-4">
-              <h4 className="text-sm font-medium text-slate-300 mb-3">Recent Requests</h4>
-              {(data?.recent_requests ?? []).length === 0 ? (
-                <p className="text-slate-500 text-center py-4">No recent requests</p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-slate-400 border-b border-slate-600">
-                        <th className="text-left py-2 px-2 font-medium">Time</th>
-                        <th className="text-right py-2 px-2 font-medium">Latency</th>
-                        <th className="text-right py-2 px-2 font-medium">Tokens</th>
-                        <th className="text-center py-2 px-2 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(data?.recent_requests ?? []).slice(0, 10).map((req: RequestLog) => (
-                        <tr key={req.request_id} className="border-b border-slate-600/50">
-                          <td className="py-2 px-2 text-slate-300 text-xs">{formatTime(req.start_time)}</td>
-                          <td className="py-2 px-2 text-right font-mono text-xs">
-                            <span
-                              className={
-                                req.latency_ms > 5000
-                                  ? 'text-red-400'
-                                  : req.latency_ms > 2000
-                                  ? 'text-yellow-400'
-                                  : 'text-green-400'
-                              }
-                            >
-                              {formatLatency(req.latency_ms)}
-                            </span>
-                          </td>
-                          <td className="py-2 px-2 text-right text-slate-400 font-mono text-xs">
-                            {req.tokens_in}/{req.tokens_out}
-                          </td>
-                          <td className="py-2 px-2 text-center">
-                            {req.success ? (
-                              <CheckCircle size={14} className="inline text-green-400" />
-                            ) : (
-                              <XCircle size={14} className="inline text-red-400" />
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
 
             {/* Error Info */}
             {data?.health?.last_error && (

@@ -22,6 +22,7 @@ var secretFiles = []string{
 	"machine_fingerprint",
 	"config.toml",
 	"models.json",
+	"dashboard.token",
 	EnvFileName,
 }
 

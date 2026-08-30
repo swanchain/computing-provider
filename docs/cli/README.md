@@ -170,9 +170,17 @@ computing-provider dashboard --port 8080
 
 # Custom API server address
 computing-provider dashboard --api http://localhost:8085
+
+# Listen on all interfaces (trusted networks only)
+computing-provider dashboard --host 0.0.0.0
 ```
 
-Features: real-time metrics, GPU status, model management, request controls.
+The default host is `127.0.0.1`. Read-only monitoring is public to the local
+listener; writes and settings require the token generated at
+`$CP_PATH/dashboard.token` through the dashboard's **Unlock controls** action.
+
+Features: real-time metrics, model pricing, per-transaction input/output token
+usage, GPU status, model management, request controls, and validated settings.
 
 ## Security Considerations
 

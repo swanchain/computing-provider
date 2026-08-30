@@ -48,7 +48,7 @@ type RegisteredModel struct {
 	LocalModel    string      `json:"local_model,omitempty"`    // Actual model name for local inference server
 	Format        string      `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
 	Quantization  string      `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
-	APIKey        string      `json:"api_key,omitempty"`        // API key for authenticated model endpoints
+	APIKey        string      `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
 	ContextLength int         `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
 	State         ModelState  `json:"state"`
 	StateString   string      `json:"state_string"`

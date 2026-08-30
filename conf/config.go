@@ -77,12 +77,20 @@ func (p *Pricing) UnmarshalTOML(data interface{}) error {
 
 // ComputeNode is a compute node config
 type ComputeNode struct {
-	API       API
-	RPC       RPC       `toml:"RPC,omitempty"`
-	Inference Inference `toml:"Inference,omitempty"`
-	Log       Log       `toml:"Log,omitempty"`
-	Alerts    Alerts    `toml:"Alerts,omitempty"`
-	SelfCheck SelfCheck `toml:"SelfCheck,omitempty"`
+	API           API
+	RPC           RPC           `toml:"RPC,omitempty"`
+	Inference     Inference     `toml:"Inference,omitempty"`
+	Log           Log           `toml:"Log,omitempty"`
+	Alerts        Alerts        `toml:"Alerts,omitempty"`
+	SelfCheck     SelfCheck     `toml:"SelfCheck,omitempty"`
+	RequestLimits RequestLimits `toml:"RequestLimits,omitempty"`
+}
+
+// RequestLimits are persistent global admission controls. They intentionally
+// mirror the two controls already available at runtime in the dashboard.
+type RequestLimits struct {
+	RequestsPerSecond float64 `toml:"RequestsPerSecond"`
+	MaxConcurrent     int     `toml:"MaxConcurrent"`
 }
 
 // SelfCheck controls the periodic audit and what it does about a model that
@@ -254,6 +262,7 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 	applyLogDefaults(&config.Log, cpRepoPath)
 	applyAlertDefaults(&config.Alerts)
 	applySelfCheckDefaults(&config.SelfCheck)
+	applyRequestLimitDefaults(&config.RequestLimits)
 
 	// Validate MultiAddress format if provided (optional for Inference mode)
 	if config.API.MultiAddress != "" {
@@ -300,6 +309,15 @@ func applySelfCheckDefaults(s *SelfCheck) {
 	}
 	if s.FailuresBeforeDisable <= 0 {
 		s.FailuresBeforeDisable = 2
+	}
+}
+
+func applyRequestLimitDefaults(l *RequestLimits) {
+	if l.RequestsPerSecond <= 0 {
+		l.RequestsPerSecond = 100
+	}
+	if l.MaxConcurrent <= 0 {
+		l.MaxConcurrent = 50
 	}
 }
 
@@ -415,6 +433,10 @@ func generateDefaultConfig() ComputeNode {
 			MaxBackups: 5,
 			MaxAgeDays: 30,
 		},
+		RequestLimits: RequestLimits{
+			RequestsPerSecond: 100,
+			MaxConcurrent:     50,
+		},
 	}
 }
 
@@ -438,6 +460,9 @@ type ModelConfig struct {
 	GPUMemory     int    `json:"gpu_memory"`
 	Category      string `json:"category"`
 	LocalModel    string `json:"local_model,omitempty"`
+	Format        string `json:"format,omitempty"`
+	Quantization  string `json:"quantization,omitempty"`
+	APIKey        string `json:"api_key,omitempty"`
 	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
 }
 

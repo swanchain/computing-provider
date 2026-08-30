@@ -451,13 +451,18 @@ This document provides a comprehensive, section-by-section checklist for manuall
 ## 23. Dashboard
 
 - [ ] `computing-provider dashboard` starts web UI on port 3005
+- [ ] Dashboard binds to `127.0.0.1` by default
+- [ ] `--host 0.0.0.0` overrides the dashboard listen address
 - [ ] `--port 8080` overrides dashboard port
 - [ ] `--api http://localhost:8085` overrides API base URL
 - [ ] Dashboard loads in browser
 - [ ] Shows connection status (connected/disconnected)
 - [ ] Shows model list with health status
+- [ ] Clicking a namespaced model ID opens its price and transactions
 - [ ] Shows request metrics
+- [ ] Shows input and output tokens separately for every transaction
 - [ ] Shows GPU utilization
+- [ ] Settings and write actions require the dashboard control token
 
 ---
 

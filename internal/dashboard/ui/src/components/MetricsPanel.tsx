@@ -17,9 +17,9 @@ function formatNumber(n: number): string {
 export function MetricsPanel({ metrics, loading, error }: MetricsPanelProps) {
   if (loading) {
     return (
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         {[...Array(4)].map((_, i) => (
-          <div key={i} className="bg-slate-800 rounded-lg p-4 border border-slate-700 animate-pulse">
+          <div key={i} className="animate-pulse rounded-xl border border-slate-700 bg-slate-900 p-3 sm:p-4">
             <div className="h-4 bg-slate-700 rounded w-20 mb-2"></div>
             <div className="h-8 bg-slate-700 rounded w-16"></div>
           </div>
@@ -30,7 +30,7 @@ export function MetricsPanel({ metrics, loading, error }: MetricsPanelProps) {
 
   if (!metrics) {
     return (
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
         <StatusCard title="Total Requests" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Activity size={20} />} color="blue" />
         <StatusCard title="Success Rate" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Zap size={20} />} color="blue" />
         <StatusCard title="Avg Latency" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Clock size={20} />} color="blue" />
@@ -46,7 +46,7 @@ export function MetricsPanel({ metrics, loading, error }: MetricsPanelProps) {
   const isConnected = metrics.connection_state === 'connected';
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
       <StatusCard
         title="Total Requests"
         value={formatNumber(metrics.total_requests)}

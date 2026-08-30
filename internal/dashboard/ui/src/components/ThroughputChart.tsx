@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import type { InferenceMetrics } from '../types';
 
@@ -16,7 +16,7 @@ const MAX_POINTS = 30;
 
 export function ThroughputChart({ metrics }: ThroughputChartProps) {
   const [data, setData] = useState<DataPoint[]>([]);
-  const [lastTotal, setLastTotal] = useState(0);
+  const lastTotal = useRef(0);
 
   useEffect(() => {
     if (!metrics) return;
@@ -24,22 +24,22 @@ export function ThroughputChart({ metrics }: ThroughputChartProps) {
     const now = new Date();
     const timeStr = `${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
 
-    setData((prev) => {
-      // Calculate requests per interval (5 seconds)
-      const requestsDelta = lastTotal > 0 ? metrics.total_requests - lastTotal : 0;
-      const reqPerSec = requestsDelta / 5; // 5 second interval
-
-      const newPoint: DataPoint = {
-        time: timeStr,
-        requests: Math.max(0, reqPerSec),
-        tokensPerSec: metrics.tokens_per_second,
-      };
-      const updated = [...prev, newPoint];
-      return updated.slice(-MAX_POINTS);
-    });
-
-    setLastTotal(metrics.total_requests);
-  }, [metrics, lastTotal]);
+    const update = window.setTimeout(() => {
+      setData((prev) => {
+        // Calculate requests per interval (5 seconds)
+        const requestsDelta = lastTotal.current > 0 ? metrics.total_requests - lastTotal.current : 0;
+        const reqPerSec = requestsDelta / 5;
+        const newPoint: DataPoint = {
+          time: timeStr,
+          requests: Math.max(0, reqPerSec),
+          tokensPerSec: metrics.tokens_per_second,
+        };
+        return [...prev, newPoint].slice(-MAX_POINTS);
+      });
+      lastTotal.current = metrics.total_requests;
+    }, 0);
+    return () => window.clearTimeout(update);
+  }, [metrics]);
 
   if (data.length < 2) {
     return (

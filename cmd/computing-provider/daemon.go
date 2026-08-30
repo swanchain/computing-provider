@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +17,7 @@ import (
 	cors "github.com/itsjamie/gin-cors"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/dashboard"
 	"github.com/swanchain/computing-provider-v2/internal/logging"
 	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/urfave/cli/v2"
@@ -22,8 +26,15 @@ import (
 var runCmd = &cli.Command{
 	Name:  "run",
 	Usage: "Start the computing provider",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:  "host",
+			Usage: "API listen address (use 0.0.0.0 only on a trusted network)",
+			Value: "127.0.0.1",
+		},
+	},
 	Action: func(cctx *cli.Context) error {
-		return runDaemon()
+		return runDaemon(cctx)
 	},
 }
 
@@ -58,7 +69,7 @@ func checkDockerAvailable() bool {
 }
 
 // runDaemon starts the computing provider daemon
-func runDaemon() error {
+func runDaemon(cctx *cli.Context) error {
 	logs.GetLogger().Info("Starting computing provider...")
 	cpRepoPath, _ := os.LookupEnv("CP_PATH")
 
@@ -75,6 +86,11 @@ func runDaemon() error {
 	if err := logging.Setup(conf.GetConfig().Log); err != nil {
 		logs.GetLogger().Warnf("Failed to configure logging, continuing with defaults: %v", err)
 	}
+	controlToken, tokenPath, err := dashboard.EnsureAccessToken(cpRepoPath)
+	if err != nil {
+		return fmt.Errorf("initialize dashboard access token: %w", err)
+	}
+	logs.GetLogger().Infof("Dashboard control token: %s", tokenPath)
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
 	logs.GetLogger().Infof("Logging to %s (rotate at %dMB, keep %d)",
 		conf.GetConfig().Log.Dir, conf.GetConfig().Log.MaxSizeMB, conf.GetConfig().Log.MaxBackups)
@@ -90,9 +106,11 @@ func runDaemon() error {
 	if err := inferenceService.Start(); err != nil {
 		logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
 	}
+	modelPrices := computing.NewModelPriceCatalog(conf.GetConfig().Inference.ServiceURL)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+	configureEncodedPathParameters(r)
 	r.Use(cors.Middleware(cors.Config{
 		Origins:         "*",
 		Methods:         "GET, PUT, POST, DELETE",
@@ -104,6 +122,85 @@ func runDaemon() error {
 	pprof.Register(r)
 
 	router := r.Group("/api/v1/computing")
+	router.Use(dashboard.ProtectWrites(controlToken))
+	settingsRouter := router.Group("/inference/settings")
+	settingsRouter.Use(dashboard.RequireAccess(controlToken))
+	settingsRouter.GET("", func(c *gin.Context) {
+		settings, err := conf.LoadDashboardSettings(cpRepoPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, settings)
+	})
+	settingsRouter.PUT("/alerts", func(c *gin.Context) {
+		var settings conf.AlertSettings
+		if err := c.ShouldBindJSON(&settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid alert settings"})
+			return
+		}
+		if err := conf.UpdateAlertSettings(cpRepoPath, settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "saved", "restart_required": true})
+	})
+	settingsRouter.PUT("/self-check", func(c *gin.Context) {
+		var settings conf.SelfCheckSettings
+		if err := c.ShouldBindJSON(&settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid self-check settings"})
+			return
+		}
+		if err := conf.UpdateSelfCheckSettings(cpRepoPath, settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "saved", "restart_required": true})
+	})
+	settingsRouter.PUT("/logging", func(c *gin.Context) {
+		var settings conf.LogSettings
+		if err := c.ShouldBindJSON(&settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid logging settings"})
+			return
+		}
+		if err := conf.UpdateLogSettings(cpRepoPath, settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "saved", "restart_required": true})
+	})
+	settingsRouter.PUT("/limits", func(c *gin.Context) {
+		var settings conf.RequestLimitSettings
+		if err := c.ShouldBindJSON(&settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request limits"})
+			return
+		}
+		if err := conf.UpdateRequestLimitSettings(cpRepoPath, settings); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		inferenceService.SetGlobalRateLimit(settings.RequestsPerSecond)
+		inferenceService.SetGlobalConcurrencyLimit(settings.MaxConcurrent)
+		c.JSON(http.StatusOK, gin.H{"status": "saved", "restart_required": false})
+	})
+	settingsRouter.PUT("/models", func(c *gin.Context) {
+		var request struct {
+			Models []conf.DashboardModel `json:"models"`
+		}
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model settings"})
+			return
+		}
+		if err := conf.UpdateDashboardModels(cpRepoPath, request.Models); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := inferenceService.ReloadModels(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "settings saved but model reload failed: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "saved", "restart_required": false})
+	})
 
 	// Inference metrics endpoints
 	router.GET("/inference/metrics", func(c *gin.Context) {
@@ -135,9 +232,18 @@ func runDaemon() error {
 	router.GET("/inference/models", func(c *gin.Context) {
 		models := inferenceService.GetAllModels()
 		summary := inferenceService.GetModelsSummary()
+		modelIDs := make([]string, 0, len(models))
+		for _, model := range models {
+			modelIDs = append(modelIDs, model.ID)
+		}
+		prices, err := modelPrices.Prices(c.Request.Context(), modelIDs)
+		if err != nil {
+			logs.GetLogger().Debugf("Model pricing is temporarily unavailable: %v", err)
+		}
 		c.JSON(200, gin.H{
 			"models":  models,
 			"summary": summary,
+			"prices":  prices,
 			// Which window is reported upstream for each model and where it came
 			// from, so an operator can see an unreported window without reading
 			// the log (#75).
@@ -313,6 +419,11 @@ func runDaemon() error {
 			c.JSON(404, gin.H{"error": "model not found"})
 			return
 		}
+		if price, ok, err := modelPrices.Price(c.Request.Context(), modelID); err == nil && ok {
+			metrics["price"] = price
+		} else if err != nil {
+			logs.GetLogger().Debugf("Model pricing is temporarily unavailable: %v", err)
+		}
 		c.JSON(200, metrics)
 	})
 
@@ -352,11 +463,12 @@ func runDaemon() error {
 	})
 
 	shutdownChan := make(chan struct{})
-	httpStopper, err := util.ServeHttp(r, "cp-api", ":"+strconv.Itoa(conf.GetConfig().API.Port), false)
+	listenAddress := net.JoinHostPort(cctx.String("host"), strconv.Itoa(conf.GetConfig().API.Port))
+	httpStopper, err := util.ServeHttp(r, "cp-api", listenAddress, false)
 	if err != nil {
 		logs.GetLogger().Fatalf("failed to start cp-api endpoint: %s", err)
 	}
-	logs.GetLogger().Infof("Computing provider started successfully, listening on port: %d", conf.GetConfig().API.Port)
+	logs.GetLogger().Infof("Computing provider started successfully, listening on %s", listenAddress)
 
 	finishCh := util.MonitorShutdown(shutdownChan,
 		util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
@@ -368,4 +480,12 @@ func runDaemon() error {
 	<-finishCh
 
 	return nil
+}
+
+// configureEncodedPathParameters lets model IDs containing slashes travel as a
+// single route parameter (for example, openai%2Fgpt-5.4). Gin otherwise treats
+// the decoded slash as a path separator and returns 404 before the handler runs.
+func configureEncodedPathParameters(engine *gin.Engine) {
+	engine.UseRawPath = true
+	engine.UnescapePathValues = true
 }

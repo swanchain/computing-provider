@@ -62,14 +62,95 @@ export interface ModelStatus {
   enabled: boolean;
 }
 
+export interface EmailSettings {
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  password_set: boolean;
+  clear_password?: boolean;
+  from: string;
+  to: string[];
+}
+
+export interface AlertSettings {
+  webhook_url: string;
+  cooldown_minutes: number;
+  disconnect_after_min: number;
+  error_rate_threshold: number;
+  error_rate_min_requests: number;
+  email: EmailSettings;
+}
+
+export interface SelfCheckSettings {
+  enable: boolean;
+  interval_minutes: number;
+  auto_disable: boolean;
+  auto_recover: boolean;
+  failures_before_disable: number;
+}
+
+export interface LogSettings {
+  dir: string;
+  level: string;
+  max_size_mb: number;
+  max_backups: number;
+  max_age_days: number;
+  compress: boolean;
+  stdout: boolean;
+}
+
+export interface RequestLimitSettings {
+  requests_per_second: number;
+  max_concurrent: number;
+}
+
+export interface DashboardModel {
+  id: string;
+  container?: string;
+  endpoint: string;
+  gpu_memory: number;
+  category: string;
+  local_model?: string;
+  format?: string;
+  quantization?: string;
+  api_key?: string;
+  api_key_set: boolean;
+  clear_api_key?: boolean;
+  context_length?: number;
+}
+
+export interface DashboardSettings {
+  alerts: AlertSettings;
+  self_check: SelfCheckSettings;
+  log: LogSettings;
+  limits: RequestLimitSettings;
+  models: DashboardModel[];
+}
+
+export interface SettingsSaveResult {
+  status: string;
+  restart_required: boolean;
+}
+
 export interface ModelsResponse {
   models: ModelStatus[];
+  prices: Record<string, ModelPrice>;
   summary: {
     total: number;
     ready: number;
     unhealthy: number;
     disabled: number;
   };
+}
+
+export interface ModelPrice {
+  input_price: number;
+  output_price: number;
+  provider_input_price: number;
+  provider_output_price: number;
+  tier?: string;
+  unit: string;
 }
 
 export interface RateLimiterMetrics {
@@ -150,9 +231,10 @@ export interface HistoricalMetricsResponse {
 export interface ModelDetailedMetrics {
   model?: ModelStatus;
   health?: {
-    healthy: boolean;
+    health: number;
+    health_string: string;
     last_check: string;
-    consecutive_failures: number;
+    consecutive_fails: number;
     last_error?: string;
   };
   metrics?: {
@@ -166,5 +248,6 @@ export interface ModelDetailedMetrics {
     tokens_per_second: number;
     active_requests: number;
   };
+  price?: ModelPrice;
   recent_requests?: RequestLog[];
 }

@@ -68,19 +68,19 @@ export function HistoricalChart() {
   }));
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-      <div className="flex items-center justify-between mb-4">
+    <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Calendar size={20} className="text-purple-400" />
           <h3 className="text-lg font-semibold text-slate-200">Historical Trends</h3>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex bg-slate-700 rounded-lg p-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-1 overflow-x-auto rounded-lg bg-slate-800 p-0.5 sm:flex-none">
             {(Object.keys(TIME_RANGES) as TimeRange[]).map((range) => (
               <button
                 key={range}
                 onClick={() => setTimeRange(range)}
-                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                  className={`min-h-8 flex-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors sm:flex-none sm:px-3 ${
                   timeRange === range
                     ? 'bg-blue-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'

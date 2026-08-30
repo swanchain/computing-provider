@@ -1,179 +1,238 @@
-import { useState, useCallback } from 'react';
-import { CheckCircle, XCircle, Clock, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import { Fragment, useCallback, useState } from 'react';
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react';
 import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
-import type { ModelStatus } from '../types';
+import type { ModelStatus, RequestLog } from '../types';
 
 interface RequestHistoryPanelProps {
   models: ModelStatus[];
 }
 
+function formatStarted(timeStr: string, includeDate = false) {
+  if (!timeStr) return '—';
+  const date = new Date(timeStr);
+  return includeDate
+    ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })
+    : date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function formatLatency(ms: number) {
+  if (ms < 1000) return `${ms.toFixed(0)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
+function latencyClass(ms: number) {
+  if (ms > 5000) return 'text-red-300';
+  if (ms > 2000) return 'text-amber-300';
+  return 'text-emerald-300';
+}
+
+function StatusBadge({ success }: { success: boolean }) {
+  return success ? (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-800/70 bg-emerald-950/40 px-2 py-1 text-xs font-medium text-emerald-300">
+      <CheckCircle aria-hidden="true" size={13} /> Success
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-red-800/70 bg-red-950/40 px-2 py-1 text-xs font-medium text-red-300">
+      <XCircle aria-hidden="true" size={13} /> Failed
+    </span>
+  );
+}
+
+function RequestReceipt({ request }: { request: RequestLog }) {
+  return (
+    <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+      <div>
+        <span className="block text-slate-500">Request ID</span>
+        <span className="mt-1 block break-all font-mono text-slate-300">{request.request_id}</span>
+      </div>
+      <div>
+        <span className="block text-slate-500">Completed</span>
+        <span className="mt-1 block text-slate-300">{formatStarted(request.end_time, true)}</span>
+      </div>
+      <div>
+        <span className="block text-slate-500">Total tokens</span>
+        <span className="mt-1 block font-mono text-slate-300">{(request.tokens_in + request.tokens_out).toLocaleString()}</span>
+      </div>
+      <div>
+        <span className="block text-slate-500">Delivery</span>
+        <span className="mt-1 block text-slate-300">{request.streaming ? 'Streaming' : 'Single response'}</span>
+      </div>
+      {request.error_reason && (
+        <div className="sm:col-span-2 lg:col-span-4">
+          <span className="block text-slate-500">Error</span>
+          <span className="mt-1 block break-words text-red-300">{request.error_reason}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
-  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState('');
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const {
     data: historyData,
+    error,
     loading,
     refetch,
   } = usePolling(
     useCallback(() => api.getRequestHistory(50, selectedModel || undefined), [selectedModel]),
-    10000
+    10000,
   );
 
   const requests = historyData?.requests ?? [];
-
-  const formatTime = (timeStr: string) => {
-    if (!timeStr) return '-';
-    const date = new Date(timeStr);
-    return date.toLocaleTimeString();
-  };
-
-  const formatLatency = (ms: number) => {
-    if (ms < 1000) return `${ms.toFixed(0)}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
-  };
+  const inputTotal = requests.reduce((total, request) => total + request.tokens_in, 0);
+  const outputTotal = requests.reduce((total, request) => total + request.tokens_out, 0);
+  const toggleExpanded = (requestID: string) => setExpandedRow((current) => current === requestID ? null : requestID);
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-slate-200">Request History</h3>
-        <div className="flex items-center gap-2">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-white">Transactions</h1>
+          <p className="mt-1 text-sm text-slate-400">The latest inference requests, with input and output usage shown separately for every transaction.</p>
+        </div>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <label htmlFor="transaction-model-filter" className="sr-only">Filter transactions by model</label>
           <select
+            id="transaction-model-filter"
             value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            className="px-3 py-1.5 bg-slate-700 border border-slate-600 rounded text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            onChange={(event) => setSelectedModel(event.target.value)}
+            className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 sm:min-w-56"
           >
-            <option value="">All Models</option>
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
-            ))}
+            <option value="">All models</option>
+            {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
           </select>
           <button
+            type="button"
             onClick={refetch}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
-            title="Refresh"
+            className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Refresh transactions"
           >
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            <RefreshCw aria-hidden="true" size={16} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
-      {loading && requests.length === 0 ? (
-        <div className="animate-pulse space-y-2">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-10 bg-slate-700 rounded"></div>
-          ))}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
+          <p className="text-xs text-slate-500">Shown</p>
+          <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{requests.length}</p>
+          <p className="mt-1 hidden text-xs text-slate-500 sm:block">latest transactions</p>
         </div>
-      ) : requests.length === 0 ? (
-        <div className="text-center py-8 text-slate-500">
-          <Clock size={32} className="mx-auto mb-2 opacity-50" />
-          <p>No requests recorded yet</p>
+        <div className="rounded-xl border border-blue-900/70 bg-blue-950/20 p-3 sm:p-4">
+          <p className="flex items-center gap-1 text-xs text-blue-300"><ArrowDownToLine aria-hidden="true" size={13} /> Input tokens</p>
+          <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{inputTotal.toLocaleString()}</p>
+          <p className="mt-1 hidden text-xs text-slate-500 sm:block">across rows shown</p>
         </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-slate-400 border-b border-slate-700">
-                <th className="text-left py-2 px-2 font-medium">Time</th>
-                <th className="text-left py-2 px-2 font-medium">Model</th>
-                <th className="text-right py-2 px-2 font-medium">Latency</th>
-                <th className="text-right py-2 px-2 font-medium">Tokens</th>
-                <th className="text-center py-2 px-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {requests.map((req) => (
-                <>
-                  <tr
-                    key={req.request_id}
-                    className={`border-b border-slate-700/50 cursor-pointer hover:bg-slate-700/30 transition-colors ${
-                      !req.success ? 'bg-red-900/10' : ''
-                    }`}
-                    onClick={() => setExpandedRow(expandedRow === req.request_id ? null : req.request_id)}
-                  >
-                    <td className="py-2 px-2 text-slate-300">
-                      <div className="flex items-center gap-1">
-                        {expandedRow === req.request_id ? (
-                          <ChevronUp size={14} className="text-slate-500" />
-                        ) : (
-                          <ChevronDown size={14} className="text-slate-500" />
-                        )}
-                        {formatTime(req.start_time)}
-                      </div>
-                    </td>
-                    <td className="py-2 px-2">
-                      <span className="text-slate-200 font-mono text-xs">{req.model}</span>
-                      {req.streaming && (
-                        <span className="ml-1 text-xs text-blue-400">(stream)</span>
-                      )}
-                    </td>
-                    <td className="py-2 px-2 text-right">
-                      <span
-                        className={`font-mono ${
-                          req.latency_ms > 5000
-                            ? 'text-red-400'
-                            : req.latency_ms > 2000
-                            ? 'text-yellow-400'
-                            : 'text-green-400'
-                        }`}
-                      >
-                        {formatLatency(req.latency_ms)}
-                      </span>
-                    </td>
-                    <td className="py-2 px-2 text-right text-slate-300 font-mono text-xs">
-                      {req.tokens_in}/{req.tokens_out}
-                    </td>
-                    <td className="py-2 px-2 text-center">
-                      {req.success ? (
-                        <CheckCircle size={16} className="inline text-green-400" />
-                      ) : (
-                        <XCircle size={16} className="inline text-red-400" />
-                      )}
-                    </td>
-                  </tr>
-                  {expandedRow === req.request_id && (
-                    <tr key={`${req.request_id}-details`} className="bg-slate-700/20">
-                      <td colSpan={5} className="py-3 px-4">
-                        <div className="grid grid-cols-2 gap-4 text-xs">
-                          <div>
-                            <span className="text-slate-500">Request ID:</span>
-                            <span className="ml-2 text-slate-300 font-mono">{req.request_id}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500">End Time:</span>
-                            <span className="ml-2 text-slate-300">{formatTime(req.end_time)}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500">Input Tokens:</span>
-                            <span className="ml-2 text-slate-300">{req.tokens_in}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500">Output Tokens:</span>
-                            <span className="ml-2 text-slate-300">{req.tokens_out}</span>
-                          </div>
-                          {req.error_reason && (
-                            <div className="col-span-2">
-                              <span className="text-slate-500">Error:</span>
-                              <span className="ml-2 text-red-400">{req.error_reason}</span>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
+        <div className="rounded-xl border border-violet-900/70 bg-violet-950/20 p-3 sm:p-4">
+          <p className="flex items-center gap-1 text-xs text-violet-300"><ArrowUpFromLine aria-hidden="true" size={13} /> Output tokens</p>
+          <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{outputTotal.toLocaleString()}</p>
+          <p className="mt-1 hidden text-xs text-slate-500 sm:block">across rows shown</p>
         </div>
-      )}
-
-      <div className="mt-3 text-xs text-slate-500 text-center">
-        Showing last {requests.length} requests {selectedModel && `for ${selectedModel}`}
       </div>
+
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        {loading && requests.length === 0 ? (
+          <div className="animate-pulse space-y-3 p-4" role="status" aria-label="Loading transactions">
+            {[...Array(6)].map((_, index) => <div key={index} className="h-14 rounded-lg bg-slate-800" />)}
+          </div>
+        ) : error && requests.length === 0 ? (
+          <div className="px-4 py-12 text-center">
+            <XCircle aria-hidden="true" size={32} className="mx-auto mb-3 text-red-400" />
+            <p className="font-medium text-red-200">Transactions are unavailable</p>
+            <p className="mt-1 text-sm text-slate-400">{error.message}</p>
+            <button type="button" onClick={refetch} className="mt-4 rounded-lg bg-slate-800 px-4 py-2 text-sm text-white">Try again</button>
+          </div>
+        ) : requests.length === 0 ? (
+          <div className="px-4 py-12 text-center text-slate-400">
+            <Clock aria-hidden="true" size={32} className="mx-auto mb-3 text-slate-600" />
+            <p className="font-medium text-slate-300">No transactions yet</p>
+            <p className="mt-1 text-sm">Requests will appear here after the provider serves inference.</p>
+          </div>
+        ) : (
+          <>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[840px] text-sm">
+                <thead>
+                  <tr className="border-b border-slate-800 bg-slate-950/40 text-xs uppercase tracking-wide text-slate-500">
+                    <th className="px-4 py-3 text-left font-medium">Started</th>
+                    <th className="px-4 py-3 text-left font-medium">Model</th>
+                    <th className="px-4 py-3 text-right font-medium">Latency</th>
+                    <th className="px-4 py-3 text-right font-medium"><span className="inline-flex items-center gap-1"><ArrowDownToLine aria-hidden="true" size={13} /> Input tokens</span></th>
+                    <th className="px-4 py-3 text-right font-medium"><span className="inline-flex items-center gap-1"><ArrowUpFromLine aria-hidden="true" size={13} /> Output tokens</span></th>
+                    <th className="px-4 py-3 text-right font-medium">Status</th>
+                    <th className="w-12 px-3 py-3"><span className="sr-only">Details</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {requests.map((request) => {
+                    const expanded = expandedRow === request.request_id;
+                    return (
+                      <Fragment key={request.request_id}>
+                        <tr className={`border-b border-slate-800/80 ${request.success ? 'hover:bg-slate-800/35' : 'bg-red-950/10 hover:bg-red-950/20'}`}>
+                          <td className="whitespace-nowrap px-4 py-3 text-slate-300" title={new Date(request.start_time).toLocaleString()}>{formatStarted(request.start_time)}</td>
+                          <td className="max-w-xs px-4 py-3"><span className="block truncate font-mono text-xs text-slate-200" title={request.model}>{request.model}</span>{request.streaming && <span className="mt-0.5 block text-xs text-blue-300">Streaming</span>}</td>
+                          <td className={`whitespace-nowrap px-4 py-3 text-right font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-sm text-blue-200">{request.tokens_in.toLocaleString()}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-sm text-violet-200">{request.tokens_out.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right"><StatusBadge success={request.success} /></td>
+                          <td className="px-3 py-3 text-right">
+                            <button type="button" onClick={() => toggleExpanded(request.request_id)} aria-expanded={expanded} aria-controls={`receipt-${request.request_id}`} className="rounded-lg p-2 text-slate-400 hover:bg-slate-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" aria-label={`${expanded ? 'Hide' : 'Show'} details for request ${request.request_id}`}>
+                              {expanded ? <ChevronUp aria-hidden="true" size={16} /> : <ChevronDown aria-hidden="true" size={16} />}
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr id={`receipt-${request.request_id}`} className="border-b border-slate-800 bg-slate-950/60">
+                            <td colSpan={7} className="px-4 py-4"><RequestReceipt request={request} /></td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="divide-y divide-slate-800 md:hidden">
+              {requests.map((request) => {
+                const expanded = expandedRow === request.request_id;
+                return (
+                  <article key={request.request_id} className={request.success ? '' : 'bg-red-950/10'}>
+                    <button type="button" onClick={() => toggleExpanded(request.request_id)} aria-expanded={expanded} aria-controls={`mobile-receipt-${request.request_id}`} className="w-full p-4 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0"><p className="truncate font-mono text-sm text-white">{request.model}</p><p className="mt-1 text-xs text-slate-500">{formatStarted(request.start_time, true)}{request.streaming ? ' · Streaming' : ''}</p></div>
+                        <span className="mt-0.5 flex-shrink-0 text-slate-500">{expanded ? <ChevronUp aria-hidden="true" size={18} /> : <ChevronDown aria-hidden="true" size={18} />}</span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2">
+                        <div><span className="block text-[11px] text-slate-500">Latency</span><span className={`mt-0.5 block font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</span></div>
+                        <div><span className="flex items-center gap-1 text-[11px] text-blue-300"><ArrowDownToLine aria-hidden="true" size={11} /> Input</span><span className="mt-0.5 block font-mono text-sm text-blue-100">{request.tokens_in.toLocaleString()}</span></div>
+                        <div><span className="flex items-center gap-1 text-[11px] text-violet-300"><ArrowUpFromLine aria-hidden="true" size={11} /> Output</span><span className="mt-0.5 block font-mono text-sm text-violet-100">{request.tokens_out.toLocaleString()}</span></div>
+                      </div>
+                      <div className="mt-3"><StatusBadge success={request.success} /></div>
+                    </button>
+                    {expanded && <div id={`mobile-receipt-${request.request_id}`} className="border-t border-slate-800 bg-slate-950/60 p-4"><RequestReceipt request={request} /></div>}
+                  </article>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      <p className="text-center text-xs text-slate-500" aria-live="polite">Showing the latest {requests.length} transaction{requests.length === 1 ? '' : 's'}{selectedModel ? ` for ${selectedModel}` : ''}. Auto-refreshes every 10 seconds.</p>
     </div>
   );
 }

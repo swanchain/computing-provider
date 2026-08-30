@@ -11,7 +11,7 @@ func TestSecureRepoTightensExposedSecrets(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"private_key", "machine_fingerprint", "config.toml", "models.json", EnvFileName} {
+	for _, name := range []string{"private_key", "machine_fingerprint", "config.toml", "models.json", "dashboard.token", EnvFileName} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -21,11 +21,11 @@ func TestSecureRepoTightensExposedSecrets(t *testing.T) {
 	}
 
 	changed := SecureRepo(dir)
-	if len(changed) != 7 {
-		t.Errorf("reported %d changes, want 7 (dir + keystore + 5 files): %v", len(changed), changed)
+	if len(changed) != 8 {
+		t.Errorf("reported %d changes, want 8 (dir + keystore + 6 files): %v", len(changed), changed)
 	}
 
-	for _, name := range []string{"private_key", "machine_fingerprint", "config.toml", "models.json", EnvFileName} {
+	for _, name := range []string{"private_key", "machine_fingerprint", "config.toml", "models.json", "dashboard.token", EnvFileName} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)

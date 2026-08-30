@@ -357,9 +357,19 @@ MaxBackups = 5
 ```bash
 computing-provider dashboard
 # Open http://localhost:3005
+
+# To listen on every interface on a trusted network:
+computing-provider dashboard --host 0.0.0.0
 ```
 
-Features: Real-time metrics, GPU status, model management, request controls.
+The dashboard is read-only until you choose **Unlock controls** and paste the
+token from `$CP_PATH/dashboard.token`. That owner-only file is generated on
+first run. Model configuration, request limits, alerts, self-check, and logging
+can then be edited from **Settings**; stored secrets are never sent back to the
+browser.
+
+Features: real-time metrics, model pricing, per-transaction input/output token
+usage, GPU status, model management, request controls, and validated settings.
 
 ### REST API
 

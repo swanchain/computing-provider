@@ -88,11 +88,21 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	// Create model registry with health checker
 	registry := NewModelRegistry(cpPath, healthChecker)
 
-	// Create rate limiter with GPU awareness
-	rateLimiter := NewRateLimiter(DefaultRateLimiterConfig(), gpuCollector)
+	// Create rate limiter with GPU awareness and persisted operator settings.
+	rateConfig := DefaultRateLimiterConfig()
+	concurrencyConfig := DefaultConcurrencyConfig()
+	if current := conf.GetConfig(); current != nil {
+		if current.RequestLimits.RequestsPerSecond > 0 {
+			rateConfig.TokensPerSecond = current.RequestLimits.RequestsPerSecond
+		}
+		if current.RequestLimits.MaxConcurrent > 0 {
+			concurrencyConfig.GlobalMaxConcurrent = current.RequestLimits.MaxConcurrent
+		}
+	}
+	rateLimiter := NewRateLimiter(rateConfig, gpuCollector)
 
 	// Create concurrency limiter with GPU awareness
-	concurrencyLimiter := NewConcurrencyLimiter(DefaultConcurrencyConfig(), gpuCollector)
+	concurrencyLimiter := NewConcurrencyLimiter(concurrencyConfig, gpuCollector)
 
 	// Create retry policy
 	retryPolicy := NewRetryPolicy(DefaultRetryConfig())

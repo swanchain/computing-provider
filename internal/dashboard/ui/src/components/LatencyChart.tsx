@@ -24,16 +24,19 @@ export function LatencyChart({ metrics }: LatencyChartProps) {
     const now = new Date();
     const timeStr = `${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
 
-    setData((prev) => {
-      const newPoint: DataPoint = {
-        time: timeStr,
-        avg: metrics.avg_latency_ms,
-        p95: metrics.p95_latency_ms,
-        p99: metrics.p99_latency_ms,
-      };
-      const updated = [...prev, newPoint];
-      return updated.slice(-MAX_POINTS);
-    });
+    const update = window.setTimeout(() => {
+      setData((prev) => {
+        const newPoint: DataPoint = {
+          time: timeStr,
+          avg: metrics.avg_latency_ms,
+          p95: metrics.p95_latency_ms,
+          p99: metrics.p99_latency_ms,
+        };
+        const updated = [...prev, newPoint];
+        return updated.slice(-MAX_POINTS);
+      });
+    }, 0);
+    return () => window.clearTimeout(update);
   }, [metrics]);
 
   if (data.length < 2) {
