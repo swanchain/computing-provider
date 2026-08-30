@@ -617,6 +617,24 @@ sudo systemctl restart computing-provider   # under systemd
 # otherwise stop the process and run `computing-provider run` again
 ```
 
+Releases publish a `checksums.txt` and a signature over it. `update` checks the
+SHA-256 automatically and refuses to install on a mismatch; to verify by hand:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+
+cosign verify-blob \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp 'https://github.com/swanchain/computing-provider/.github/workflows/release.yaml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+```
+
+The checksums prove the download arrived intact. The signature is what proves it
+came from the release workflow — anyone who could publish a release could rewrite
+the checksums to match a binary of their own, but not that signature.
+
 Swan Inference may also mention a newer release in the message it returns when
 the agent registers, which `computing-provider run` logs verbatim at startup.
 That depends on the server sending it, so treat it as a convenience rather than

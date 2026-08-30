@@ -1,0 +1,125 @@
+name: Release
+
+# Builds the published binaries and the checksums that `computing-provider
+# update` verifies against.
+#
+# Until this existed, releases were built and uploaded by hand and carried no
+# checksums, so every self-update fell back to trusting the transport. A
+# checksums file that depends on somebody remembering it would be present for
+# some releases and absent for others, and an updater that says "verified" only
+# sometimes teaches operators to ignore the distinction.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and attach artifacts to'
+        required: true
+
+permissions:
+  contents: write   # create the release and upload assets
+  id-token: write   # OIDC identity for keyless signing
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Resolve the tag
+        id: tag
+        run: echo "name=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # The agent reports build.BuildVersion at registration and compares it
+      # against the latest tag to decide whether an update exists. If the two
+      # disagree, a freshly updated provider keeps being told it is out of date
+      # — and `update` reinstalls the same build every time it runs.
+      - name: Check BuildVersion matches the tag
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          declared=$(grep -oE 'BuildVersion = "[^"]+"' build/version.go | cut -d'"' -f2)
+          if [ "${tag#v}" != "$declared" ]; then
+            echo "::error::tag $tag does not match build.BuildVersion $declared."
+            echo "Bump BuildVersion in build/version.go before tagging, or the"
+            echo "released binary reports a version that is never up to date."
+            exit 1
+          fi
+          echo "BuildVersion $declared matches tag $tag."
+
+      - name: Build
+        run: |
+          make linux-amd64
+          make linux-arm64
+          make darwin-arm64
+          ls -l computing-provider-*
+
+      # Written in the format sha256sum -c reads, so an operator can verify by
+      # hand with a tool they already have rather than trusting only the agent.
+      - name: Generate checksums
+        run: |
+          sha256sum computing-provider-linux-amd64 \
+                    computing-provider-linux-arm64 \
+                    computing-provider-darwin-arm64 > checksums.txt
+          cat checksums.txt
+
+      - name: Verify the checksums file is self-consistent
+        run: sha256sum -c checksums.txt
+
+      - uses: sigstore/cosign-installer@v3
+
+      # Keyless: the signature is bound to this workflow's OIDC identity, so
+      # there is no private key to store, rotate or leak. A checksums file
+      # fetched from the same release over the same transport proves integrity
+      # but not authorship — anyone who can publish a release can rewrite it.
+      # The signature is what a compromised token cannot forge.
+      - name: Sign the checksums
+        run: |
+          cosign sign-blob --yes \
+            --output-signature checksums.txt.sig \
+            --output-certificate checksums.txt.pem \
+            checksums.txt
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" --clobber \
+            computing-provider-linux-amd64 \
+            computing-provider-linux-arm64 \
+            computing-provider-darwin-arm64 \
+            checksums.txt \
+            checksums.txt.sig \
+            checksums.txt.pem
+
+      - name: Verification instructions
+        run: |
+          tag="${{ steps.tag.outputs.name }}"
+          cat <<EOF
+          Published $tag with checksums and a keyless signature.
+
+          Operators can verify by hand:
+
+            sha256sum -c checksums.txt --ignore-missing
+
+            cosign verify-blob \\
+              --certificate checksums.txt.pem \\
+              --signature checksums.txt.sig \\
+              --certificate-identity-regexp 'https://github.com/swanchain/computing-provider/.github/workflows/release.yaml@.*' \\
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+              checksums.txt
+
+          \`computing-provider update\` checks the SHA-256 automatically.
+          EOF
