@@ -51,6 +51,10 @@ type selfCheckRunner struct {
 	// Signature of the checks that were failing at the last report, so an
 	// unchanged problem is not re-sent every tick.
 	lastFailureKey string
+	// reported becomes true after the first audit. The first one always sends,
+	// pass or fail: a restart is a state change the operator wants confirmed,
+	// and it is the moment they most want to know the node came back correctly.
+	reported bool
 	// Models this runner disabled, so an operator's own disable is never
 	// undone. Re-enabling a model somebody switched off deliberately would be
 	// worse than leaving a broken one off.
@@ -120,6 +124,16 @@ func (r *selfCheckRunner) runOnce() {
 	opts.ExpectedProbeFailures = r.disabledByUs()
 	report := selfcheck.Run(opts)
 	r.act(report)
+
+	r.mu.Lock()
+	first := !r.reported
+	r.reported = true
+	r.mu.Unlock()
+
+	if first {
+		r.reportStartup(report)
+		return
+	}
 	r.report(report)
 }
 
@@ -258,6 +272,49 @@ func (r *selfCheckRunner) resetFailures(id string) {
 	r.mu.Lock()
 	delete(r.failures, id)
 	r.mu.Unlock()
+}
+
+// reportStartup sends the first audit after the provider starts, whatever it
+// found. Restarts are infrequent and usually deliberate — or the watchdog
+// acting on a fault — so this cannot become noise, and it answers the question
+// an operator actually has after a restart: did it come back correctly.
+func (r *selfCheckRunner) reportStartup(report selfcheck.Report) {
+	var lines []string
+	for _, res := range report.Results {
+		mark := "OK"
+		switch res.Status {
+		case selfcheck.StatusWarn:
+			mark = "WARN"
+		case selfcheck.StatusFail:
+			mark = "FAIL"
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s: %s", mark, res.Name, res.Message))
+	}
+
+	// Seed the change detector so the next audit compares against this one and
+	// an already-reported failure is not sent again ten minutes later.
+	var failing []string
+	for _, res := range report.Problems() {
+		if res.Status == selfcheck.StatusFail {
+			failing = append(failing, fmt.Sprintf("%s: %s", res.Name, res.Message))
+		}
+	}
+	sort.Strings(failing)
+	r.mu.Lock()
+	r.lastFailureKey = strings.Join(failing, "; ")
+	r.mu.Unlock()
+
+	severity := alerts.SeverityInfo
+	headline := "started and passed its system check"
+	if report.Failed() {
+		severity = alerts.SeverityCritical
+		headline = "started with problems"
+	}
+
+	logs.GetLogger().Infof("Startup self-check: %s", report.Summary())
+	r.notifier.Fire("startup_check", "",
+		fmt.Sprintf("Provider %s (%s).\n\n%s", headline, report.Summary(), strings.Join(lines, "\n")),
+		severity, map[string]string{"summary": report.Summary()})
 }
 
 // report logs every audit but only mails on a change of state.

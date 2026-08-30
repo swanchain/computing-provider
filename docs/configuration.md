@@ -255,7 +255,9 @@ computing-provider alerts test
 
 Sends one message through every configured transport and reports what failed. Worth running right after configuring SMTP — the alternative is discovering the password is wrong during your first real incident.
 
-**Alerts fire on state changes, not on state.** A problem that persists is reported once, not on every check — the self-check runs every 10 minutes and the error-rate monitor every 60 seconds, so a standing failure would otherwise arrive around a hundred times a day and teach you to filter the very alert that matters. You get a message when a problem appears, when the set of problems changes, and when it clears. Warnings are logged but never mailed.
+**A restart always reports.** The first self-check after the provider starts sends its full result whether it passed or failed, so you learn the node came back correctly without going to look. It runs five minutes in, once models have registered and been probed — the report is meaningless before that. Restarts are infrequent, so this cannot become noise.
+
+**Otherwise, alerts fire on state changes, not on state.** A problem that persists is reported once, not on every check — the self-check runs every 10 minutes and the error-rate monitor every 60 seconds, so a standing failure would otherwise arrive around a hundred times a day and teach you to filter the very alert that matters. You get a message when a problem appears, when the set of problems changes, and when it clears. Warnings are logged but never mailed.
 
 Delivery is asynchronous and never blocks inference: events are queued and sent in order by a single worker, and are dropped (with a log line) if a transport is too slow to keep up. A failing transport never stops the other.
 

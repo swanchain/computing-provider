@@ -470,3 +470,89 @@ func TestSelfCheckWarningsNeverAlert(t *testing.T) {
 		t.Fatalf("warnings produced %d alert(s), want none", len(got))
 	}
 }
+
+func passingReport() selfcheck.Report {
+	return selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "daemon", Status: selfcheck.StatusPass, Message: "provider API is responding"},
+		{Name: "model health", Status: selfcheck.StatusPass, Message: "all 7 models healthy"},
+	}}
+}
+
+// A restart is a state change the operator wants confirmed. The first audit
+// after start always reports, even when everything passes.
+func TestStartupReportSendsOnASuccessfulStart(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.reportStartup(passingReport())
+
+	got := events()
+	if len(got) != 1 || got[0].Event != "startup_check" {
+		t.Fatalf("got %+v, want one startup_check", got)
+	}
+	if got[0].Severity != alerts.SeverityInfo {
+		t.Errorf("severity = %s, want info for a clean start", got[0].Severity)
+	}
+	for _, want := range []string{"passed its system check", "daemon", "model health"} {
+		if !strings.Contains(got[0].Message, want) {
+			t.Errorf("message missing %q: %s", want, got[0].Message)
+		}
+	}
+}
+
+func TestStartupReportIsCriticalWhenSomethingFailed(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.reportStartup(failingReport("org/a: HTTP 503"))
+
+	got := events()
+	if len(got) != 1 || got[0].Severity != alerts.SeverityCritical {
+		t.Fatalf("got %+v, want one critical startup_check", got)
+	}
+	if !strings.Contains(got[0].Message, "started with problems") {
+		t.Errorf("message should say the start had problems: %s", got[0].Message)
+	}
+}
+
+// The startup report seeds the change detector, so a failure it already
+// described is not mailed again on the next audit ten minutes later.
+func TestStartupReportSeedsTheChangeDetector(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.reportStartup(failingReport("org/a: HTTP 503"))
+	r.report(failingReport("org/a: HTTP 503")) // same problem, next tick
+
+	var startup, failed int
+	for _, e := range events() {
+		switch e.Event {
+		case "startup_check":
+			startup++
+		case "selfcheck_failed":
+			failed++
+		}
+	}
+	if startup != 1 || failed != 0 {
+		t.Fatalf("startup=%d selfcheck_failed=%d, want 1 and 0", startup, failed)
+	}
+}
+
+// Only the first audit reports unconditionally; later ones follow the
+// change-only rule.
+func TestOnlyTheFirstAuditReportsUnconditionally(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.reportStartup(passingReport())
+	r.report(passingReport())
+	r.report(passingReport())
+
+	if got := events(); len(got) != 1 {
+		t.Fatalf("got %d alerts, want 1 — healthy audits after startup must be silent", len(got))
+	}
+}
