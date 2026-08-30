@@ -81,3 +81,7 @@ Enable = true                                                             # Infe
 WebSocketURL = "wss://inference-ws.swanchain.io"                          # Swan Inference WebSocket endpoint
 ApiKey = ""                                                               # Required: Provider API key from https://inference.swanchain.io (starts with sk-prov-)
 Models = ["meta-llama/Llama-3.2-3B-Instruct"]                              # Models this provider serves (must match models.json)
+
+[Dashboard]
+  Host = "127.0.0.1"                                                       # Web UI listen address; use 0.0.0.0 only on a trusted network
+  Port = 3060                                                              # Web UI port (computing-provider dashboard)

@@ -450,7 +450,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ## 23. Dashboard
 
-- [ ] `computing-provider dashboard` starts web UI on port 3005
+- [ ] `computing-provider dashboard` starts web UI on port 3060
 - [ ] Dashboard binds to `127.0.0.1` by default
 - [ ] `--host 0.0.0.0` overrides the dashboard listen address
 - [ ] `--port 8080` overrides dashboard port

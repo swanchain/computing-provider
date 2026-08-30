@@ -163,6 +163,35 @@ FailuresBeforeDisable = 2
 
 Both transitions raise `model_auto_disabled` and `model_auto_recovered` alerts.
 
+### Dashboard
+
+The web UI served by `computing-provider dashboard`. Both fields are optional.
+
+```toml
+[Dashboard]
+Host = "127.0.0.1"   # use 0.0.0.0 only on a network you trust
+Port = 3060
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `Host` | `127.0.0.1` | The dashboard proxies to the provider API, which has endpoints that can take models out of service — so exposing it is a deliberate act, not the default |
+| `Port` | `3060` | Change it if something else on the host already uses this port |
+
+Command-line flags win over the config, so `--host` and `--port` still override for a one-off run:
+
+```bash
+computing-provider dashboard                        # uses [Dashboard], else 127.0.0.1:3060
+computing-provider dashboard --host 0.0.0.0         # reachable from other machines
+computing-provider dashboard --port 8085            # one-off override
+```
+
+To reach the UI from another machine without exposing it, forward the port over SSH instead:
+
+```bash
+ssh -L 3060:localhost:3060 <provider-host>   # then open http://localhost:3060
+```
+
 ### Alerts
 
 Optional. Set a `WebhookURL` and the provider POSTs a JSON event when something goes wrong; leave it empty and alerting is off.

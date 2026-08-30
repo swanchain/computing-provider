@@ -162,7 +162,7 @@ computing-provider inference config
 Start the inference dashboard web UI for real-time monitoring.
 
 ```bash
-# Start on default port 3005
+# Start on default port 3060
 computing-provider dashboard
 
 # Custom port

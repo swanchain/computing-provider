@@ -70,7 +70,7 @@ conf/                       # Configuration
 - `token/` - SWAN token operations
 
 **Dashboard** (`internal/dashboard/`)
-- `server.go` - Dashboard HTTP server (port 3005)
+- `server.go` - Dashboard HTTP server (port 3060)
 - `ui/` - React frontend (Vite + Tailwind)
 
 ### Step 3: Search External Resources
@@ -166,7 +166,7 @@ Deliver a research report with:
 ### Development
 - `go run ./cmd/computing-provider run` (always runs latest code)
 - `make clean && make mainnet && make install` for binary
-- Dashboard: `computing-provider dashboard` (port 3005)
+- Dashboard: `computing-provider dashboard` (port 3060)
 
 ### Build
 - Use Makefile targets (`make mainnet`, `make testnet`)

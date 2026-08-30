@@ -84,6 +84,19 @@ type ComputeNode struct {
 	Alerts        Alerts        `toml:"Alerts,omitempty"`
 	SelfCheck     SelfCheck     `toml:"SelfCheck,omitempty"`
 	RequestLimits RequestLimits `toml:"RequestLimits,omitempty"`
+	Dashboard     Dashboard     `toml:"Dashboard,omitempty"`
+}
+
+// Dashboard configures the web UI served by `computing-provider dashboard`.
+// Setting it here means an operator configures the port once rather than
+// remembering a flag on every start.
+type Dashboard struct {
+	// Host to listen on. Defaults to 127.0.0.1: the dashboard proxies to the
+	// provider API, which has endpoints that can take models out of service, so
+	// exposing it should be a deliberate act. Use 0.0.0.0 only on a network you
+	// trust.
+	Host string `toml:"Host"`
+	Port int    `toml:"Port"` // Default: 3060
 }
 
 // RequestLimits are persistent global admission controls. They intentionally
@@ -262,6 +275,7 @@ func InitConfig(cpRepoPath string, standalone bool) error {
 	applyLogDefaults(&config.Log, cpRepoPath)
 	applyAlertDefaults(&config.Alerts)
 	applySelfCheckDefaults(&config.SelfCheck)
+	applyDashboardDefaults(&config.Dashboard)
 	applyRequestLimitDefaults(&config.RequestLimits)
 
 	// Validate MultiAddress format if provided (optional for Inference mode)
@@ -318,6 +332,19 @@ func applyRequestLimitDefaults(l *RequestLimits) {
 	}
 	if l.MaxConcurrent <= 0 {
 		l.MaxConcurrent = 50
+	}
+}
+
+// DefaultDashboardPort is the port the web UI listens on unless configured.
+const DefaultDashboardPort = 3060
+
+// applyDashboardDefaults fills unset [Dashboard] fields.
+func applyDashboardDefaults(d *Dashboard) {
+	if strings.TrimSpace(d.Host) == "" {
+		d.Host = "127.0.0.1"
+	}
+	if d.Port <= 0 {
+		d.Port = DefaultDashboardPort
 	}
 }
 

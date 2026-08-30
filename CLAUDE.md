@@ -203,7 +203,7 @@ Rate limiting and concurrency limits are enforced in `handleInference`/`handleSt
 
 **ModelRegistry** uses callback pattern (`onModelAdded`, `onModelRemoved`, `onHealthUpdate`) to notify InferenceService of changes.
 
-**Dashboard:** `internal/dashboard/` — embedded React/Vite frontend served by Go (port 3005). Proxies API requests to the main provider.
+**Dashboard:** `internal/dashboard/` — embedded React/Vite frontend served by Go (port 3060). Proxies API requests to the main provider.
 
 **Other packages:** `internal/setup/` (setup wizard: auth, prerequisites, model discovery), `internal/models/` (HuggingFace catalog/download/verify helpers), `internal/db/` (SQLite), `conf/` (config parsing), `util/` (shutdown, HTTP serve).
 
@@ -257,7 +257,7 @@ Commands are defined in `cmd/computing-provider/`:
 - `inference.go` — `inference` subcommands: `status`, `config`, `deposit`, `set-beneficiary`, `keygen`, `request-approval`, `recommend-models`, `select-model`
 - `models.go` — `models` subcommands: `catalog`, `download`, `verify`, `list`, `rm`
 - `research.go` — `research` subcommands: `hardware`, `gpu-info`, `gpu-benchmark`
-- `dashboard.go` — web UI (port 3005)
+- `dashboard.go` — web UI (port 3060)
 - `auth.go` — shared auth/login helpers used by setup and inference commands
 - `tablewriter.go` — CLI table output helpers
 

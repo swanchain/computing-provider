@@ -47,7 +47,7 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 - Wallet Management - `computing-provider wallet --help`
 - `computing-provider inference status` - Check provider status on Swan Inference
 - `computing-provider inference config` - Show inference configuration
-- `computing-provider dashboard` - Web-based monitoring UI (port 3005)
+- `computing-provider dashboard` - Web-based monitoring UI (port 3060)
 
 ### Hardware & Research
 - `computing-provider research hardware` - Display system hardware info

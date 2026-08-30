@@ -174,3 +174,24 @@ func TestDashboardSettingsValidationRejectsUnsafeValues(t *testing.T) {
 		t.Fatal("zero request rate was accepted")
 	}
 }
+
+func TestDashboardDefaults(t *testing.T) {
+	var d Dashboard
+	applyDashboardDefaults(&d)
+	if d.Port != DefaultDashboardPort {
+		t.Errorf("Port = %d, want %d", d.Port, DefaultDashboardPort)
+	}
+	// Loopback by default: the dashboard proxies to endpoints that can take
+	// models out of service, so exposure must be deliberate.
+	if d.Host != "127.0.0.1" {
+		t.Errorf("Host = %q, want 127.0.0.1", d.Host)
+	}
+}
+
+func TestDashboardExplicitValuesSurvive(t *testing.T) {
+	d := Dashboard{Host: "0.0.0.0", Port: 8123}
+	applyDashboardDefaults(&d)
+	if d.Host != "0.0.0.0" || d.Port != 8123 {
+		t.Errorf("got %s:%d, want the configured values to be kept", d.Host, d.Port)
+	}
+}

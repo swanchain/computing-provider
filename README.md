@@ -356,7 +356,16 @@ MaxBackups = 5
 
 ```bash
 computing-provider dashboard
-# Open http://localhost:3005
+# Open http://localhost:3060
+```
+
+The port and listen address are configurable, so you set them once rather than passing flags every time:
+
+```toml
+[Dashboard]
+Host = "127.0.0.1"   # use 0.0.0.0 only on a network you trust
+Port = 3060
+```
 
 # To listen on every interface on a trusted network:
 computing-provider dashboard --host 0.0.0.0
@@ -530,7 +539,7 @@ computing-provider inference config          # Show inference config
 computing-provider inference deposit         # Get collateral deposit instructions
 computing-provider inference deposit --check # Check current collateral status
 computing-provider inference set-beneficiary 0x...  # Set reward wallet
-computing-provider dashboard                 # Web UI (port 3005)
+computing-provider dashboard                 # Web UI (port 3060)
 ```
 
 ### Setup Wizard

@@ -21,7 +21,7 @@ var dashboardCmd = &cli.Command{
 		&cli.IntFlag{
 			Name:  "port",
 			Usage: "Dashboard port",
-			Value: 3005,
+			Value: conf.DefaultDashboardPort,
 		},
 		&cli.StringFlag{
 			Name:  "api",
@@ -43,8 +43,16 @@ var dashboardCmd = &cli.Command{
 			return fmt.Errorf("load config file failed, error: %+v", err)
 		}
 
+		// Flags win when given; otherwise take the operator's [Dashboard]
+		// config, falling back to the built-in defaults.
 		port := cctx.Int("port")
+		if !cctx.IsSet("port") && conf.GetConfig().Dashboard.Port > 0 {
+			port = conf.GetConfig().Dashboard.Port
+		}
 		host := cctx.String("host")
+		if !cctx.IsSet("host") && conf.GetConfig().Dashboard.Host != "" {
+			host = conf.GetConfig().Dashboard.Host
+		}
 		apiTarget := cctx.String("api")
 
 		// Use config port if not overridden
