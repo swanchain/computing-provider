@@ -359,3 +359,77 @@ func TestErrorRateAlertsAgainAfterRecovery(t *testing.T) {
 		t.Fatalf("fired=%d recovered=%d, want 2 and 1", fired, recovered)
 	}
 }
+
+// The exact sequence seen in production: Cydonia flapping healthy <-> degraded
+// every few minutes produced four "healthy again" emails and no failure
+// notice, because degraded is silent going down. A recovery for a failure the
+// operator was never told about is noise.
+func TestDegradedFlappingSendsNothing(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	cfg := testCfg(url)
+	cfg.CooldownMinutes = 0
+	m := newAlertMonitor(alerts.New(cfg, "n", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true }, nil)
+
+	m.onHealthChange(map[string]string{"m": "healthy"}) // baseline
+	for i := 0; i < 4; i++ {
+		m.onHealthChange(map[string]string{"m": "degraded"})
+		m.onHealthChange(map[string]string{"m": "healthy"})
+	}
+
+	if got := events(); len(got) != 0 {
+		t.Fatalf("got %d alert(s), want none — degraded still serves: %+v", len(got), got)
+	}
+}
+
+// A real failure still pairs: one notice down, one up.
+func TestUnhealthyThenRecoveredPairs(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	cfg := testCfg(url)
+	cfg.CooldownMinutes = 0
+	m := newAlertMonitor(alerts.New(cfg, "n", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true }, nil)
+
+	m.onHealthChange(map[string]string{"m": "healthy"})
+	m.onHealthChange(map[string]string{"m": "unhealthy"})
+	m.onHealthChange(map[string]string{"m": "healthy"})
+
+	got := events()
+	if len(got) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(got), got)
+	}
+	if got[0].Event != alerts.EventModelUnhealthy || got[1].Event != alerts.EventModelRecovered {
+		t.Errorf("got %s then %s, want unhealthy then recovered", got[0].Event, got[1].Event)
+	}
+}
+
+// Recovering via degraded still closes an open incident: the operator was told
+// it failed, so they must be told it is back.
+func TestRecoveryThroughDegradedStillCloses(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	cfg := testCfg(url)
+	cfg.CooldownMinutes = 0
+	m := newAlertMonitor(alerts.New(cfg, "n", "cp"), cfg, func() *InferenceMetricsData { return nil }, func() bool { return true }, nil)
+
+	m.onHealthChange(map[string]string{"m": "healthy"})
+	m.onHealthChange(map[string]string{"m": "unhealthy"})
+	m.onHealthChange(map[string]string{"m": "degraded"}) // partway back
+	m.onHealthChange(map[string]string{"m": "healthy"})
+
+	var unhealthy, recovered int
+	for _, e := range events() {
+		switch e.Event {
+		case alerts.EventModelUnhealthy:
+			unhealthy++
+		case alerts.EventModelRecovered:
+			recovered++
+		}
+	}
+	if unhealthy != 1 || recovered != 1 {
+		t.Fatalf("unhealthy=%d recovered=%d, want 1 and 1", unhealthy, recovered)
+	}
+}

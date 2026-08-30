@@ -48,20 +48,25 @@ type alertMonitor struct {
 	lastFailed map[string]int64
 	rateFiring map[string]bool
 	lastHealth map[string]string
+	// Models we actually alerted on. A recovery notice for a failure the
+	// operator was never told about is noise, not information — and "degraded"
+	// still serves, so it is deliberately not alerted going down.
+	alertedUnhealthy map[string]bool
 }
 
 func newAlertMonitor(n *alerts.Notifier, cfg conf.Alerts, metrics func() *InferenceMetricsData, isConn func() bool, health func() map[string]string) *alertMonitor {
 	return &alertMonitor{
-		notifier:   n,
-		cfg:        cfg,
-		metrics:    metrics,
-		isConn:     isConn,
-		health:     health,
-		stopCh:     make(chan struct{}),
-		lastTotal:  make(map[string]int64),
-		lastFailed: make(map[string]int64),
-		rateFiring: make(map[string]bool),
-		lastHealth: make(map[string]string),
+		notifier:         n,
+		cfg:              cfg,
+		metrics:          metrics,
+		isConn:           isConn,
+		health:           health,
+		stopCh:           make(chan struct{}),
+		lastTotal:        make(map[string]int64),
+		lastFailed:       make(map[string]int64),
+		rateFiring:       make(map[string]bool),
+		lastHealth:       make(map[string]string),
+		alertedUnhealthy: make(map[string]bool),
 	}
 }
 
@@ -243,10 +248,23 @@ func (a *alertMonitor) onHealthChange(modelHealth map[string]string) {
 	for _, c := range changes {
 		switch c.health {
 		case healthUnhealthy:
+			a.mu.Lock()
+			a.alertedUnhealthy[c.id] = true
+			a.mu.Unlock()
 			a.notifier.Fire(alerts.EventModelUnhealthy, c.id,
 				fmt.Sprintf("%s is unhealthy — it has been dropped from the models registered with Swan Inference", c.id),
 				alerts.SeverityCritical, map[string]string{"health": c.health})
 		case healthHealthy:
+			a.mu.Lock()
+			told := a.alertedUnhealthy[c.id]
+			delete(a.alertedUnhealthy, c.id)
+			a.mu.Unlock()
+			if !told {
+				// Never reported as failed, so there is nothing to close.
+				// A model flapping healthy <-> degraded lands here: degraded
+				// still serves requests, so neither direction is news.
+				continue
+			}
 			a.notifier.ClearCooldown(alerts.EventModelUnhealthy, c.id)
 			a.notifier.Fire(alerts.EventModelRecovered, c.id,
 				fmt.Sprintf("%s is healthy again", c.id),
