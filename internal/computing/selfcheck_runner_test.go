@@ -367,3 +367,106 @@ func TestZeroIntervalFallsBackToTheDefault(t *testing.T) {
 		t.Errorf("defaultSelfCheckInterval = %v, want 10m", defaultSelfCheckInterval)
 	}
 }
+
+// runnerWithNotifier builds a runner whose alerts reach a capturing webhook.
+func runnerWithNotifier(t *testing.T, url string, models modelController) *selfCheckRunner {
+	t.Helper()
+	cfg := conf.Alerts{WebhookURL: url} // no cooldown: prove the edge trigger
+	sc := testSelfCheckCfg()
+	return newSelfCheckRunner(alerts.New(cfg, "n", "cp"),
+		func() selfcheck.Options { return selfcheck.Options{} },
+		func() conf.SelfCheck { return sc }, models)
+}
+
+func failingReport(msg string) selfcheck.Report {
+	return selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusFail, Message: msg},
+	}}
+}
+
+// The audit runs every ten minutes. An unchanged failure must not mail on every
+// run — roughly a hundred a day would train the operator to filter it.
+func TestSelfCheckAlertsOnceForAnUnchangedFailure(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	for i := 0; i < 5; i++ {
+		r.report(failingReport("org/a: HTTP 503"))
+	}
+
+	var failed int
+	for _, e := range events() {
+		if e.Event == "selfcheck_failed" {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("selfcheck_failed fired %d times, want 1 for an unchanged failure", failed)
+	}
+}
+
+// A different problem is new information and must alert.
+func TestSelfCheckAlertsWhenTheFailureChanges(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.report(failingReport("org/a: HTTP 503"))
+	r.report(failingReport("org/a: HTTP 503; org/b: HTTP 401"))
+
+	var failed int
+	for _, e := range events() {
+		if e.Event == "selfcheck_failed" {
+			failed++
+		}
+	}
+	if failed != 2 {
+		t.Fatalf("fired %d times, want 2 — a changed problem set is new information", failed)
+	}
+}
+
+// Returning to clean is a state change worth one message, so the operator knows
+// it is over without going to look.
+func TestSelfCheckAlertsOnRecovery(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	r.report(failingReport("org/a: HTTP 503"))
+	r.report(selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
+	}})
+	r.report(selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
+	}})
+
+	var failed, recovered int
+	for _, e := range events() {
+		switch e.Event {
+		case "selfcheck_failed":
+			failed++
+		case "selfcheck_recovered":
+			recovered++
+		}
+	}
+	if failed != 1 || recovered != 1 {
+		t.Fatalf("failed=%d recovered=%d, want 1 and 1 (the second clean run is not a change)", failed, recovered)
+	}
+}
+
+// A warning is logged but never mailed, so a standing WARN cannot alert at all.
+func TestSelfCheckWarningsNeverAlert(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	for i := 0; i < 3; i++ {
+		r.report(selfcheck.Report{Results: []selfcheck.Result{
+			{Name: "config/models.json agreement", Status: selfcheck.StatusWarn, Message: "drift"},
+		}})
+	}
+	if got := events(); len(got) != 0 {
+		t.Fatalf("warnings produced %d alert(s), want none", len(got))
+	}
+}

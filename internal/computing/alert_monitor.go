@@ -164,6 +164,11 @@ func (a *alertMonitor) checkErrorRates() {
 		}
 		switch {
 		case !belowFloor && ratio >= a.cfg.ErrorRateThreshold:
+			if a.rateFiring[id] {
+				// Already reported and still bad. Re-sending says nothing new
+				// and trains the operator to filter the alert.
+				continue
+			}
 			a.rateFiring[id] = true
 			a.notifier.Fire(alerts.EventModelErrorRate, id,
 				fmt.Sprintf("%s failed %d of %d requests (%.0f%%) — health checks pass but requests are failing",

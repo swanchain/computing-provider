@@ -48,6 +48,9 @@ type selfCheckRunner struct {
 	mu sync.Mutex
 	// consecutive backend-owned probe failures per model.
 	failures map[string]int
+	// Signature of the checks that were failing at the last report, so an
+	// unchanged problem is not re-sent every tick.
+	lastFailureKey string
 	// Models this runner disabled, so an operator's own disable is never
 	// undone. Re-enabling a model somebody switched off deliberately would be
 	// worse than leaving a broken one off.
@@ -257,26 +260,49 @@ func (r *selfCheckRunner) resetFailures(id string) {
 	r.mu.Unlock()
 }
 
-// report logs the audit and alerts only on failures. An "all clear" that
-// arrives every ten minutes trains an operator to filter it, and then the one
-// that matters is filtered too.
+// report logs every audit but only mails on a change of state.
+//
+// The audit runs every ten minutes. A standing failure that re-sent on each run
+// would arrive around a hundred times a day, and an operator who filters that
+// filters the next real one with it. So an alert goes out when a new problem
+// appears, when the set of problems changes, and when everything clears — not
+// while a known problem persists.
 func (r *selfCheckRunner) report(report selfcheck.Report) {
 	problems := report.Problems()
+
+	var failing []string
+	for _, p := range problems {
+		logs.GetLogger().Warnf("Self-check %s: %s — %s", p.Status, p.Name, p.Message)
+		if p.Status == selfcheck.StatusFail {
+			failing = append(failing, fmt.Sprintf("%s: %s", p.Name, p.Message))
+		}
+	}
 	if len(problems) == 0 {
 		logs.GetLogger().Infof("Self-check: %s", report.Summary())
+	}
+
+	// Warnings are worth a log line, not an alert; the key covers failures only.
+	sort.Strings(failing)
+	key := strings.Join(failing, "; ")
+
+	r.mu.Lock()
+	previous := r.lastFailureKey
+	r.lastFailureKey = key
+	r.mu.Unlock()
+
+	if key == previous {
+		return // Nothing changed since the last audit.
+	}
+
+	if key == "" {
+		r.notifier.Fire("selfcheck_recovered", "",
+			fmt.Sprintf("Self-check is clean again (%s)", report.Summary()),
+			alerts.SeverityInfo, nil)
 		return
 	}
 
-	var lines []string
-	for _, p := range problems {
-		logs.GetLogger().Warnf("Self-check %s: %s — %s", p.Status, p.Name, p.Message)
-		lines = append(lines, fmt.Sprintf("%s: %s", p.Name, p.Message))
-	}
-	if !report.Failed() {
-		return // Warnings are worth a log line, not an alert.
-	}
 	r.notifier.Fire("selfcheck_failed", "",
-		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), strings.Join(lines, "; ")),
+		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), key),
 		alerts.SeverityCritical, map[string]string{"summary": report.Summary()})
 }
 

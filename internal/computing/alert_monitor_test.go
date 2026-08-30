@@ -294,3 +294,68 @@ func TestReconcileHealthClosesAStaleAlert(t *testing.T) {
 		t.Fatalf("want the stale alert closed by reconciliation, got %+v", got)
 	}
 }
+
+// A standing bad state must alert once, not on every tick. At a 60-second
+// period the old behaviour sent one every cooldown window, which trains an
+// operator to filter the alert — and then the next real one goes with it.
+func TestErrorRateAlertsOnceUntilItChanges(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	data := &InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+		"m": {ModelName: "m", TotalRequests: 20, FailedReqs: 20},
+	}}
+	cfg := testCfg(url)
+	cfg.CooldownMinutes = 0 // no cooldown: prove the edge trigger, not the timer
+	m := newAlertMonitor(alerts.New(cfg, "n", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
+
+	// Five consecutive windows, all failing.
+	for i := 0; i < 5; i++ {
+		m.checkErrorRates()
+		data.ModelMetrics["m"].TotalRequests += 20
+		data.ModelMetrics["m"].FailedReqs += 20
+	}
+
+	var fired int
+	for _, e := range events() {
+		if e.Event == alerts.EventModelErrorRate {
+			fired++
+		}
+	}
+	if fired != 1 {
+		t.Fatalf("model_error_rate fired %d times, want exactly 1 for an unchanged state", fired)
+	}
+}
+
+// Recovering and failing again is a change each way, so both must alert.
+func TestErrorRateAlertsAgainAfterRecovery(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	data := &InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+		"m": {ModelName: "m", TotalRequests: 20, FailedReqs: 20},
+	}}
+	cfg := testCfg(url)
+	cfg.CooldownMinutes = 0
+	m := newAlertMonitor(alerts.New(cfg, "n", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
+
+	m.checkErrorRates()                        // fires
+	data.ModelMetrics["m"].TotalRequests += 20 // clean window
+	m.checkErrorRates()                        // recovers
+	data.ModelMetrics["m"].TotalRequests += 20
+	data.ModelMetrics["m"].FailedReqs += 20 // bad again
+	m.checkErrorRates()                     // fires again
+
+	var fired, recovered int
+	for _, e := range events() {
+		switch e.Event {
+		case alerts.EventModelErrorRate:
+			fired++
+		case alerts.EventErrorRateNormal:
+			recovered++
+		}
+	}
+	if fired != 2 || recovered != 1 {
+		t.Fatalf("fired=%d recovered=%d, want 2 and 1", fired, recovered)
+	}
+}
