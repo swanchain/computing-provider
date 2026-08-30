@@ -9,6 +9,32 @@ Turn your GPU into an AI inference endpoint and join the Swan Chain decentralize
 
 **No wallet needed. No blockchain registration. No public IP required.**
 
+### Install
+
+Every release publishes a prebuilt binary, so building from source is optional:
+
+```bash
+# Linux x86-64 (also: computing-provider-linux-arm64, computing-provider-darwin-arm64)
+curl -fL -o computing-provider \
+  https://github.com/swanchain/computing-provider/releases/latest/download/computing-provider-linux-amd64
+chmod +x computing-provider && sudo mv computing-provider /usr/local/bin/
+
+computing-provider version
+```
+
+Already installed? Upgrade in place:
+
+```bash
+computing-provider update --check   # report only, change nothing
+sudo computing-provider update      # download, verify and replace the binary
+```
+
+`update` replaces the binary but **does not restart the provider** — a running
+agent stays on the old build until you restart it, which is deliberate: an
+agent that restarts itself mid-request drops that request.
+
+To build from source instead, follow the steps below.
+
 ### Linux (NVIDIA GPU)
 
 ```bash
@@ -532,6 +558,9 @@ computing-provider inference deposit --check
 ### Basic Commands
 
 ```bash
+computing-provider version                   # Print the installed build
+computing-provider update --check            # Is a newer release available?
+sudo computing-provider update               # Install the newest release
 computing-provider setup                     # Interactive setup wizard (recommended)
 computing-provider run                       # Start provider
 computing-provider inference status          # Check status on Swan Inference
@@ -566,6 +595,34 @@ computing-provider research gpu-benchmark    # Run benchmark
 ```
 
 ---
+
+## Keeping Up To Date
+
+```bash
+computing-provider version         # what you are running
+computing-provider update --check  # what is available
+sudo computing-provider update     # install it
+```
+
+`update` downloads the binary for your platform from the GitHub release,
+verifies its SHA-256 against the checksums published with the release when there
+are any, and replaces the executable atomically — a crash mid-update cannot
+leave a half-written binary where the agent used to be. `sudo` is needed only
+because the binary usually lives in `/usr/local/bin`.
+
+It deliberately does **not** restart the provider. Restart when it suits you:
+
+```bash
+sudo systemctl restart computing-provider   # under systemd
+# otherwise stop the process and run `computing-provider run` again
+```
+
+Swan Inference also tells you at startup when a newer release exists — the
+registration acknowledgement carries the advisory, so `computing-provider run`
+logs it whether or not you ever run `update --check`.
+
+If a release has no binary for your platform, `update` says so and prints the
+source-build commands instead.
 
 ## Troubleshooting
 

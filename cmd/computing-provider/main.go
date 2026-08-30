@@ -43,6 +43,8 @@ func main() {
 			inferenceCmd,
 			modelsCmd,
 			selfcheckCmd,
+		versionCmd,
+		updateCmd,
 			alertsCmd,
 		},
 		Before: func(c *cli.Context) error {
