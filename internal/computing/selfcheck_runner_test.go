@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -605,5 +606,59 @@ func TestOnlyTheFirstAuditReportsUnconditionally(t *testing.T) {
 
 	if got := events(); len(got) != 1 {
 		t.Fatalf("got %d alerts, want 1 — healthy audits after startup must be silent", len(got))
+	}
+}
+
+// A backend failing continuously must alert even when its error text changes
+// between audits: probe messages embed a raw body snippet — retry-after hints,
+// trace ids, a rotating subset of models behind one proxy. Keying the debounce
+// on that text meant two hours of unbroken failure alerted nobody, which is a
+// worse failure than the noise the debounce replaced.
+func TestVaryingErrorTextStillAlerts(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	for i := 0; i < 12; i++ {
+		r.report(failingReport(fmt.Sprintf(
+			"openai/gpt: HTTP 429 {\"message\":\"Please retry after %d seconds\"}", i+1)))
+	}
+
+	var failed int
+	for _, e := range events() {
+		if e.Event == "selfcheck_failed" {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("12 consecutive failing audits produced %d alerts, want exactly 1", failed)
+	}
+}
+
+// The audit treats models this runner disabled as expected failures, so the
+// report reads clean while they are still out of routing. An all-clear then is
+// the same unwarranted reassurance from the other direction.
+func TestNoAllClearWhileModelsRemainDisabled(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := runnerWithNotifier(t, url, models)
+
+	r.report(failingReport("org/a: HTTP 503"))
+	r.report(failingReport("org/a: HTTP 503")) // alerts
+
+	r.mu.Lock()
+	r.autoDisabled["org/a"] = true // as act() would have done
+	r.mu.Unlock()
+
+	clean := selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
+	}}
+	r.report(clean)
+
+	for _, e := range events() {
+		if e.Event == "selfcheck_recovered" {
+			t.Error("sent an all-clear while a model was still auto-disabled")
+		}
 	}
 }

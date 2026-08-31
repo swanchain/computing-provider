@@ -351,7 +351,16 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 
 	// Warnings are worth a log line, not an alert; the key covers failures only.
 	sort.Strings(failing)
-	key := strings.Join(failing, "; ")
+	detail := strings.Join(failing, "; ")
+
+	// The debounce counts consecutive audits of the *same incident*, and an
+	// incident is identified by which checks are failing — not by their
+	// messages. Those embed a raw body snippet from the backend: a retry-after
+	// hint, a trace id, a rotating subset of models behind one proxy. Keying on
+	// the text meant any variation restarted the counter, so a backend failing
+	// continuously for two hours never reached the threshold and alerted
+	// nobody. Silence is a worse failure than the noise this replaced.
+	key := incidentKey(problems)
 	threshold := r.cfg().AlertThreshold()
 
 	r.mu.Lock()
@@ -368,6 +377,15 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 	if key == "" {
 		if reported == "" {
 			return // Nothing was ever announced, so there is nothing to close.
+		}
+		if held := r.disabledByUs(); len(held) > 0 {
+			// Models this runner disabled are passed to the audit as expected
+			// failures, so it stops counting them and the report reads clean.
+			// Announcing "clean again" while still holding models out of
+			// routing is exactly the unwarranted all-clear this is meant to
+			// stop, just from the other direction.
+			logs.GetLogger().Infof("Self-check has no failures, but %d model(s) remain auto-disabled; not sending an all-clear yet", len(held))
+			return
 		}
 		r.mu.Lock()
 		r.reportedKey = ""
@@ -387,7 +405,7 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 		// it is well short of what it takes to deregister a model, which is the
 		// threshold this now matches.
 		logs.GetLogger().Infof("Self-check problem seen %d/%d consecutive audits, not alerting yet: %s",
-			count, threshold, key)
+			count, threshold, detail)
 		return
 	}
 
@@ -395,8 +413,42 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 	r.reportedKey = key
 	r.mu.Unlock()
 	r.notifier.Fire("selfcheck_failed", "",
-		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), key),
+		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), detail),
 		alerts.SeverityCritical, map[string]string{"summary": report.Summary()})
+}
+
+// incidentKey identifies an ongoing incident stably enough to count
+// consecutive audits of it, while still distinguishing genuinely different
+// problems.
+//
+// It keeps the check name and the subject that failed — "inference probe:
+// openai/gpt-5.6-sol: HTTP 429" — and drops the response body, which is where
+// the variation lives: retry-after hints, trace ids, queue depths. Keying on
+// the full text meant a backend failing continuously for two hours never
+// reached the alert threshold, because every audit looked like a different
+// problem. Keying on the check name alone would have gone too far the other
+// way: a second model starting to fail would never be announced, because the
+// failing check is still "inference probe".
+func incidentKey(problems []selfcheck.Result) string {
+	var parts []string
+	for _, p := range problems {
+		if p.Status != selfcheck.StatusFail {
+			continue
+		}
+		parts = append(parts, p.Name+": "+stripDetail(p.Message))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "; ")
+}
+
+// stripDetail removes a response body from a probe message. Bodies from
+// OpenAI-compatible backends are JSON, so everything from the first brace is
+// detail rather than identity.
+func stripDetail(msg string) string {
+	if i := strings.IndexByte(msg, '{'); i >= 0 {
+		msg = msg[:i]
+	}
+	return strings.TrimSpace(msg)
 }
 
 // selfCheckOptions builds the audit's inputs from current config.
