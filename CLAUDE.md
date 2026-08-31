@@ -217,9 +217,22 @@ DeepCheckEvery = 10    # engine probe every Nth check (default 10; -1 disables)
 DeepCheckTimeout = 30  # seconds to wait for that completion
 ```
 
+The cadence is **per endpoint, not per model**, and models sharing an endpoint
+are probed one at a time in rotation. A deep probe cannot be shared the way the
+cheap `/v1/models` probe is — each model needs its own completion under its own
+name — so probing them together would send a burst of N simultaneous requests to
+a single host. Against a proxy fronting a metered upstream that is what earns
+`server_is_overloaded`, and the burst is self-inflicted: those models are not
+independent backends, they are one server.
+
+So a proxy serving six models sees one engine probe per `DeepCheckEvery`
+intervals, and each of its models is checked every sixth one. A dedicated
+single-model backend is unaffected. The trade is slower detection on shared
+endpoints, which is the same trade the cheap probe already makes by
+deduplicating per endpoint.
+
 Raise `DeepCheckEvery`, or set it to `-1`, when a model is backed by a metered
-upstream rather than a local GPU — the probe is one request per model per
-`DeepCheckEvery` intervals.
+upstream rather than a local GPU.
 
 **ModelRegistry** uses callback pattern (`onModelAdded`, `onModelRemoved`, `onHealthUpdate`) to notify InferenceService of changes.
 

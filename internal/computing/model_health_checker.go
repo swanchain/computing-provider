@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -113,7 +114,9 @@ type ModelHealthChecker struct {
 	detectedContexts map[string]int    // modelID -> context window detected from the backend (/v1/models max_model_len)
 	contextProbed    map[string]bool   // modelID -> a probe has completed, whether or not it yielded a window
 	categories       map[string]string // modelID -> models.json category, to skip non-chat models
-	sinceDeep        map[string]int    // modelID -> cheap checks since the last engine probe
+	sinceDeep        map[string]int    // endpoint -> cheap checks since the last engine probe
+	deepStarted      map[string]bool   // endpoint -> has ever been engine-probed
+	deepRotation     map[string]int    // endpoint -> which of its models is probed next
 	config           HealthCheckConfig
 	httpClient       *http.Client
 	deepClient       *http.Client
@@ -133,6 +136,8 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 		contextProbed:    make(map[string]bool),
 		categories:       make(map[string]string),
 		sinceDeep:        make(map[string]int),
+		deepRotation:     make(map[string]int),
+		deepStarted:      make(map[string]bool),
 		config:           config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -219,12 +224,29 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	endpoint := h.endpoints[modelID]
 	delete(h.endpoints, modelID)
+	// The deep-check maps are keyed by endpoint, so they outlive the models
+	// that created them. Drop an endpoint once nothing points at it any more,
+	// or they grow without bound as models.json is edited over a long uptime.
+	if endpoint != "" {
+		stillUsed := false
+		for _, ep := range h.endpoints {
+			if ep == endpoint {
+				stillUsed = true
+				break
+			}
+		}
+		if !stillUsed {
+			delete(h.sinceDeep, endpoint)
+			delete(h.deepRotation, endpoint)
+			delete(h.deepStarted, endpoint)
+		}
+	}
 	delete(h.apiKeys, modelID)
 	delete(h.statuses, modelID)
 	delete(h.localNames, modelID)
 	delete(h.categories, modelID)
-	delete(h.sinceDeep, modelID)
 	delete(h.detectedContexts, modelID)
 	delete(h.contextProbed, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
@@ -306,8 +328,26 @@ func (h *ModelHealthChecker) checkAllModels() {
 		go func(ep string, info *endpointInfo) {
 			defer wg.Done()
 			contexts, err := h.probeEndpoint(ep, info.apiKey)
+
+			// One model per endpoint per cycle, and only once the cheap probe
+			// has answered. Serial with respect to this endpoint: a shared
+			// proxy never sees more than one engine probe in flight from us.
+			deepID, deepErr := "", error(nil)
+			if err == nil {
+				if deepID = h.pickDeepCheckModel(ep, info.modelIDs); deepID != "" {
+					deepErr = h.deepCheckModel(deepID, ep, info.apiKey)
+				}
+			}
+
 			for _, modelID := range info.modelIDs {
-				h.applyProbeResult(modelID, ep, err)
+				// Exactly one result per model per cycle: the endpoint's cheap
+				// probe, except for the one model that was also engine-probed,
+				// whose deeper failure supersedes a passing cheap probe.
+				result := err
+				if modelID == deepID && result == nil {
+					result = deepErr
+				}
+				h.applyProbeResult(modelID, ep, result)
 				h.recordDetectedContext(modelID, contexts)
 			}
 		}(endpoint, group)
@@ -386,46 +426,80 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 		// Only worth asking whether the engine can serve once the HTTP server
 		// has answered; if the cheap probe already failed, the model is going
 		// to be marked down anyway and a completion would just add latency.
-		err = h.maybeDeepCheck(modelID, endpoint, apiKey)
+		if id := h.pickDeepCheckModel(endpoint, []string{modelID}); id != "" {
+			err = h.deepCheckModel(id, endpoint, apiKey)
+		}
 	}
 	h.applyProbeResult(modelID, endpoint, err)
 	h.recordDetectedContext(modelID, contexts)
 }
 
-// maybeDeepCheck runs a real one-token completion every DeepCheckEvery-th call
-// and returns an error only when the backend is genuinely at fault.
+// pickDeepCheckModel decides whether this endpoint is due an engine probe and,
+// if so, which of its models to probe.
 //
-// This is the check that catches the failure GET /v1/models cannot see: a vLLM
-// engine that has died behind a FastAPI process still serving its static model
-// list, or a proxy backend answering completions with 503 auth_unavailable
-// while listing models normally.
-func (h *ModelHealthChecker) maybeDeepCheck(modelID, endpoint, apiKey string) error {
+// One model per endpoint per cycle, rotating. A deep probe cannot be shared the
+// way the cheap /v1/models probe is — each model needs its own completion under
+// its own name — so probing every model at once sends a burst of N simultaneous
+// requests to a single host. Against a shared proxy fronting a metered upstream
+// that is what earns "server_is_overloaded", and the burst is self-inflicted:
+// the models are not independent backends, they are one server.
+//
+// Rotating instead means a proxy with six models sees one request per interval
+// rather than six, at the cost of each individual model being checked six times
+// less often. That is the same trade the cheap probe already makes by
+// deduplicating per endpoint, and a dedicated single-model backend is unaffected.
+func (h *ModelHealthChecker) pickDeepCheckModel(endpoint string, modelIDs []string) string {
 	h.mu.Lock()
-	every := h.config.DeepCheckEvery
-	if every <= 0 {
-		h.mu.Unlock()
-		return nil
+	defer h.mu.Unlock()
+
+	if h.config.DeepCheckEvery <= 0 {
+		return ""
 	}
-	category := h.categories[modelID]
+
+	// Only models that can answer a chat completion are candidates. Sorted so
+	// the rotation is stable: ranging a map would pick a different order every
+	// cycle and some models would be probed far more often than others.
+	candidates := make([]string, 0, len(modelIDs))
+	for _, id := range modelIDs {
+		if selfcheck.ChatCompatible(h.categories[id]) {
+			candidates = append(candidates, id)
+			continue
+		}
+		// Recorded rather than silently ignored, so the status API can answer
+		// "why is this model never engine-probed?" — the alternative is an
+		// operator concluding the check is broken.
+		if st := h.statuses[id]; st != nil {
+			st.DeepCheckSkipped = true
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	sort.Strings(candidates)
+
+	h.sinceDeep[endpoint]++
+	first := !h.deepStarted[endpoint]
+	if !first && h.sinceDeep[endpoint] < h.config.DeepCheckEvery {
+		return ""
+	}
+	h.sinceDeep[endpoint] = 0
+	h.deepStarted[endpoint] = true
+
+	i := h.deepRotation[endpoint] % len(candidates)
+	h.deepRotation[endpoint] = (h.deepRotation[endpoint] + 1) % len(candidates)
+	return candidates[i]
+}
+
+// deepCheckModel runs a real one-token completion and reports an error only
+// when the backend is genuinely at fault.
+//
+// This is the check that catches what GET /v1/models cannot see: a vLLM engine
+// that has died behind a FastAPI process still serving its static model list,
+// or a proxy answering completions with 503 while listing models normally.
+func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint, apiKey string) error {
+	h.mu.RLock()
 	served := h.localNames[modelID]
-	// Count first so the very first check of a newly registered model runs the
-	// probe: that is when a misconfigured backend is most likely, and waiting
-	// DeepCheckEvery intervals to find out wastes the whole window.
-	h.sinceDeep[modelID]++
-	due := h.sinceDeep[modelID] >= every || h.statuses[modelID] == nil || h.statuses[modelID].LastDeepCheck.IsZero()
-	if due {
-		h.sinceDeep[modelID] = 0
-	}
-	h.mu.Unlock()
-
-	if !due {
-		return nil
-	}
-
-	if !selfcheck.ChatCompatible(category) {
-		h.recordDeepResult(modelID, selfcheck.ProbeResult{Skipped: true})
-		return nil
-	}
+	h.mu.RUnlock()
 	if served == "" {
 		served = modelID
 	}
