@@ -135,7 +135,7 @@ func TestNonChatModelsAreNotProbed(t *testing.T) {
 
 	h := NewModelHealthChecker(deepCheckConfig())
 	h.RegisterModel("e", srv.URL, "", "", "embeddings")
-	h.checkModel("e")
+	h.checkAllModels()
 
 	if *calls != 0 {
 		t.Errorf("engine probed %d times, want 0", *calls)
@@ -158,7 +158,7 @@ func TestDeepCheckHonoursCadence(t *testing.T) {
 	h.RegisterModel("m", srv.URL, "", "", "")
 
 	for i := 0; i < 10; i++ {
-		h.checkModel("m")
+		h.checkAllModels()
 	}
 	// The first check always probes — a newly registered backend is the
 	// likeliest to be misconfigured — then every 5th after it, so checks 1 and
@@ -177,7 +177,7 @@ func TestDeepCheckCanBeDisabled(t *testing.T) {
 	h := NewModelHealthChecker(c)
 	h.RegisterModel("m", srv.URL, "", "", "")
 	for i := 0; i < 5; i++ {
-		h.checkModel("m")
+		h.checkAllModels()
 	}
 	if *calls != 0 {
 		t.Errorf("probed %d times, want 0", *calls)

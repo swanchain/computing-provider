@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,5 +234,131 @@ func TestEndpointBookkeepingIsReleased(t *testing.T) {
 	if len(h.sinceDeep) != 0 || len(h.deepRotation) != 0 || len(h.deepStarted) != 0 {
 		t.Errorf("endpoint state leaked: sinceDeep=%d rotation=%d started=%d",
 			len(h.sinceDeep), len(h.deepRotation), len(h.deepStarted))
+	}
+}
+
+// The engine probe must not only detect a dead engine but take it out of
+// routing. It previously did the first and not the second: the deep failure fed
+// into ConsecutiveFails, which the passing cheap probes between deep probes
+// reset, so the model stayed healthy indefinitely.
+func TestDeadEngineEventuallyGoesUnhealthy(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"EngineDeadError"}`, 500)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	h.RegisterModel("m", srv.URL, "", "", "text-generation")
+	for i := 0; i < 60; i++ {
+		h.checkAllModels()
+	}
+	st, _ := h.GetModelStatus("m")
+	t.Logf("after 60 cycles: health=%v deepErr=%q routable=%v", st.Health, st.LastDeepError, h.IsModelHealthy("m"))
+	if h.IsModelHealthy("m") {
+		t.Error("a dead engine is still taking routed traffic")
+	}
+}
+
+func TestEngineRecoveryRestoresHealth(t *testing.T) {
+	dead := true
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if dead {
+			http.Error(w, `{"error":"EngineDeadError"}`, 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{}}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	h.RegisterModel("m", srv.URL, "", "", "text-generation")
+	for i := 0; i < 40; i++ {
+		h.checkAllModels()
+	}
+	if h.IsModelHealthy("m") {
+		t.Fatal("should be unhealthy while the engine is dead")
+	}
+	dead = false
+	for i := 0; i < 20; i++ {
+		h.checkAllModels()
+	}
+	if !h.IsModelHealthy("m") {
+		t.Error("engine recovered but the model is still held unhealthy")
+	}
+}
+
+// ForceCheck must not disturb the endpoint's rotation. It is keyed by endpoint,
+// so asking it about one model pinned a shared proxy to its first model and
+// starved the rest.
+func TestForceCheckDoesNotStarveOtherModelsOnTheEndpoint(t *testing.T) {
+	p := newSharedProxy(t, 200)
+	c := DefaultHealthCheckConfig()
+	c.DeepCheckEvery = 1
+	h := NewModelHealthChecker(c)
+	for _, m := range []string{"openai/a", "openai/b", "openai/c"} {
+		h.RegisterModel(m, p.srv.URL, "", "", "text-generation")
+	}
+
+	for i := 0; i < 3; i++ {
+		h.checkModel("openai/a") // as ForceCheck does
+		h.checkAllModels()
+	}
+
+	calls, _ := p.seen()
+	seen := map[string]bool{}
+	for _, c := range calls {
+		seen[c] = true
+	}
+	if len(seen) < 3 {
+		t.Errorf("forcing one model starved the others; probes covered %v", calls)
+	}
+}
+
+// Each model must be probed with its own credentials. The endpoint group's key
+// comes from whichever model won map iteration, so a proxy with per-model keys
+// would authenticate as the wrong one and 401 a working model.
+func TestDeepProbeUsesTheModelsOwnApiKey(t *testing.T) {
+	got := make(chan string, 4)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{}})
+	})
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Model string `json:"model"`
+		}
+		json.NewDecoder(r.Body).Decode(&b)
+		got <- b.Model + "|" + r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{}}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := DefaultHealthCheckConfig()
+	c.DeepCheckEvery = 1
+	h := NewModelHealthChecker(c)
+	h.RegisterModel("model-a", srv.URL, "key-a", "", "text-generation")
+	h.RegisterModel("model-b", srv.URL, "key-b", "", "text-generation")
+
+	for i := 0; i < 2; i++ {
+		h.checkAllModels()
+	}
+	close(got)
+	for v := range got {
+		parts := strings.SplitN(v, "|", 2)
+		want := "Bearer key-" + strings.TrimPrefix(parts[0], "model-")
+		if parts[1] != want {
+			t.Errorf("%s probed with %q, want %q", parts[0], parts[1], want)
+		}
 	}
 }

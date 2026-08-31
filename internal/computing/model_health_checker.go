@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,6 +117,7 @@ type ModelHealthChecker struct {
 	categories       map[string]string // modelID -> models.json category, to skip non-chat models
 	sinceDeep        map[string]int    // endpoint -> cheap checks since the last engine probe
 	deepStarted      map[string]bool   // endpoint -> has ever been engine-probed
+	deepFails        map[string]int    // modelID -> consecutive failed engine probes
 	deepRotation     map[string]int    // endpoint -> which of its models is probed next
 	config           HealthCheckConfig
 	httpClient       *http.Client
@@ -138,6 +140,7 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 		sinceDeep:        make(map[string]int),
 		deepRotation:     make(map[string]int),
 		deepStarted:      make(map[string]bool),
+		deepFails:        make(map[string]int),
 		config:           config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -247,6 +250,7 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	delete(h.statuses, modelID)
 	delete(h.localNames, modelID)
 	delete(h.categories, modelID)
+	delete(h.deepFails, modelID)
 	delete(h.detectedContexts, modelID)
 	delete(h.contextProbed, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
@@ -335,7 +339,7 @@ func (h *ModelHealthChecker) checkAllModels() {
 			deepID, deepErr := "", error(nil)
 			if err == nil {
 				if deepID = h.pickDeepCheckModel(ep, info.modelIDs); deepID != "" {
-					deepErr = h.deepCheckModel(deepID, ep, info.apiKey)
+					deepErr = h.deepCheckModel(deepID, ep)
 				}
 			}
 
@@ -426,13 +430,29 @@ func (h *ModelHealthChecker) checkModel(modelID string) {
 		// Only worth asking whether the engine can serve once the HTTP server
 		// has answered; if the cheap probe already failed, the model is going
 		// to be marked down anyway and a completion would just add latency.
-		if id := h.pickDeepCheckModel(endpoint, []string{modelID}); id != "" {
-			err = h.deepCheckModel(id, endpoint, apiKey)
+		// A forced check probes this model now. It deliberately does not go
+		// through pickDeepCheckModel: that state is keyed by endpoint, and
+		// asking it about a single model would reset the endpoint's rotation to
+		// the first model and zero its interval counter — so repeatedly forcing
+		// one model on a shared proxy would stop every other model on that
+		// proxy from ever being engine-probed.
+		if h.deepCheckEnabled() && h.chatCompatible(modelID) {
+			err = h.deepCheckModel(modelID, endpoint)
 		}
 	}
 	h.applyProbeResult(modelID, endpoint, err)
 	h.recordDetectedContext(modelID, contexts)
 }
+
+// engineFailure marks a failure the engine probe has already confirmed across
+// its own consecutive-failure threshold. It must not be fed back into
+// ConsecutiveFails: that counter is shared with the cheap probe, which passes
+// between engine probes and clears it, so the model would never reach the
+// unhealthy threshold no matter how many engine probes failed. By the time this
+// is returned the backend has failed repeatedly and the state is not in doubt.
+type engineFailure struct{ err error }
+
+func (e engineFailure) Error() string { return e.err.Error() }
 
 // pickDeepCheckModel decides whether this endpoint is due an engine probe and,
 // if so, which of its models to probe.
@@ -490,15 +510,36 @@ func (h *ModelHealthChecker) pickDeepCheckModel(endpoint string, modelIDs []stri
 	return candidates[i]
 }
 
+// deepCheckEnabled reports whether engine probing is switched on at all.
+func (h *ModelHealthChecker) deepCheckEnabled() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.config.DeepCheckEvery > 0
+}
+
+// chatCompatible reports whether this model can answer a chat completion.
+func (h *ModelHealthChecker) chatCompatible(modelID string) bool {
+	h.mu.RLock()
+	category := h.categories[modelID]
+	h.mu.RUnlock()
+	return selfcheck.ChatCompatible(category)
+}
+
 // deepCheckModel runs a real one-token completion and reports an error only
 // when the backend is genuinely at fault.
 //
 // This is the check that catches what GET /v1/models cannot see: a vLLM engine
 // that has died behind a FastAPI process still serving its static model list,
 // or a proxy answering completions with 503 while listing models normally.
-func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint, apiKey string) error {
+func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint string) error {
 	h.mu.RLock()
 	served := h.localNames[modelID]
+	// This model's own key, not the endpoint group's. checkAllModels takes the
+	// group key from whichever model came first in map iteration, so on a proxy
+	// where models carry different virtual keys the probe would authenticate as
+	// the wrong one, get 401, and mark a working model unhealthy — and which
+	// model, nondeterministically.
+	apiKey := h.apiKeys[modelID]
 	h.mu.RUnlock()
 	if served == "" {
 		served = modelID
@@ -506,6 +547,27 @@ func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint, apiKey string) er
 
 	result := h.deepProbe(endpoint, apiKey, served)
 	h.recordDeepResult(modelID, result)
+
+	h.mu.Lock()
+	if result.BackendAtFault() {
+		h.deepFails[modelID]++
+	} else {
+		delete(h.deepFails, modelID)
+	}
+	fails := h.deepFails[modelID]
+	threshold := h.config.UnhealthyThreshold
+	h.mu.Unlock()
+
+	// Only report once the engine has failed UnhealthyThreshold probes in a
+	// row. Reporting on the first would let one transient 502 from a shared
+	// upstream pull a working model, and the count cannot live in
+	// ConsecutiveFails: that is shared with the cheap probe, which passes
+	// between deep probes and would clear it every time.
+	if result.BackendAtFault() && fails < threshold {
+		logs.GetLogger().Infof("Engine probe for %s failed %d/%d consecutive attempts: %s",
+			modelID, fails, threshold, describeProbeFailure(result))
+		return nil
+	}
 
 	if !result.BackendAtFault() {
 		// A 400/422 is the backend rejecting this particular prompt — a chat
@@ -517,7 +579,7 @@ func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint, apiKey string) er
 		}
 		return nil
 	}
-	return fmt.Errorf("engine probe failed: %s", describeProbeFailure(result))
+	return engineFailure{fmt.Errorf("engine probe failed %d times in a row: %s", fails, describeProbeFailure(result))}
 }
 
 // describeProbeFailure says which kind of failure this was, because "cannot
@@ -621,6 +683,21 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 		status.ConsecutiveFails++
 		status.LastError = probeErr.Error()
 
+		// A confirmed engine failure is authoritative on its own: the HTTP
+		// server answering /v1/models says nothing about whether the engine
+		// behind it can serve, which is the whole point of the deeper probe.
+		var engine engineFailure
+		if errors.As(probeErr, &engine) {
+			status.Health = ModelHealthUnhealthy
+			status.CircuitOpen = true
+			status.HealthString = status.Health.String()
+			logs.GetLogger().Warnf("Model %s marked unhealthy by the engine probe: %v", modelID, probeErr)
+			if oldHealth != status.Health && h.onStatusChange != nil {
+				go h.onStatusChange(modelID, oldHealth, status.Health)
+			}
+			return
+		}
+
 		// Determine new health status
 		if status.ConsecutiveFails >= h.config.UnhealthyThreshold {
 			status.Health = ModelHealthUnhealthy
@@ -635,6 +712,24 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 		status.TotalSuccesses++
 		status.LastSuccess = time.Now()
 		status.LastError = ""
+
+		// A passing cheap probe must not clear a confirmed engine failure. The
+		// engine probe runs once every DeepCheckEvery cycles; the cheap probe
+		// runs on all the others and keeps succeeding, because the HTTP server
+		// is alive. Letting it restore health meant the model flipped back to
+		// healthy on the very next cycle and kept taking traffic it could not
+		// serve — which is the failure this whole check exists to catch. Only a
+		// passing engine probe clears it.
+		if h.deepFails[modelID] >= h.config.UnhealthyThreshold {
+			status.ConsecutiveFails = 0
+			status.Health = ModelHealthUnhealthy
+			status.CircuitOpen = true
+			status.HealthString = status.Health.String()
+			if oldHealth != status.Health && h.onStatusChange != nil {
+				go h.onStatusChange(modelID, oldHealth, status.Health)
+			}
+			return
+		}
 
 		// Recovery logic
 		if status.Health == ModelHealthUnhealthy {
