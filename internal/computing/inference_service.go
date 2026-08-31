@@ -238,9 +238,6 @@ func (s *InferenceService) Start() error {
 		logs.GetLogger().Warnf("Failed to start model registry: %v", err)
 	}
 
-	// Start health checker
-	s.healthChecker.Start()
-
 	// Start rate limiter (with adaptive GPU-aware adjustment)
 	s.rateLimiter.Start()
 
@@ -283,6 +280,12 @@ func (s *InferenceService) Start() error {
 			s.healthChecker.SetRequestRecorder(m.RecordRequest)
 		}
 	}
+
+	// Started only once the recorder is attached. Start() runs an immediate
+	// round of checks, and the first engine probe of each endpoint is the one
+	// most likely to catch a misconfigured backend — starting earlier meant
+	// exactly those probes were never recorded.
+	s.healthChecker.Start()
 
 	// Alerting: the operator only learns about a silently broken model if
 	// something tells them, so wire the notifier before the client starts.
