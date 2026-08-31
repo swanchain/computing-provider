@@ -546,9 +546,19 @@ func TestStartupReportSendsOnASuccessfulStart(t *testing.T) {
 	if got[0].Severity != alerts.SeverityInfo {
 		t.Errorf("severity = %s, want info for a clean start", got[0].Severity)
 	}
-	for _, want := range []string{"passed its system check", "daemon", "model health"} {
-		if !strings.Contains(got[0].Message, want) {
-			t.Errorf("message missing %q: %s", want, got[0].Message)
+	if !strings.Contains(got[0].Message, "passed its system check") {
+		t.Errorf("message missing the headline: %s", got[0].Message)
+	}
+	// The individual checks moved out of the prose and into structured rows, so
+	// the mail can render them as a table and a webhook can read them without
+	// parsing a sentence.
+	names := map[string]bool{}
+	for _, c := range got[0].Checks {
+		names[c.Name] = true
+	}
+	for _, want := range []string{"daemon", "model health"} {
+		if !names[want] {
+			t.Errorf("checks missing %q: %+v", want, got[0].Checks)
 		}
 	}
 }

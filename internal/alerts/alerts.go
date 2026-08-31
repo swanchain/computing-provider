@@ -51,6 +51,36 @@ type Event struct {
 	Message   string            `json:"message"`
 	Details   map[string]string `json:"details,omitempty"`
 	Timestamp time.Time         `json:"timestamp"`
+
+	// Checks and Models carry the structured result of an audit so the mail can
+	// show it as a table rather than a wall of prefixed lines. Both are
+	// optional; events that have neither render exactly as before.
+	Checks []CheckRow `json:"checks,omitempty"`
+	Models []ModelRow `json:"models,omitempty"`
+}
+
+// Status classifies a single row for display.
+type Status string
+
+const (
+	StatusPass Status = "pass"
+	StatusWarn Status = "warn"
+	StatusFail Status = "fail"
+)
+
+// CheckRow is one audit check.
+type CheckRow struct {
+	Name    string `json:"name"`
+	Status  Status `json:"status"`
+	Message string `json:"message,omitempty"`
+}
+
+// ModelRow is one model's outcome, so an operator can see at a glance which of
+// their models are serving rather than reading it out of a summary sentence.
+type ModelRow struct {
+	Model   string `json:"model"`
+	Status  Status `json:"status"`
+	Message string `json:"message,omitempty"`
 }
 
 // Notifier posts events to a webhook, suppressing repeats of the same event for
@@ -122,6 +152,32 @@ func (n *Notifier) Fire(event, modelID, message string, severity Severity, detai
 		Details:   details,
 		Timestamp: time.Now().UTC(),
 	}
+	n.enqueue(e)
+}
+
+// FireRows is Fire with the structured rows an audit produces, so the mail can
+// render a table instead of restating them in prose.
+func (n *Notifier) FireRows(event, message string, severity Severity, checks []CheckRow, models []ModelRow, details map[string]string) {
+	if !n.Enabled() {
+		return
+	}
+	if severity != SeverityInfo && !n.allow(event+"|") {
+		return
+	}
+	n.enqueue(Event{
+		Event:     event,
+		Severity:  severity,
+		NodeID:    n.nodeID,
+		NodeName:  n.nodeName,
+		Message:   message,
+		Details:   details,
+		Checks:    checks,
+		Models:    models,
+		Timestamp: time.Now().UTC(),
+	})
+}
+
+func (n *Notifier) enqueue(e Event) {
 	n.startOnce.Do(func() { go n.run() })
 	select {
 	case n.queue <- e:

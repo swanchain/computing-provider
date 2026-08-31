@@ -150,7 +150,8 @@ func TestEmailDelivery(t *testing.T) {
 	m := msgs[0]
 
 	// The subject has to be triageable without opening the mail.
-	if !strings.Contains(m, "Subject: [cp-01] CRITICAL: model_unhealthy — org/model-a") {
+	// The glyph is additive: the severity word stays so existing filters keep working.
+	if !strings.Contains(m, "[cp-01] CRITICAL: model_unhealthy — org/model-a") {
 		t.Errorf("subject wrong; message was:\n%s", m)
 	}
 	for _, want := range []string{"org/model-a is unhealthy", "Node:      cp-01", "Node ID:   node-abc", "health: unhealthy"} {

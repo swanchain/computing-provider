@@ -338,18 +338,6 @@ func (r *selfCheckRunner) resetFailures(id string) {
 // acting on a fault — so this cannot become noise, and it answers the question
 // an operator actually has after a restart: did it come back correctly.
 func (r *selfCheckRunner) reportStartup(report selfcheck.Report) {
-	var lines []string
-	for _, res := range report.Results {
-		mark := "OK"
-		switch res.Status {
-		case selfcheck.StatusWarn:
-			mark = "WARN"
-		case selfcheck.StatusFail:
-			mark = "FAIL"
-		}
-		lines = append(lines, fmt.Sprintf("[%s] %s: %s", mark, res.Name, res.Message))
-	}
-
 	// Seed the change detector so the next audit compares against this one and
 	// an already-reported failure is not sent again ten minutes later.
 	var failing []string
@@ -360,7 +348,7 @@ func (r *selfCheckRunner) reportStartup(report selfcheck.Report) {
 	}
 	sort.Strings(failing)
 	r.mu.Lock()
-	r.lastFailureKey = strings.Join(failing, "; ")
+	r.lastFailureKey = incidentKey(report.Problems())
 	r.sameKeyCount = 1
 	// The startup mail states the problems it found, so they count as announced
 	// and their recovery is worth sending.
@@ -375,9 +363,66 @@ func (r *selfCheckRunner) reportStartup(report selfcheck.Report) {
 	}
 
 	logs.GetLogger().Infof("Startup self-check: %s", report.Summary())
-	r.notifier.Fire("startup_check", "",
-		fmt.Sprintf("Provider %s (%s).\n\n%s", headline, report.Summary(), strings.Join(lines, "\n")),
-		severity, map[string]string{"summary": report.Summary()})
+	r.notifier.FireRows("startup_check",
+		fmt.Sprintf("Provider %s (%s).", headline, report.Summary()),
+		severity, checkRows(report), modelRows(report),
+		map[string]string{"summary": report.Summary()})
+}
+
+// checkRows turns the audit's results into display rows.
+func checkRows(report selfcheck.Report) []alerts.CheckRow {
+	rows := make([]alerts.CheckRow, 0, len(report.Results))
+	for _, res := range report.Results {
+		rows = append(rows, alerts.CheckRow{
+			Name:    res.Name,
+			Status:  alertStatus(res.Status),
+			Message: res.Message,
+		})
+	}
+	return rows
+}
+
+// modelRows lists each model's inference-probe outcome. The checks say "all 8
+// models healthy"; this says which eight, which is what an operator wants when
+// one of them is not.
+func modelRows(report selfcheck.Report) []alerts.ModelRow {
+	if len(report.Probes) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(report.Probes))
+	for id := range report.Probes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	rows := make([]alerts.ModelRow, 0, len(ids))
+	for _, id := range ids {
+		p := report.Probes[id]
+		switch {
+		case p.Skipped:
+			rows = append(rows, alerts.ModelRow{Model: id, Status: alerts.StatusPass, Message: "not a chat model; not probed"})
+		case p.OK:
+			rows = append(rows, alerts.ModelRow{Model: id, Status: alerts.StatusPass, Message: fmt.Sprintf("served a request in %.0f ms", p.LatencyMs)})
+		default:
+			detail := p.Error
+			if p.StatusCode > 0 {
+				detail = fmt.Sprintf("HTTP %d: %s", p.StatusCode, p.Error)
+			}
+			rows = append(rows, alerts.ModelRow{Model: id, Status: alerts.StatusFail, Message: detail})
+		}
+	}
+	return rows
+}
+
+func alertStatus(st selfcheck.Status) alerts.Status {
+	switch st {
+	case selfcheck.StatusFail:
+		return alerts.StatusFail
+	case selfcheck.StatusWarn:
+		return alerts.StatusWarn
+	default:
+		return alerts.StatusPass
+	}
 }
 
 // report logs every audit but only mails on a change of state.
@@ -464,9 +509,10 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 	r.mu.Lock()
 	r.reportedKey = key
 	r.mu.Unlock()
-	r.notifier.Fire("selfcheck_failed", "",
-		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), detail),
-		alerts.SeverityCritical, map[string]string{"summary": report.Summary()})
+	r.notifier.FireRows("selfcheck_failed",
+		fmt.Sprintf("Self-check found problems (%s).", report.Summary()),
+		alerts.SeverityCritical, checkRows(report), modelRows(report),
+		map[string]string{"summary": report.Summary()})
 }
 
 // incidentKey identifies an ongoing incident stably enough to count

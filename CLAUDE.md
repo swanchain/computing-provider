@@ -282,6 +282,30 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `notice` | ← Server | Operational notice, forwarded to the operator's configured `[Alerts]` transports |
 | `ack` | Both | Acknowledgment |
 
+### Alert email
+
+Alerts are sent as `multipart/alternative`: a styled HTML part and a plain-text
+part carrying the same information. Both, because alerts are read on phones, in
+terminals, and by spam filters — the text part is the one that must always make
+sense.
+
+Audits pass structured rows (`alerts.CheckRow`, `alerts.ModelRow`) rather than
+formatting results into the message, so the mail renders a table listing each
+check and each model with its own status.
+
+Two rules for anything added here:
+
+- **Escape everything interpolated into the HTML part.** A `notice` from Swan
+  Inference carries a message and details chosen remotely; rendering those
+  unescaped puts attacker-chosen markup in the operator's mail client. The
+  notice sanitiser is the first line of defence, this is the second.
+- **Never signal with colour alone.** Every row carries a glyph as well —
+  colour means nothing to a colour-blind reader and nothing at all in the text
+  part.
+
+The subject keeps its `[node] SEVERITY: event` form with a glyph prepended.
+Operators filter on the severity word, so it must not be replaced.
+
 ### Request sources
 
 Every recorded request carries a `source` saying where it entered the node, and
