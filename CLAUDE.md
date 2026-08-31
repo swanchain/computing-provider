@@ -281,6 +281,28 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `heartbeat` | → Server | Liveness with metrics |
 | `ack` | Both | Acknowledgment |
 
+### Request sources
+
+Every recorded request carries a `source` saying where it entered the node, and
+the dashboard shows it as a column:
+
+| source | meaning |
+|---|---|
+| `hub` | an inference request routed over the WebSocket |
+| `health` | this node's engine probe — a one-token completion per endpoint per `DeepCheckEvery` cycles |
+| `selfcheck` | the periodic audit's inference probe |
+
+Probes are real completions and consume the same backend capacity as routed
+work, so they belong in the history rather than being load the operator cannot
+account for.
+
+`source` says where a request *entered*, not who *originated* it. A hub request
+carries no marker distinguishing customer traffic from the marketplace's own
+verification — `InferencePayload` has only `endpoint_id`, `model_id`, `request`
+and `stream` — and a provider client must not try to infer that. Guessing which
+routed requests are probes is exactly the verification internal the top of this
+file rules out publishing; it belongs server-side.
+
 ### Self-check alerting
 
 The audit emails on a *change* of state, not on state, and a problem must

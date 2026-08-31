@@ -36,6 +36,41 @@ function latencyClass(ms: number) {
   return 'text-emerald-300';
 }
 
+// Traffic this node generated to check itself looks identical to routed work in
+// every other column, so an operator seeing probe requests against their GPUs
+// had no way to tell why. The label says where a request came from, not who
+// originated it: a hub request carries no marker distinguishing customer
+// traffic from the marketplace's own verification, and a provider client should
+// not be guessing at that.
+const SOURCE_LABELS: Record<string, { label: string; title: string; className: string }> = {
+  hub: {
+    label: 'Hub',
+    title: 'Routed to this node by Swan Inference',
+    className: 'bg-blue-500/10 text-blue-300 ring-blue-500/30',
+  },
+  health: {
+    label: 'Health',
+    title: "This node's own engine probe: a one-token completion checking the backend can serve",
+    className: 'bg-slate-500/10 text-slate-400 ring-slate-500/30',
+  },
+  selfcheck: {
+    label: 'Self-check',
+    title: "This node's periodic audit probe",
+    className: 'bg-slate-500/10 text-slate-400 ring-slate-500/30',
+  },
+};
+
+function SourceBadge({ source }: { source?: string }) {
+  // Records written before this field existed all came over the WebSocket,
+  // which was the only path that recorded anything.
+  const meta = SOURCE_LABELS[source ?? 'hub'] ?? SOURCE_LABELS.hub;
+  return (
+    <span title={meta.title} className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${meta.className}`}>
+      {meta.label}
+    </span>
+  );
+}
+
 function StatusBadge({ success }: { success: boolean }) {
   return success ? (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-800/70 bg-emerald-950/40 px-2 py-1 text-xs font-medium text-emerald-300">
@@ -169,6 +204,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
                   <tr className="border-b border-slate-800 bg-slate-950/40 text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-3 text-left font-medium">Started</th>
                     <th className="px-4 py-3 text-left font-medium">Model</th>
+                    <th className="px-4 py-3 text-left font-medium">Source</th>
                     <th className="px-4 py-3 text-right font-medium">Latency</th>
                     <th className="px-4 py-3 text-right font-medium"><span className="inline-flex items-center gap-1"><ArrowDownToLine aria-hidden="true" size={13} /> Input tokens</span></th>
                     <th className="px-4 py-3 text-right font-medium"><span className="inline-flex items-center gap-1"><ArrowUpFromLine aria-hidden="true" size={13} /> Output tokens</span></th>
@@ -184,7 +220,8 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
                         <tr className={`border-b border-slate-800/80 ${request.success ? 'hover:bg-slate-800/35' : 'bg-red-950/10 hover:bg-red-950/20'}`}>
                           <td className="whitespace-nowrap px-4 py-3 text-slate-300" title={new Date(request.start_time).toLocaleString()}>{formatStarted(request.start_time)}</td>
                           <td className="max-w-xs px-4 py-3"><span className="block truncate font-mono text-xs text-slate-200" title={request.model}>{request.model}</span>{request.streaming && <span className="mt-0.5 block text-xs text-blue-300">Streaming</span>}</td>
-                          <td className={`whitespace-nowrap px-4 py-3 text-right font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</td>
+                          <td className="whitespace-nowrap px-4 py-3"><SourceBadge source={request.source} /></td>
+                            <td className={`whitespace-nowrap px-4 py-3 text-right font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-sm text-blue-200">{request.tokens_in.toLocaleString()}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-sm text-violet-200">{request.tokens_out.toLocaleString()}</td>
                           <td className="px-4 py-3 text-right"><StatusBadge success={request.success} /></td>
@@ -196,7 +233,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
                         </tr>
                         {expanded && (
                           <tr id={`receipt-${request.request_id}`} className="border-b border-slate-800 bg-slate-950/60">
-                            <td colSpan={7} className="px-4 py-4"><RequestReceipt request={request} /></td>
+                            <td colSpan={8} className="px-4 py-4"><RequestReceipt request={request} /></td>
                           </tr>
                         )}
                       </Fragment>

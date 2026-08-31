@@ -41,6 +41,11 @@ type selfCheckRunner struct {
 	opts     func() selfcheck.Options
 	cfg      func() conf.SelfCheck
 	models   modelController
+	// record, when set, files each audit probe into the request history. The
+	// audit sends a real completion to every model, which costs the same
+	// capacity as routed work; leaving it out of the history made the load
+	// invisible and easy to misjudge.
+	record func(RequestMetric)
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -78,6 +83,16 @@ func newSelfCheckRunner(n *alerts.Notifier, opts func() selfcheck.Options, cfg f
 		failures:     make(map[string]int),
 		autoDisabled: make(map[string]bool),
 	}
+}
+
+// SetRequestRecorder sets the sink for audit probes.
+func (r *selfCheckRunner) SetRequestRecorder(fn func(RequestMetric)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.record = fn
 }
 
 func (r *selfCheckRunner) Start() {
@@ -130,6 +145,7 @@ func (r *selfCheckRunner) runOnce() {
 	opts := r.opts()
 	opts.ExpectedProbeFailures = r.disabledByUs()
 	report := selfcheck.Run(opts)
+	r.recordProbes(report)
 	r.act(report)
 
 	r.mu.Lock()
@@ -142,6 +158,42 @@ func (r *selfCheckRunner) runOnce() {
 		return
 	}
 	r.report(report)
+}
+
+// recordProbes files the audit's completions into the request history so they
+// appear alongside routed traffic rather than as unexplained load.
+func (r *selfCheckRunner) recordProbes(report selfcheck.Report) {
+	r.mu.Lock()
+	record := r.record
+	r.mu.Unlock()
+	if record == nil || len(report.Probes) == 0 {
+		return
+	}
+
+	ids := make([]string, 0, len(report.Probes))
+	for id := range report.Probes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	now := time.Now()
+	for _, id := range ids {
+		probe := report.Probes[id]
+		if probe.Skipped {
+			continue // Never sent, so there is nothing to record.
+		}
+		latency := time.Duration(probe.LatencyMs) * time.Millisecond
+		record(RequestMetric{
+			RequestID:   fmt.Sprintf("selfcheck-%s-%d", id, now.UnixNano()),
+			Model:       id,
+			StartTime:   now.Add(-latency),
+			EndTime:     now,
+			LatencyMs:   probe.LatencyMs,
+			Success:     probe.OK,
+			ErrorReason: probe.Error,
+			Source:      SourceSelfCheck,
+		})
+	}
 }
 
 // act disables models whose backend cannot serve and re-enables the ones that

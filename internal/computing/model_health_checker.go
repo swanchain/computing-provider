@@ -125,6 +125,12 @@ type ModelHealthChecker struct {
 	stopCh           chan struct{}
 	running          bool
 	onStatusChange   func(modelID string, oldHealth, newHealth ModelHealth)
+	// recordRequest, when set, receives every engine probe. Probes are real
+	// completions against the backend, so they consume the same capacity as
+	// routed work — an operator watching GPU load or a metered upstream needs
+	// to see them. A callback rather than the metrics object keeps this
+	// testable without standing up the whole service.
+	recordRequest func(RequestMetric)
 }
 
 // NewModelHealthChecker creates a new health checker
@@ -177,6 +183,13 @@ func deepTimeoutOrDefault(c HealthCheckConfig) time.Duration {
 		return c.DeepCheckTimeout
 	}
 	return 30 * time.Second
+}
+
+// SetRequestRecorder sets the sink for engine-probe requests.
+func (h *ModelHealthChecker) SetRequestRecorder(fn func(RequestMetric)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recordRequest = fn
 }
 
 // SetStatusChangeCallback sets a callback for health status changes
@@ -545,8 +558,30 @@ func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint string) error {
 		served = modelID
 	}
 
+	started := time.Now()
 	result := h.deepProbe(endpoint, apiKey, served)
+	elapsed := time.Since(started)
 	h.recordDeepResult(modelID, result)
+
+	h.mu.RLock()
+	record := h.recordRequest
+	h.mu.RUnlock()
+	if record != nil {
+		reason := ""
+		if !result.OK {
+			reason = describeProbeFailure(result)
+		}
+		record(RequestMetric{
+			RequestID:   fmt.Sprintf("health-%s-%d", modelID, started.UnixNano()),
+			Model:       modelID,
+			StartTime:   started,
+			EndTime:     started.Add(elapsed),
+			LatencyMs:   float64(elapsed.Milliseconds()),
+			Success:     result.OK,
+			ErrorReason: reason,
+			Source:      SourceHealth,
+		})
+	}
 
 	h.mu.Lock()
 	if result.BackendAtFault() {

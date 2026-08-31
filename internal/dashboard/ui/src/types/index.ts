@@ -210,6 +210,12 @@ export interface RequestLog {
   streaming: boolean;
   success: boolean;
   error_reason?: string;
+  /**
+   * Where the request entered this node: "hub" for work routed over the
+   * WebSocket, "health" for the engine probe, "selfcheck" for the audit probe.
+   * Absent on records written before the field existed.
+   */
+  source?: 'hub' | 'health' | 'selfcheck';
 }
 
 export interface RequestHistoryResponse {

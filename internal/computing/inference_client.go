@@ -381,6 +381,12 @@ func (c *InferenceClient) SetStreamingInferenceHandler(handler StreamingInferenc
 	c.streamingInferenceHandler = handler
 }
 
+// Metrics exposes the request metrics so other subsystems can record against
+// the same history the dashboard reads.
+func (c *InferenceClient) Metrics() *InferenceMetrics {
+	return c.metrics
+}
+
 // SetWarmupHandler sets the handler for model warmup requests
 func (c *InferenceClient) SetWarmupHandler(handler WarmupHandler) {
 	c.warmupHandler = handler
@@ -1467,6 +1473,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 		// Record failed request
 		logs.GetLogger().Errorf("Inference request %s for model %s failed after %dms (status %d): %v", requestID, payload.ModelID, latency, statusCode, err)
 		c.metrics.RecordRequestEnd(RequestMetric{
+			Source:      SourceHub,
 			RequestID:   requestID,
 			Model:       payload.ModelID,
 			StartTime:   startTime,
@@ -1485,6 +1492,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 		// Extract token counts from response if available
 		tokensIn, tokensOut := extractTokenCounts(response.Response)
 		c.metrics.RecordRequestEnd(RequestMetric{
+			Source:    SourceHub,
 			RequestID: requestID,
 			Model:     payload.ModelID,
 			StartTime: startTime,
@@ -1505,6 +1513,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
 		c.metrics.RecordRequestEnd(RequestMetric{
+			Source:      SourceHub,
 			RequestID:   requestID,
 			Model:       payload.ModelID,
 			StartTime:   startTime,
@@ -1565,6 +1574,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 		streamReq.ErrorReason = err.Error()
 		logs.GetLogger().Errorf("Streaming inference request %s for model %s failed after %dms (status %d, tokens in/out %d/%d): %v", requestID, payload.ModelID, latency, statusCode, tokensIn, tokensOut, err)
 	}
+	streamReq.Source = SourceHub
 	c.metrics.RecordRequestEnd(streamReq)
 
 	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, statusCode, err)

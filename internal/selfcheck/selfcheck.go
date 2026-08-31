@@ -49,6 +49,10 @@ type ProbeResult struct {
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
 	Skipped    bool   `json:"skipped,omitempty"` // Not a chat model
+	// LatencyMs is how long the completion took. Reported so the audit's own
+	// probes can be recorded alongside routed traffic instead of being load the
+	// operator cannot see.
+	LatencyMs float64 `json:"latency_ms,omitempty"`
 }
 
 // BackendAtFault reports whether this failure is the backend's to answer for.
@@ -518,7 +522,10 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 }
 
 // probeModel sends one minimal completion and reports what came back.
-func (c *checker) probeModel(id string, m modelEntry) ProbeResult {
+func (c *checker) probeModel(id string, m modelEntry) (res ProbeResult) {
+	started := time.Now()
+	defer func() { res.LatencyMs = float64(time.Since(started).Milliseconds()) }()
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"model":      m.servedName(id),
 		"messages":   []map[string]string{{"role": "user", "content": "ping"}},

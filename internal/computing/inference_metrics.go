@@ -56,9 +56,9 @@ type InferenceMetrics struct {
 	maxLatencySample int       // Max samples to keep for percentile calculation
 
 	// Request history (circular buffer)
-	requestHistory    []RequestMetric
-	historyMu         sync.RWMutex
-	maxHistorySize    int
+	requestHistory []RequestMetric
+	historyMu      sync.RWMutex
+	maxHistorySize int
 }
 
 // ModelMetrics tracks metrics for a specific model
@@ -105,7 +105,27 @@ type RequestMetric struct {
 	Streaming   bool      `json:"streaming"`
 	Success     bool      `json:"success"`
 	ErrorReason string    `json:"error_reason,omitempty"`
+	// Source is where the request entered this node, so an operator can tell
+	// their own checking apart from work the marketplace sent. It deliberately
+	// does not claim to say who *originated* a hub request: the payload carries
+	// no such marker, and guessing which routed requests are verification
+	// rather than customer traffic is not something a provider client should
+	// try to infer or publish.
+	Source RequestSource `json:"source,omitempty"`
 }
+
+// RequestSource identifies the entry point a request arrived through.
+type RequestSource string
+
+const (
+	// SourceHub is an inference request routed over the WebSocket.
+	SourceHub RequestSource = "hub"
+	// SourceHealth is this node's own engine probe: a one-token completion
+	// sent by the health checker to prove the backend can actually serve.
+	SourceHealth RequestSource = "health"
+	// SourceSelfCheck is the periodic audit's inference probe.
+	SourceSelfCheck RequestSource = "selfcheck"
+)
 
 // NewInferenceMetrics creates a new InferenceMetrics instance
 func NewInferenceMetrics() *InferenceMetrics {

@@ -274,6 +274,15 @@ func (s *InferenceService) Start() error {
 	// route against actual capacity instead of the catalog value (#61)
 	s.client.SetModelContextsProvider(s.resolveModelContexts)
 
+	// Engine probes are real completions and consume the same capacity as
+	// routed work, so they belong in the request history rather than being
+	// invisible traffic against the operator's GPUs.
+	if s.healthChecker != nil && s.client != nil {
+		if m := s.client.Metrics(); m != nil {
+			s.healthChecker.SetRequestRecorder(m.RecordRequest)
+		}
+	}
+
 	// Alerting: the operator only learns about a silently broken model if
 	// something tells them, so wire the notifier before the client starts.
 	notifier := alerts.New(config.Alerts, s.nodeID, config.API.NodeName)
@@ -288,6 +297,7 @@ func (s *InferenceService) Start() error {
 	if notifier.Enabled() {
 		logs.GetLogger().Infof("Alerts enabled, posting to %s", alerts.RedactURL(config.Alerts.WebhookURL))
 	}
+	// The audit probes every model with a real completion; record those too.
 	s.selfCheck = newSelfCheckRunner(notifier,
 		func() selfcheck.Options { return selfCheckOptions(s.cpPath) },
 		func() conf.SelfCheck {
@@ -297,6 +307,11 @@ func (s *InferenceService) Start() error {
 			return conf.SelfCheck{}
 		},
 		s)
+	if s.client != nil {
+		if m := s.client.Metrics(); m != nil {
+			s.selfCheck.SetRequestRecorder(m.RecordRequest)
+		}
+	}
 
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
