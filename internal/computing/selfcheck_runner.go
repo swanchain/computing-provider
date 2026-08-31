@@ -48,9 +48,16 @@ type selfCheckRunner struct {
 	mu sync.Mutex
 	// consecutive backend-owned probe failures per model.
 	failures map[string]int
-	// Signature of the checks that were failing at the last report, so an
-	// unchanged problem is not re-sent every tick.
+	// Signature of the checks that were failing at the last audit, and how many
+	// consecutive audits have agreed on it.
 	lastFailureKey string
+	sameKeyCount   int
+	// reportedKey is the failure signature actually emailed. A recovery is only
+	// worth sending when it closes something the operator was told about:
+	// otherwise a transient blip that never met the alert threshold still sends
+	// an all-clear, and the operator gets "recovered" mail for an alarm they
+	// never received.
+	reportedKey string
 	// reported becomes true after the first audit. The first one always sends,
 	// pass or fail: a restart is a state change the operator wants confirmed,
 	// and it is the moment they most want to know the node came back correctly.
@@ -302,6 +309,10 @@ func (r *selfCheckRunner) reportStartup(report selfcheck.Report) {
 	sort.Strings(failing)
 	r.mu.Lock()
 	r.lastFailureKey = strings.Join(failing, "; ")
+	r.sameKeyCount = 1
+	// The startup mail states the problems it found, so they count as announced
+	// and their recovery is worth sending.
+	r.reportedKey = r.lastFailureKey
 	r.mu.Unlock()
 
 	severity := alerts.SeverityInfo
@@ -341,23 +352,48 @@ func (r *selfCheckRunner) report(report selfcheck.Report) {
 	// Warnings are worth a log line, not an alert; the key covers failures only.
 	sort.Strings(failing)
 	key := strings.Join(failing, "; ")
+	threshold := r.cfg().AlertThreshold()
 
 	r.mu.Lock()
-	previous := r.lastFailureKey
-	r.lastFailureKey = key
+	if key == r.lastFailureKey {
+		r.sameKeyCount++
+	} else {
+		r.sameKeyCount = 1
+		r.lastFailureKey = key
+	}
+	count := r.sameKeyCount
+	reported := r.reportedKey
 	r.mu.Unlock()
 
-	if key == previous {
-		return // Nothing changed since the last audit.
-	}
-
 	if key == "" {
+		if reported == "" {
+			return // Nothing was ever announced, so there is nothing to close.
+		}
+		r.mu.Lock()
+		r.reportedKey = ""
+		r.mu.Unlock()
 		r.notifier.Fire("selfcheck_recovered", "",
 			fmt.Sprintf("Self-check is clean again (%s)", report.Summary()),
 			alerts.SeverityInfo, nil)
 		return
 	}
 
+	if key == reported {
+		return // Already announced and still true; saying so again is noise.
+	}
+	if count < threshold {
+		// One audit is not enough. A backend answering 502 once, ten minutes
+		// before answering normally, is not something to wake anybody for — and
+		// it is well short of what it takes to deregister a model, which is the
+		// threshold this now matches.
+		logs.GetLogger().Infof("Self-check problem seen %d/%d consecutive audits, not alerting yet: %s",
+			count, threshold, key)
+		return
+	}
+
+	r.mu.Lock()
+	r.reportedKey = key
+	r.mu.Unlock()
 	r.notifier.Fire("selfcheck_failed", "",
 		fmt.Sprintf("Self-check found problems (%s): %s", report.Summary(), key),
 		alerts.SeverityCritical, map[string]string{"summary": report.Summary()})

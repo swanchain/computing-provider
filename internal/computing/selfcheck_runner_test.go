@@ -412,7 +412,11 @@ func TestSelfCheckAlertsWhenTheFailureChanges(t *testing.T) {
 	defer done()
 	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
 
+	// Each distinct problem set must persist across the alert threshold before
+	// it is announced, so every set is reported twice here.
 	r.report(failingReport("org/a: HTTP 503"))
+	r.report(failingReport("org/a: HTTP 503"))
+	r.report(failingReport("org/a: HTTP 503; org/b: HTTP 401"))
 	r.report(failingReport("org/a: HTTP 503; org/b: HTTP 401"))
 
 	var failed int
@@ -433,13 +437,14 @@ func TestSelfCheckAlertsOnRecovery(t *testing.T) {
 	defer done()
 	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
 
+	clean := selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
+	}}
+
 	r.report(failingReport("org/a: HTTP 503"))
-	r.report(selfcheck.Report{Results: []selfcheck.Result{
-		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
-	}})
-	r.report(selfcheck.Report{Results: []selfcheck.Result{
-		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
-	}})
+	r.report(failingReport("org/a: HTTP 503")) // meets the threshold, alerts
+	r.report(clean)
+	r.report(clean) // the second clean run is not a change
 
 	var failed, recovered int
 	for _, e := range events() {
@@ -451,7 +456,53 @@ func TestSelfCheckAlertsOnRecovery(t *testing.T) {
 		}
 	}
 	if failed != 1 || recovered != 1 {
-		t.Fatalf("failed=%d recovered=%d, want 1 and 1 (the second clean run is not a change)", failed, recovered)
+		t.Fatalf("failed=%d recovered=%d, want 1 and 1", failed, recovered)
+	}
+}
+
+// The bug this fixes: a proxy answering 502 on one audit and normally on the
+// next produced no failure mail the operator could act on, but did produce an
+// "all clear" — so the inbox filled with recoveries for alarms that never
+// arrived. A blip must be silent on both sides.
+func TestTransientFailureAlertsNeitherWay(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	clean := selfcheck.Report{Results: []selfcheck.Result{
+		{Name: "inference probe", Status: selfcheck.StatusPass, Message: "all models completed a request"},
+	}}
+
+	for i := 0; i < 4; i++ {
+		r.report(failingReport("openai/gpt: HTTP 502 server_is_overloaded"))
+		r.report(clean)
+	}
+
+	for _, e := range events() {
+		if e.Event == "selfcheck_failed" || e.Event == "selfcheck_recovered" {
+			t.Errorf("a one-audit blip sent %s; it should be silent", e.Event)
+		}
+	}
+}
+
+// A sustained problem still pages, once, and is not repeated while it persists.
+func TestSustainedFailureAlertsExactlyOnce(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+	r := runnerWithNotifier(t, url, newFakeModels(map[string]bool{}))
+
+	for i := 0; i < 6; i++ {
+		r.report(failingReport("org/a: HTTP 503"))
+	}
+
+	var failed int
+	for _, e := range events() {
+		if e.Event == "selfcheck_failed" {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("fired %d times for one standing problem, want 1", failed)
 	}
 }
 

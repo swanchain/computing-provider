@@ -268,6 +268,27 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `heartbeat` | → Server | Liveness with metrics |
 | `ack` | Both | Acknowledgment |
 
+### Self-check alerting
+
+The audit emails on a *change* of state, not on state, and a problem must
+persist across `AlertAfterFailures` consecutive audits before it is announced:
+
+```toml
+[SelfCheck]
+IntervalMinutes = 10
+AlertAfterFailures = 2   # consecutive audits agreeing before an email
+FailuresBeforeDisable = 2
+```
+
+A recovery is only sent when it closes a failure that was actually announced.
+Without that gate a transient error — an upstream answering 502 once, ten
+minutes before answering normally — sends no actionable failure mail but does
+send an all-clear, so the operator receives "recovered" notices for alarms that
+never arrived.
+
+Keep `AlertAfterFailures` at or below `FailuresBeforeDisable`: alerting later
+than the node acts means a model is deregistered before anyone is told why.
+
 ## CLI Structure (urfave/cli v2)
 
 Commands are defined in `cmd/computing-provider/`:
