@@ -1,4 +1,5 @@
 import type {
+  Earnings,
   InferenceMetrics,
   ModelsResponse,
   ConnectionStatus,
@@ -111,6 +112,9 @@ export const api = {
     const query = params.toString();
     return fetchJson<RequestHistoryResponse>(`/requests${query ? `?${query}` : ''}`);
   },
+
+  // Earnings
+  getEarnings: () => fetchJson<Earnings>('/earnings'),
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {

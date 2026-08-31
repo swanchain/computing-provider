@@ -435,6 +435,14 @@ func runDaemon(cctx *cli.Context) error {
 		c.JSON(200, metrics)
 	})
 
+	// Earnings, computed from this node's own served-token counters at the
+	// provider payout rates. Probes never reach those counters, so the node
+	// cannot bill itself for checking itself.
+	router.GET("/inference/earnings", func(c *gin.Context) {
+		earnings := computing.CalculateEarnings(c.Request.Context(), inferenceService.GetMetrics(), modelPrices)
+		c.JSON(200, earnings)
+	})
+
 	// Historical metrics endpoint
 	router.GET("/inference/metrics/history", func(c *gin.Context) {
 		durationStr := c.DefaultQuery("duration", "1h")

@@ -306,6 +306,25 @@ Two rules for anything added here:
 The subject keeps its `[node] SEVERITY: event` form with a glyph prepended.
 Operators filter on the severity word, so it must not be replaced.
 
+### Earnings
+
+`GET /inference/earnings` values served tokens at the provider payout rates from
+`ModelPriceCatalog`, and the dashboard shows the total in **USD**.
+
+It is computed from this node's own aggregate token counters, which cover routed
+work only: probes go through `RecordRequest` (history) and never through
+`RecordRequestEnd` (aggregates), so the node cannot bill itself for checking
+itself. A model with traffic but no available rate is shown as **unpriced**
+rather than `$0.00` — those are different statements, and rounding one into the
+other makes a working model look idle.
+
+This is the provider's own arithmetic and the UI says so. The platform's figure
+is authoritative; the local one is worth showing beside it because the two can
+disagree, and the disagreement is the useful part.
+
+Show the operator their own rates and totals. The marketplace-economics material
+listed at the top of this file stays out of this repo.
+
 ### Request sources
 
 Every recorded request carries a `source` saying where it entered the node, and

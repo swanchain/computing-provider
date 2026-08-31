@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
+import { EarningsPanel } from './components/EarningsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
@@ -58,6 +59,13 @@ function App() {
   } = usePolling(useCallback(() => api.getStatus(), []), POLL_INTERVAL);
 
   const {
+    data: earnings,
+    error: earningsError,
+    loading: earningsLoading,
+    refetch: refetchEarnings,
+  } = usePolling(useCallback(() => api.getEarnings(), []), POLL_INTERVAL);
+
+  const {
     data: models,
     error: modelsError,
     loading: modelsLoading,
@@ -95,6 +103,7 @@ function App() {
     refetchStatus();
     refetchModels();
     refetchRequestMgmt();
+    refetchEarnings();
   };
 
   const handleLock = () => {
@@ -204,6 +213,9 @@ function App() {
                 <p className="mt-1 text-sm text-slate-400">Live service, request, and capacity signals.</p>
               </div>
               <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} />
+              <div className="mt-4">
+                <EarningsPanel earnings={earnings} loading={earningsLoading} error={earningsError} />
+              </div>
             </section>
 
             <section aria-labelledby="operations-heading">

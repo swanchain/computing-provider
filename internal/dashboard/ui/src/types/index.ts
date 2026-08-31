@@ -199,6 +199,24 @@ export interface RequestManagement {
   retry_policy: RetryMetrics;
 }
 
+export interface ModelEarnings {
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+  input_usd: number;
+  output_usd: number;
+  total_usd: number;
+  /** False when no rate was available — the row is shown as unpriced, not $0. */
+  priced: boolean;
+}
+
+export interface Earnings {
+  models: ModelEarnings[];
+  total_usd: number;
+  currency: string;
+  unpriced_models: number;
+}
+
 export interface RequestLog {
   request_id: string;
   model: string;
