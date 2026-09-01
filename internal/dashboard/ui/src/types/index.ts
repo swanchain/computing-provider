@@ -210,9 +210,22 @@ export interface ModelEarnings {
   priced: boolean;
 }
 
-export interface Earnings {
-  models: ModelEarnings[];
+export interface PlatformEarnings {
   total_usd: number;
+  total_tokens: number;
+  total_inferences: number;
+  failed_inferences: number;
+  uptime_7d_percent: number;
+  /** Why the platform figure is missing, when it is. */
+  unavailable?: string;
+}
+
+export interface Earnings {
+  /** Lifetime and authoritative — what the operator is actually paid. */
+  platform: PlatformEarnings;
+  models: ModelEarnings[];
+  /** This process only; the node's counters reset on restart. */
+  session_usd: number;
   currency: string;
   unpriced_models: number;
 }

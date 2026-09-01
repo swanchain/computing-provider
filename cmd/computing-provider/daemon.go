@@ -108,6 +108,11 @@ func runDaemon(cctx *cli.Context) error {
 		logs.GetLogger().Errorf("Failed to start Inference service: %v", err)
 	}
 	modelPrices := computing.NewModelPriceCatalog(conf.GetConfig().Inference.ServiceURL)
+	// The platform's own account of what this provider served and earned. The
+	// node's counters reset on restart, so they cannot answer "what have I
+	// earned" — only "what has this process served".
+	providerStats := computing.NewProviderStatsClient(
+		conf.GetConfig().Inference.ServiceURL, conf.GetConfig().Inference.ApiKey)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
@@ -439,7 +444,7 @@ func runDaemon(cctx *cli.Context) error {
 	// provider payout rates. Probes never reach those counters, so the node
 	// cannot bill itself for checking itself.
 	router.GET("/inference/earnings", func(c *gin.Context) {
-		earnings := computing.CalculateEarnings(c.Request.Context(), inferenceService.GetMetrics(), modelPrices)
+		earnings := computing.CalculateEarnings(c.Request.Context(), inferenceService.GetMetrics(), modelPrices, providerStats)
 		c.JSON(200, earnings)
 	})
 

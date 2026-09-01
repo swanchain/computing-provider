@@ -34,17 +34,32 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
     );
   }
   const rows = earnings?.models ?? [];
+  const platform = earnings?.platform;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-800 px-4 py-4">
-        <div className="flex items-center gap-2">
-          <Coins aria-hidden="true" size={18} className="text-emerald-400" />
-          <h3 className="text-sm font-medium text-slate-300">Earned from served traffic</h3>
+      <div className="border-b border-slate-800 px-4 py-4">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Coins aria-hidden="true" size={18} className="text-emerald-400" />
+            <h3 className="text-sm font-medium text-slate-300">Total earned</h3>
+          </div>
+          {platform?.unavailable ? (
+            // Never fall back to the session figure here. It covers one process
+            // and would be read as lifetime earnings, which is a worse error
+            // than admitting the platform could not be reached.
+            <span className="text-sm text-amber-300" title={platform.unavailable}>unavailable</span>
+          ) : (
+            <div className="font-mono text-3xl font-semibold text-emerald-300">
+              {formatUSD(platform?.total_usd ?? 0)}
+            </div>
+          )}
         </div>
-        <div className="font-mono text-2xl font-semibold text-emerald-300">
-          {formatUSD(earnings?.total_usd ?? 0)}
-        </div>
+        <p className="mt-1 text-xs text-slate-400">
+          {platform?.unavailable
+            ? `Swan Inference could not be reached: ${platform.unavailable}`
+            : `Lifetime, from Swan Inference · ${platform ? formatTokens(platform.total_tokens) : '0'} tokens over ${platform?.total_inferences?.toLocaleString() ?? 0} requests`}
+        </p>
       </div>
 
       {rows.length === 0 ? (
@@ -57,7 +72,7 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
                 <th className="px-4 py-2 text-left font-medium">Model</th>
                 <th className="px-4 py-2 text-right font-medium">Input</th>
                 <th className="px-4 py-2 text-right font-medium">Output</th>
-                <th className="px-4 py-2 text-right font-medium">Earned</th>
+                <th className="px-4 py-2 text-right font-medium">This session</th>
               </tr>
             </thead>
             <tbody>
@@ -80,6 +95,14 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-700">
+                <td className="px-4 py-2 text-xs uppercase tracking-wide text-slate-400" colSpan={3}>This session</td>
+                <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-sm text-slate-300">
+                  {formatUSD(earnings?.session_usd ?? 0)}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
@@ -87,9 +110,10 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
       <p className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <span>
-          This node’s own reckoning, from tokens it served at provider payout rates. Health and
-          self-check probes are excluded. It is not a statement of account — the platform’s figure
-          is authoritative, and a difference between the two is worth asking about.
+          The table is this node’s own reckoning <strong className="text-slate-300">since it last
+          started</strong> — its counters reset on restart, so it will read far below the lifetime
+          total above. Probes are excluded. Useful for spotting a new divergence, not for knowing
+          what you have earned.
           {(earnings?.unpriced_models ?? 0) > 0 && ` ${earnings?.unpriced_models} model(s) had no rate available.`}
         </span>
       </p>

@@ -25,14 +25,39 @@ type ModelEarnings struct {
 	Priced bool `json:"priced"`
 }
 
-// Earnings is the provider's own reckoning of what it has earned.
+// PlatformEarnings is the platform's account, which is the number that governs.
+type PlatformEarnings struct {
+	TotalUSD        float64 `json:"total_usd"`
+	TotalTokens     int64   `json:"total_tokens"`
+	TotalInferences int64   `json:"total_inferences"`
+	Failed          int64   `json:"failed_inferences"`
+	UptimePercent7d float64 `json:"uptime_7d_percent"`
+	// Unavailable explains why the platform figure is missing, so the UI can
+	// say so instead of silently falling back to the local number and letting
+	// an operator mistake a session total for their lifetime earnings.
+	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// Earnings pairs the platform's account with this node's own reckoning.
+//
+// The platform figure leads: it is lifetime, authoritative, and what the
+// operator is actually paid. The local one covers only the current process —
+// the counters reset on restart — so it is a session cross-check, useful for
+// noticing a new divergence rather than for knowing what has been earned.
 type Earnings struct {
-	Models   []ModelEarnings `json:"models"`
-	TotalUSD float64         `json:"total_usd"`
-	Currency string          `json:"currency"`
+	Platform PlatformEarnings `json:"platform"`
+	Models   []ModelEarnings  `json:"models"`
+	// SessionUSD is what this process has served, priced locally. Not lifetime.
+	SessionUSD float64 `json:"session_usd"`
+	Currency   string  `json:"currency"`
 	// Unpriced counts models with served tokens but no rate, so a total that is
 	// lower than expected has a visible reason rather than looking like a loss.
 	Unpriced int `json:"unpriced_models"`
+}
+
+// platformLookup is the part of the stats client earnings needs.
+type platformLookup interface {
+	Stats(ctx context.Context) (*ProviderStats, error)
 }
 
 // priceLookup is the part of the price catalog earnings needs.
@@ -50,8 +75,23 @@ type priceLookup interface {
 // This is the provider's own arithmetic, not a statement of account. It is
 // worth showing next to the platform's figure precisely because the two can
 // disagree — and when they do, that disagreement is the useful information.
-func CalculateEarnings(ctx context.Context, metrics *InferenceMetricsData, prices priceLookup) *Earnings {
+func CalculateEarnings(ctx context.Context, metrics *InferenceMetricsData, prices priceLookup, platform platformLookup) *Earnings {
 	out := &Earnings{Currency: "USD", Models: []ModelEarnings{}}
+
+	if platform == nil {
+		out.Platform.Unavailable = "no provider API key configured"
+	} else if ps, err := platform.Stats(ctx); err != nil {
+		out.Platform.Unavailable = err.Error()
+	} else if ps != nil {
+		out.Platform = PlatformEarnings{
+			TotalUSD:        ps.TotalEarningsUSDC,
+			TotalTokens:     ps.TotalTokens,
+			TotalInferences: ps.TotalInferences,
+			Failed:          ps.FailedInferences,
+			UptimePercent7d: ps.UptimePercent7d,
+		}
+	}
+
 	if metrics == nil || len(metrics.ModelMetrics) == 0 {
 		return out
 	}
@@ -80,7 +120,7 @@ func CalculateEarnings(ctx context.Context, metrics *InferenceMetricsData, price
 			row.OutputUSD = float64(m.TotalTokensOut) / tokensPerPriceUnit * r.ProviderOutputPrice
 			row.TotalUSD = row.InputUSD + row.OutputUSD
 			row.Priced = true
-			out.TotalUSD += row.TotalUSD
+			out.SessionUSD += row.TotalUSD
 		} else {
 			out.Unpriced++
 		}
