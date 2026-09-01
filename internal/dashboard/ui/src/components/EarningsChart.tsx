@@ -9,6 +9,12 @@ const WINDOWS = [
   { id: '30d', label: '30 days' },
 ] as const;
 
+function formatTokens(v: number) {
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+  return v.toLocaleString();
+}
+
 function formatUSD(v: number) {
   if (v === 0) return '$0';
   if (v < 0.01) return `$${v.toFixed(5)}`;
@@ -18,6 +24,7 @@ function formatUSD(v: number) {
 
 export function EarningsChart() {
   const [window_, setWindow] = useState<string>('24h');
+  const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error } = usePolling(
     useCallback(() => api.getEarningsHistory(window_), [window_]),
     60_000,
@@ -25,6 +32,7 @@ export function EarningsChart() {
 
   const points = data?.points ?? [];
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
+  const active = hovered !== null ? points[hovered] : null;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60">
@@ -58,18 +66,49 @@ export function EarningsChart() {
         <p className="px-4 py-6 text-sm text-slate-400">No history for this window yet.</p>
       ) : (
         <div className="px-4 py-4">
-          <div className="flex h-32 items-end gap-px" role="img"
+          {/* The readout sits above the bars in fixed space rather than
+              floating over them: a tooltip that follows the cursor covers the
+              neighbouring bars an operator is trying to compare against, and
+              reserving the row stops the chart jumping as it appears. */}
+          <div className="mb-2 flex min-h-[2.5rem] items-start" aria-live="polite">
+            {active ? (
+              <div className="text-xs">
+                <div className="font-mono text-sm text-emerald-300">{formatUSD(active.usd)}</div>
+                <div className="text-slate-400">
+                  {new Date(active.timestamp).toLocaleString()} · {formatTokens(active.tokens_in)} in
+                  {' / '}{formatTokens(active.tokens_out)} out
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500">
+                Hover a bar for its interval. {points.length} intervals shown.
+              </div>
+            )}
+          </div>
+
+          <div className="flex h-32 items-end gap-px"
+               onMouseLeave={() => setHovered(null)}
+               role="img"
                aria-label={`Earnings per interval over ${window_}, totalling ${formatUSD(data?.total_usd ?? 0)}`}>
-            {points.map((p) => {
+            {points.map((p, i) => {
               // Against a zero peak every bar would be full height, which reads
               // as a busy period rather than an idle one.
               const h = peak > 0 ? Math.max(2, (p.usd / peak) * 100) : 2;
+              const on = hovered === i;
               return (
-                <div
+                <button
                   key={p.timestamp}
-                  className="flex-1 rounded-t bg-emerald-500/70 transition hover:bg-emerald-400"
+                  type="button"
+                  // Focusable as well as hoverable, so the figures are reachable
+                  // without a mouse.
+                  onMouseEnter={() => setHovered(i)}
+                  onFocus={() => setHovered(i)}
+                  onBlur={() => setHovered(null)}
+                  aria-label={`${new Date(p.timestamp).toLocaleString()}: ${formatUSD(p.usd)}, ${p.tokens_in.toLocaleString()} in, ${p.tokens_out.toLocaleString()} out`}
+                  className={`flex-1 rounded-t transition focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+                    on ? 'bg-emerald-300' : 'bg-emerald-500/70 hover:bg-emerald-400'
+                  }`}
                   style={{ height: `${h}%` }}
-                  title={`${new Date(p.timestamp).toLocaleString()} — ${formatUSD(p.usd)} · ${p.tokens_in.toLocaleString()} in / ${p.tokens_out.toLocaleString()} out`}
                 />
               );
             })}
