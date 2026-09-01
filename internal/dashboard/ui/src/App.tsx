@@ -11,6 +11,7 @@ import {
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
+import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
@@ -211,8 +212,9 @@ function App() {
                 <p className="mt-1 text-sm text-slate-400">Live service, request, and capacity signals.</p>
               </div>
               <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} earnings={earnings} />
-              <div className="mt-4">
+              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
                 <EarningsChart />
+                <ModelDistribution earnings={earnings} loading={!earnings} />
               </div>
             </section>
 
