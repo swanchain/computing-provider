@@ -13,6 +13,7 @@ import { api } from './api/client';
 import { EarningsPanel } from './components/EarningsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
+import { ModelHealthMap } from './components/ModelHealthMap';
 import { ModelsPanel } from './components/ModelsPanel';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -223,6 +224,11 @@ function App() {
                 <h2 id="operations-heading" className="text-xl font-semibold text-white">Operations</h2>
                 <p className="mt-1 text-sm text-slate-400">Model readiness and local resource pressure.</p>
               </div>
+              <ModelHealthMap
+                models={models?.models ?? []}
+                loading={modelsLoading}
+                onModelClick={setSelectedModelId}
+              />
               <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(340px,0.75fr)]">
                 <ModelsPanel
                   models={models?.models ?? []}
