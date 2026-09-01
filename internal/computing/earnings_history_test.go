@@ -28,7 +28,7 @@ func TestHistoryDiffsCumulativeCounters(t *testing.T) {
 		[]HistoricalDataPoint{pt(0, 1_000_000, 0), pt(60, 3_000_000, 0), pt(120, 4_000_000, 0)},
 		oneModel(4_000_000, 0),
 		fakePrices{rates: map[string]ModelPrice{"org/a": {ProviderInputPrice: 1.0}}},
-		"24h")
+		"24h", 0)
 
 	if len(s.Points) != 3 {
 		t.Fatalf("got %d points, want 3", len(s.Points))
@@ -52,7 +52,7 @@ func TestHistoryTreatsACounterResetAsARestart(t *testing.T) {
 		[]HistoricalDataPoint{pt(0, 5_000_000, 0), pt(60, 8_000_000, 0), pt(120, 1_000_000, 0), pt(180, 2_500_000, 0)},
 		oneModel(2_500_000, 0),
 		fakePrices{rates: map[string]ModelPrice{"org/a": {ProviderInputPrice: 1.0}}},
-		"24h")
+		"24h", 0)
 
 	if s.Restarts != 1 {
 		t.Errorf("restarts = %d, want 1", s.Restarts)
@@ -82,7 +82,7 @@ func TestHistoryPricesWithABlendedRate(t *testing.T) {
 			"cheap": {ProviderInputPrice: 1.0},
 			"dear":  {ProviderInputPrice: 5.0},
 		}},
-		"24h")
+		"24h", 0)
 
 	// Blended: (3M*1 + 1M*5) / 4M = 2.0 per million-token unit.
 	if got := s.Points[1].USD; got < 7.9 || got > 8.1 {
@@ -91,7 +91,7 @@ func TestHistoryPricesWithABlendedRate(t *testing.T) {
 }
 
 func TestHistoryWithNoDataIsSafe(t *testing.T) {
-	s := CalculateEarningsHistory(context.Background(), nil, nil, nil, "24h")
+	s := CalculateEarningsHistory(context.Background(), nil, nil, nil, "24h", 0)
 	if s == nil || len(s.Points) != 0 || s.TotalUSD != 0 {
 		t.Errorf("got %+v, want an empty series", s)
 	}
@@ -102,8 +102,51 @@ func TestHistoryWithNoDataIsSafe(t *testing.T) {
 func TestHistoryReportsWhatItActuallyCovers(t *testing.T) {
 	s := CalculateEarningsHistory(context.Background(),
 		[]HistoricalDataPoint{pt(0, 0, 0), pt(120, 1_000, 0)},
-		oneModel(1_000, 0), fakePrices{}, "30d")
+		oneModel(1_000, 0), fakePrices{}, "30d", 0)
 	if s.Covers == "" {
 		t.Error("the series should say how far back it actually reaches")
+	}
+}
+
+// The bug this guards: a coarser display bucket must not change the total.
+// Differencing was happening after down-sampling, so a restart inside a bucket
+// swallowed everything served before it — the 30-day view of the same week
+// reported a quarter of what the 7-day view did.
+func TestBucketSizeDoesNotChangeTheTotal(t *testing.T) {
+	// Two hours of samples with a restart in the middle of the second hour.
+	samples := []HistoricalDataPoint{
+		pt(0, 1_000_000, 0), pt(20, 2_000_000, 0), pt(40, 3_000_000, 0),
+		pt(60, 4_000_000, 0), pt(80, 500_000, 0), pt(100, 1_500_000, 0),
+	}
+	metrics := oneModel(1_500_000, 0)
+	rates := fakePrices{rates: map[string]ModelPrice{"org/a": {ProviderInputPrice: 1.0}}}
+
+	fine := CalculateEarningsHistory(context.Background(), samples, metrics, rates, "24h", 0)
+	hourly := CalculateEarningsHistory(context.Background(), samples, metrics, rates, "24h", time.Hour)
+	daily := CalculateEarningsHistory(context.Background(), samples, metrics, rates, "30d", 24*time.Hour)
+
+	if fine.TotalUSD != hourly.TotalUSD || hourly.TotalUSD != daily.TotalUSD {
+		t.Errorf("totals diverge with bucket size: fine=%v hourly=%v daily=%v",
+			fine.TotalUSD, hourly.TotalUSD, daily.TotalUSD)
+	}
+	// The total is accumulated independently of bucketing, so comparing totals
+	// alone cannot catch a bucketing bug. What must hold is that the plotted
+	// points still add up to it: a chart whose bars sum to something other than
+	// the stated figure is worse than no chart.
+	for _, s := range []*EarningsSeries{fine, hourly, daily} {
+		var sum float64
+		for _, p := range s.Points {
+			sum += p.USD
+		}
+		if diff := sum - s.TotalUSD; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("%s: points sum to %v but total says %v", s.Duration, sum, s.TotalUSD)
+		}
+	}
+	if len(daily.Points) >= len(fine.Points) {
+		t.Errorf("a daily bucket should aggregate: %d points vs %d fine", len(daily.Points), len(fine.Points))
+	}
+	// Aggregation must not lose the restart count either.
+	if daily.Restarts != fine.Restarts {
+		t.Errorf("restarts = %d aggregated vs %d fine", daily.Restarts, fine.Restarts)
 	}
 }

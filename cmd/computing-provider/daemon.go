@@ -466,19 +466,21 @@ func runDaemon(cctx *cli.Context) error {
 				return
 			}
 		}
-		resolution := time.Hour
+		// Display bucket. The samples themselves are always fetched at the
+		// finest resolution: the deltas have to be computed before any
+		// down-sampling, or a restart inside a bucket swallows the traffic that
+		// preceded it.
+		bucket := time.Hour
 		if duration > 7*24*time.Hour {
-			resolution = 24 * time.Hour
-		} else if duration <= 24*time.Hour {
-			resolution = time.Hour
+			bucket = 24 * time.Hour
 		}
-		points, err := inferenceService.GetMetricsHistory(duration, resolution)
+		points, err := inferenceService.GetMetricsHistory(duration, time.Minute)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
 		c.JSON(200, computing.CalculateEarningsHistory(
-			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr))
+			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr, bucket))
 	})
 
 	// Historical metrics endpoint

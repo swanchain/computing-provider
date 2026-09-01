@@ -66,7 +66,12 @@ func blendedRate(metrics *InferenceMetricsData, rates map[string]ModelPrice) (in
 // week of real history is a normal number, so this is the common path, not an
 // edge case: treating a reset naively would subtract a whole process's traffic
 // from the chart.
-func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string) *EarningsSeries {
+// bucketSize is the display interval the per-sample deltas are summed into.
+// Differencing must happen at the finest resolution available and only then be
+// aggregated: down-sampling first and differencing after loses everything
+// served between a bucket's start and its last restart, which on a node that
+// restarts a dozen times a week is most of it.
+func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration) *EarningsSeries {
 	out := &EarningsSeries{Points: []EarningsPoint{}, Currency: "USD", Duration: duration}
 	if len(snapshots) == 0 || metrics == nil {
 		return out
@@ -106,10 +111,21 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 
 		// Rates are per million tokens, and the deltas are raw token counts.
 		usd := float64(dIn)/tokensPerPriceUnit*inRate + float64(dOut)/tokensPerPriceUnit*outRate
-		out.Points = append(out.Points, EarningsPoint{
-			Timestamp: s.Timestamp, TokensIn: dIn, TokensOut: dOut, USD: usd,
-		})
 		out.TotalUSD += usd
+
+		key := s.Timestamp
+		if bucket > 0 {
+			key = s.Timestamp.Truncate(bucket)
+		}
+		if n := len(out.Points); n > 0 && out.Points[n-1].Timestamp.Equal(key) {
+			out.Points[n-1].TokensIn += dIn
+			out.Points[n-1].TokensOut += dOut
+			out.Points[n-1].USD += usd
+			continue
+		}
+		out.Points = append(out.Points, EarningsPoint{
+			Timestamp: key, TokensIn: dIn, TokensOut: dOut, USD: usd,
+		})
 	}
 
 	if n := len(snapshots); n > 0 {

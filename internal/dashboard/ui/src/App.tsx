@@ -11,7 +11,6 @@ import {
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
-import { EarningsPanel } from './components/EarningsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelHealthMap } from './components/ModelHealthMap';
@@ -62,8 +61,6 @@ function App() {
 
   const {
     data: earnings,
-    error: earningsError,
-    loading: earningsLoading,
     refetch: refetchEarnings,
   } = usePolling(useCallback(() => api.getEarnings(), []), POLL_INTERVAL);
 
@@ -214,9 +211,8 @@ function App() {
                 <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider health</h2>
                 <p className="mt-1 text-sm text-slate-400">Live service, request, and capacity signals.</p>
               </div>
-              <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} />
-              <div className="mt-4 space-y-4">
-                <EarningsPanel earnings={earnings} loading={earningsLoading} error={earningsError} />
+              <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} earnings={earnings} />
+              <div className="mt-4">
                 <EarningsChart />
               </div>
             </section>
