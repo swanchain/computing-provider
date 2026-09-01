@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
+import { EarningsChart } from './components/EarningsChart';
 import { EarningsPanel } from './components/EarningsPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
@@ -214,8 +215,9 @@ function App() {
                 <p className="mt-1 text-sm text-slate-400">Live service, request, and capacity signals.</p>
               </div>
               <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} />
-              <div className="mt-4">
+              <div className="mt-4 space-y-4">
                 <EarningsPanel earnings={earnings} loading={earningsLoading} error={earningsError} />
+                <EarningsChart />
               </div>
             </section>
 

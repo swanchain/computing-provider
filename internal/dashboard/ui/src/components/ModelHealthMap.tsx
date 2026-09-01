@@ -23,12 +23,12 @@ function bucketOf(m: ModelStatus): Bucket {
 // Each bucket differs by more than hue: filled, ringed, hollow. Colour alone
 // carries nothing for a colour-blind operator, and this strip is meant to be
 // readable in one glance rather than after a legend lookup.
-const STYLE: Record<Bucket, { dot: string; label: string; swatch: string }> = {
-  healthy:  { dot: 'bg-emerald-400',                              label: 'healthy',  swatch: 'bg-emerald-400' },
-  degraded: { dot: 'bg-amber-400 ring-2 ring-amber-400/40',       label: 'degraded', swatch: 'bg-amber-400' },
-  offline:  { dot: 'bg-red-500 ring-2 ring-red-500/40',           label: 'offline',  swatch: 'bg-red-500' },
-  disabled: { dot: 'bg-transparent border-2 border-slate-600',    label: 'disabled', swatch: 'border-2 border-slate-600' },
-  unknown:  { dot: 'bg-slate-600',                                label: 'unknown',  swatch: 'bg-slate-600' },
+const STYLE: Record<Bucket, { dot: string; label: string }> = {
+  healthy:  { dot: 'bg-emerald-400',                              label: 'healthy' },
+  degraded: { dot: 'bg-amber-400 ring-2 ring-amber-400/40',       label: 'degraded' },
+  offline:  { dot: 'bg-red-500 ring-2 ring-red-500/40',           label: 'offline' },
+  disabled: { dot: 'bg-transparent border-2 border-slate-600',    label: 'disabled' },
+  unknown:  { dot: 'bg-slate-600',                                label: 'unknown' },
 };
 
 const ORDER: Bucket[] = ['offline', 'degraded', 'unknown', 'disabled', 'healthy'];
@@ -62,34 +62,31 @@ export function ModelHealthMap({ models, loading, onModelClick }: ModelHealthMap
         <p className="text-xs text-slate-400">{summary}</p>
       </div>
 
-      <ul className="mt-3 flex flex-wrap gap-2" aria-label="Model health">
+      {/* One row per model, named. An unlabelled dot answers "is something
+          wrong" but not "which one" — and the second question is the one an
+          operator has the moment the answer to the first is yes. */}
+      <ul className="mt-3 grid gap-1 sm:grid-cols-2" aria-label="Model health">
         {sorted.map((m) => {
           const b = bucketOf(m);
-          const text = `${m.id}: ${STYLE[b].label}`;
           return (
             <li key={m.id}>
               <button
                 type="button"
                 onClick={() => onModelClick?.(m.id)}
-                title={text}
-                aria-label={text}
-                className="flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                aria-label={`${m.id}: ${STYLE[b].label}`}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <span className={`block h-3 w-3 rounded-full ${STYLE[b].dot}`} />
+                <span className={`block h-2.5 w-2.5 shrink-0 rounded-full ${STYLE[b].dot}`} />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-200" title={m.id}>{m.id}</span>
+                <span className={`shrink-0 text-xs ${b === 'healthy' ? 'text-slate-500' : 'text-slate-300'}`}>
+                  {STYLE[b].label}
+                </span>
               </button>
             </li>
           );
         })}
       </ul>
 
-      <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-        {ORDER.filter((b) => counts[b]).map((b) => (
-          <li key={b} className="flex items-center gap-1.5">
-            <span className={`block h-2.5 w-2.5 rounded-full ${STYLE[b].swatch}`} />
-            {STYLE[b].label}
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

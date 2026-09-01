@@ -1,5 +1,6 @@
 import type {
   Earnings,
+  EarningsSeries,
   InferenceMetrics,
   ModelsResponse,
   ConnectionStatus,
@@ -115,6 +116,7 @@ export const api = {
 
   // Earnings
   getEarnings: () => fetchJson<Earnings>('/earnings'),
+  getEarningsHistory: (duration: string) => fetchJson<EarningsSeries>(`/earnings/history?duration=${duration}`),
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {

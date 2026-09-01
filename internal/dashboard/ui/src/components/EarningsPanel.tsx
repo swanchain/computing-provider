@@ -42,7 +42,7 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <div className="flex items-center gap-2">
             <Coins aria-hidden="true" size={18} className="text-emerald-400" />
-            <h3 className="text-sm font-medium text-slate-300">Total earned</h3>
+            <h3 className="text-sm font-medium text-slate-300">Lifetime earned</h3>
           </div>
           {platform?.unavailable ? (
             // Never fall back to the session figure here. It covers one process
@@ -58,7 +58,7 @@ export function EarningsPanel({ earnings, loading, error }: EarningsPanelProps) 
         <p className="mt-1 text-xs text-slate-400">
           {platform?.unavailable
             ? `Swan Inference could not be reached: ${platform.unavailable}`
-            : `Lifetime, from Swan Inference · ${platform ? formatTokens(platform.total_tokens) : '0'} tokens over ${platform?.total_inferences?.toLocaleString() ?? 0} requests`}
+            : `Gross, all time, from Swan Inference · ${platform ? formatTokens(platform.total_tokens) : '0'} tokens over ${platform?.total_inferences?.toLocaleString() ?? 0} requests. Swan Inference does not publish a paid/outstanding balance.`}
         </p>
       </div>
 

@@ -448,6 +448,39 @@ func runDaemon(cctx *cli.Context) error {
 		c.JSON(200, earnings)
 	})
 
+	// Earnings over time, priced from the node's own stored history. Windows
+	// longer than the retained history report what they actually cover.
+	router.GET("/inference/earnings/history", func(c *gin.Context) {
+		durationStr := c.DefaultQuery("duration", "24h")
+		duration, err := time.ParseDuration(durationStr)
+		if err != nil {
+			// 30d is not a Go duration, but it is the window an operator asks
+			// for, so it is accepted rather than rejected as malformed.
+			switch durationStr {
+			case "7d":
+				duration = 7 * 24 * time.Hour
+			case "30d":
+				duration = 30 * 24 * time.Hour
+			default:
+				c.JSON(400, gin.H{"error": "invalid duration"})
+				return
+			}
+		}
+		resolution := time.Hour
+		if duration > 7*24*time.Hour {
+			resolution = 24 * time.Hour
+		} else if duration <= 24*time.Hour {
+			resolution = time.Hour
+		}
+		points, err := inferenceService.GetMetricsHistory(duration, resolution)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, computing.CalculateEarningsHistory(
+			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr))
+	})
+
 	// Historical metrics endpoint
 	router.GET("/inference/metrics/history", func(c *gin.Context) {
 		durationStr := c.DefaultQuery("duration", "1h")

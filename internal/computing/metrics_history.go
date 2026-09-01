@@ -40,6 +40,11 @@ type HistoricalDataPoint struct {
 	P99LatencyMs      float64   `json:"p99_latency_ms"`
 	TokensPerSecond   float64   `json:"tokens_per_second"`
 	RequestsPerMinute float64   `json:"requests_per_minute"`
+	// Cumulative counters, carried through so a caller can difference them into
+	// per-bucket totals. They reset when the provider restarts, so a decrease
+	// between points means a restart rather than negative traffic.
+	TotalTokensIn  int64 `json:"total_tokens_in"`
+	TotalTokensOut int64 `json:"total_tokens_out"`
 }
 
 // MetricsHistory manages historical metrics storage and retrieval
@@ -55,8 +60,11 @@ type MetricsHistory struct {
 func NewMetricsHistory() *MetricsHistory {
 	return &MetricsHistory{
 		recordInterval: 1 * time.Minute, // Record every minute
-		retentionDays:  7,               // Keep 7 days of data
-		stopChan:       make(chan struct{}),
+		// 30 days so the dashboard can show a month of earnings. The data only
+		// accumulates from the point this ships — history already pruned at 7
+		// days cannot be recovered, so a month-long chart fills in over a month.
+		retentionDays: 30,
+		stopChan:      make(chan struct{}),
 	}
 }
 
@@ -239,6 +247,8 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 				P99LatencyMs:      e.P99LatencyMs,
 				TokensPerSecond:   e.TokensPerSecond,
 				RequestsPerMinute: e.RequestsPerMinute,
+				TotalTokensIn:     e.TotalTokensIn,
+				TotalTokensOut:    e.TotalTokensOut,
 			}
 		}
 		return result
@@ -280,6 +290,12 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 		}
 
 		count := float64(len(bucket))
+		// The cumulative counters take the bucket's *last* value, not its
+		// maximum. Entries arrive in ascending time order, so the last one is
+		// the state at the end of the bucket — and if the provider restarted
+		// mid-bucket, the maximum would be a pre-restart total that no longer
+		// exists, which would make every later difference wrong.
+		last := bucket[len(bucket)-1]
 		result = append(result, HistoricalDataPoint{
 			Timestamp:         time.Unix(key, 0),
 			TotalRequests:     maxTotalReqs,
@@ -288,6 +304,8 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 			P99LatencyMs:      sumP99Latency / count,
 			TokensPerSecond:   sumTokensPerSec / count,
 			RequestsPerMinute: sumReqPerMin / count,
+			TotalTokensIn:     last.TotalTokensIn,
+			TotalTokensOut:    last.TotalTokensOut,
 		})
 	}
 

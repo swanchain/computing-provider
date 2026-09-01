@@ -230,6 +230,24 @@ export interface Earnings {
   unpriced_models: number;
 }
 
+export interface EarningsPoint {
+  timestamp: string;
+  tokens_in: number;
+  tokens_out: number;
+  usd: number;
+}
+
+export interface EarningsSeries {
+  points: EarningsPoint[];
+  total_usd: number;
+  currency: string;
+  duration: string;
+  /** Counter resets inside the window; the total is a floor, not exact. */
+  restarts: number;
+  /** How far back the stored history actually reaches. */
+  covers?: string;
+}
+
 export interface RequestLog {
   request_id: string;
   model: string;
