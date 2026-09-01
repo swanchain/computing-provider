@@ -134,6 +134,8 @@ export interface SettingsSaveResult {
 }
 
 export interface ModelsResponse {
+  /** Rolling per-model health samples, oldest first. Resets when the node restarts. */
+  health_log?: Record<string, string[]>;
   models: ModelStatus[];
   prices: Record<string, ModelPrice>;
   summary: {

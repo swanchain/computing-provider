@@ -118,13 +118,19 @@ type ModelHealthChecker struct {
 	sinceDeep        map[string]int    // endpoint -> cheap checks since the last engine probe
 	deepStarted      map[string]bool   // endpoint -> has ever been engine-probed
 	deepFails        map[string]int    // modelID -> consecutive failed engine probes
-	deepRotation     map[string]int    // endpoint -> which of its models is probed next
-	config           HealthCheckConfig
-	httpClient       *http.Client
-	deepClient       *http.Client
-	stopCh           chan struct{}
-	running          bool
-	onStatusChange   func(modelID string, oldHealth, newHealth ModelHealth)
+	// healthLog is a short rolling record of each model's health, so the UI can
+	// show whether a model has been steady or flapping rather than only its
+	// state at this instant. Kept in memory and capped: this answers "has this
+	// been stable lately", which is a question about the last hour, not a
+	// permanent record worth a schema migration.
+	healthLog      map[string][]ModelHealth
+	deepRotation   map[string]int // endpoint -> which of its models is probed next
+	config         HealthCheckConfig
+	httpClient     *http.Client
+	deepClient     *http.Client
+	stopCh         chan struct{}
+	running        bool
+	onStatusChange func(modelID string, oldHealth, newHealth ModelHealth)
 	// recordRequest, when set, receives every engine probe. Probes are real
 	// completions against the backend, so they consume the same capacity as
 	// routed work — an operator watching GPU load or a metered upstream needs
@@ -147,6 +153,7 @@ func NewModelHealthChecker(config HealthCheckConfig) *ModelHealthChecker {
 		deepRotation:     make(map[string]int),
 		deepStarted:      make(map[string]bool),
 		deepFails:        make(map[string]int),
+		healthLog:        make(map[string][]ModelHealth),
 		config:           config,
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
@@ -264,6 +271,7 @@ func (h *ModelHealthChecker) UnregisterModel(modelID string) {
 	delete(h.localNames, modelID)
 	delete(h.categories, modelID)
 	delete(h.deepFails, modelID)
+	delete(h.healthLog, modelID)
 	delete(h.detectedContexts, modelID)
 	delete(h.contextProbed, modelID)
 	logs.GetLogger().Infof("Unregistered model %s from health checking", modelID)
@@ -784,11 +792,38 @@ func (h *ModelHealthChecker) applyProbeResult(modelID, endpoint string, probeErr
 	}
 
 	status.HealthString = status.Health.String()
+	h.appendHealthLog(modelID, status.Health)
 
 	// Notify callback if health changed
 	if oldHealth != status.Health && h.onStatusChange != nil {
 		go h.onStatusChange(modelID, oldHealth, status.Health)
 	}
+}
+
+// healthLogSize caps the rolling record. At the default 30s interval this is
+// about an hour, which is the window in which "it keeps flapping" is a useful
+// observation.
+const healthLogSize = 120
+
+// appendHealthLog records one sample. The caller holds h.mu.
+func (h *ModelHealthChecker) appendHealthLog(modelID string, state ModelHealth) {
+	log := append(h.healthLog[modelID], state)
+	if len(log) > healthLogSize {
+		log = log[len(log)-healthLogSize:]
+	}
+	h.healthLog[modelID] = log
+}
+
+// HealthLog returns the rolling health record for a model, oldest first.
+func (h *ModelHealthChecker) HealthLog(modelID string) []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	log := h.healthLog[modelID]
+	out := make([]string, 0, len(log))
+	for _, st := range log {
+		out = append(out, st.String())
+	}
+	return out
 }
 
 // probeEndpoint performs the actual health check request.

@@ -253,10 +253,19 @@ func runDaemon(cctx *cli.Context) error {
 		if err != nil {
 			logs.GetLogger().Debugf("Model pricing is temporarily unavailable: %v", err)
 		}
+		// A short rolling health record per model, so each row can show whether
+		// it has been steady or flapping rather than only its state right now.
+		healthLog := make(map[string][]string, len(models))
+		for _, model := range models {
+			if log := inferenceService.ModelHealthLog(model.ID); len(log) > 0 {
+				healthLog[model.ID] = log
+			}
+		}
 		c.JSON(200, gin.H{
-			"models":  models,
-			"summary": summary,
-			"prices":  prices,
+			"models":     models,
+			"summary":    summary,
+			"prices":     prices,
+			"health_log": healthLog,
 			// Which window is reported upstream for each model and where it came
 			// from, so an operator can see an unreported window without reading
 			// the log (#75).

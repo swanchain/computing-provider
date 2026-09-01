@@ -3,8 +3,45 @@ import { CheckCircle, XCircle, AlertCircle, LockKeyhole, Power, RefreshCw, Rotat
 import { api } from '../api/client';
 import type { ModelPrice, ModelStatus } from '../types';
 
+// A strip of recent health samples, oldest to newest. The current state is one
+// dot; whether it has been flapping is the shape of the whole row, which a
+// single indicator cannot show.
+const HEALTH_DOT: Record<string, string> = {
+  healthy: 'bg-emerald-400',
+  degraded: 'bg-amber-400',
+  unhealthy: 'bg-red-500',
+  unknown: 'bg-slate-600',
+};
+
+function HealthStrip({ samples }: { samples: string[] }) {
+  if (!samples || samples.length === 0) return null;
+  // Newest on the right, and only the recent tail: an hour of 30-second samples
+  // is more dots than a row can carry legibly.
+  const shown = samples.slice(-40);
+  const counts = shown.reduce<Record<string, number>>((a, s) => {
+    a[s] = (a[s] ?? 0) + 1;
+    return a;
+  }, {});
+  const summary = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+  return (
+    <div className="mt-1.5 flex items-center gap-2">
+      <div className="flex gap-px" role="img" aria-label={`Recent health: ${summary}`}>
+        {shown.map((state, i) => (
+          <span
+            key={i}
+            title={state}
+            className={`block h-3 w-1 rounded-sm ${HEALTH_DOT[state] ?? HEALTH_DOT.unknown}`}
+          />
+        ))}
+      </div>
+      <span className="text-[10px] text-slate-500">recent</span>
+    </div>
+  );
+}
+
 interface ModelsPanelProps {
   models: ModelStatus[];
+  healthLog?: Record<string, string[]>;
   prices: Record<string, ModelPrice>;
   loading: boolean;
   error?: Error | null;
@@ -21,7 +58,7 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 4,
 });
 
-export function ModelsPanel({ models, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock }: ModelsPanelProps) {
+export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
 
@@ -143,6 +180,7 @@ export function ModelsPanel({ models, prices, loading, error, onRefresh, onModel
                   <div className="text-xs text-slate-500 mt-0.5">
                     {model.state_string} • {model.health_string}
                   </div>
+                  <HealthStrip samples={healthLog?.[model.id] ?? []} />
                   {price && (
                     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                       <span className="font-medium text-emerald-300">Provider payout / 1M</span>

@@ -1106,6 +1106,14 @@ func (s *InferenceService) GetModelStatus(modelID string) (*RegisteredModel, boo
 	return s.registry.GetModel(modelID)
 }
 
+// ModelHealthLog returns the rolling health record for a model, oldest first.
+func (s *InferenceService) ModelHealthLog(modelID string) []string {
+	if s.healthChecker == nil {
+		return nil
+	}
+	return s.healthChecker.HealthLog(modelID)
+}
+
 // GetModelHealth returns the health status of a specific model
 func (s *InferenceService) GetModelHealth(modelID string) (*ModelStatus, bool) {
 	if s.healthChecker == nil {
