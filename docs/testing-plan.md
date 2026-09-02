@@ -1,6 +1,6 @@
 # Computing Provider v2 — End-to-End Testing Plan
 
-This document provides a comprehensive, section-by-section checklist for manually testing the Computing Provider CLI. It covers setup, inference mode, model management, WebSocket protocol, health monitoring, verification, wallet/collateral operations, and the local REST API.
+This document provides a comprehensive, section-by-section checklist for manually testing the Computing Provider CLI. It covers setup, inference mode, model management, the WebSocket protocol, health monitoring, verification, and the local REST API.
 
 **Prerequisites for all tests:**
 - Go 1.21+ installed
@@ -29,16 +29,11 @@ This document provides a comprehensive, section-by-section checklist for manuall
 14. [Warmup Handling](#14-warmup-handling)
 15. [Verification — Hash Registration](#15-verification--hash-registration)
 16. [Verification — Runtime Challenges](#16-verification--runtime-challenges)
-17. [Wallet Management](#17-wallet-management)
-18. [Account Management](#18-account-management)
-19. [Collateral Management](#19-collateral-management)
-20. [Sequencer](#20-sequencer)
-21. [Task Management (ECP)](#21-task-management-ecp)
-22. [Local REST API](#22-local-rest-api)
-23. [Dashboard](#23-dashboard)
-24. [Error Handling & Reconnection](#24-error-handling--reconnection)
-25. [Rate Limiting & Concurrency](#25-rate-limiting--concurrency)
-26. [Hardware Detection](#26-hardware-detection)
+17. [Local REST API](#17-local-rest-api)
+18. [Dashboard](#18-dashboard)
+19. [Error Handling & Reconnection](#19-error-handling--reconnection)
+20. [Rate Limiting & Concurrency](#20-rate-limiting--concurrency)
+21. [Hardware Detection](#21-hardware-detection)
 
 ---
 
@@ -352,76 +347,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ---
 
-## 17. Wallet Management
-
-- [ ] `computing-provider wallet new` generates new wallet address
-- [ ] `computing-provider wallet list` shows all wallet addresses
-- [ ] `computing-provider wallet list --swan` shows Swan chain wallets
-- [ ] `computing-provider wallet export <address>` exports private key (requires confirmation)
-- [ ] `computing-provider wallet import <path>` imports private key from file
-- [ ] `computing-provider wallet import -` imports from stdin
-- [ ] `computing-provider wallet delete <address>` deletes wallet (requires confirmation)
-- [ ] `computing-provider wallet sign <address> "message"` signs message
-- [ ] `computing-provider wallet verify <address> <signature> "message"` verifies signature
-- [ ] `computing-provider wallet send <target> <amount> --from=<addr>` sends funds
-- [ ] Send with `--nonce=N` overrides nonce
-- [ ] Insufficient balance shows clear error
-
----
-
-## 18. Account Management
-
-- [ ] `computing-provider account create` creates on-chain account
-- [ ] Requires: `--ownerAddress`, `--workerAddress`, `--beneficiaryAddress`, `--task-types`
-- [ ] `computing-provider account changeMultiAddress` updates multi-address
-- [ ] `computing-provider account changeOwnerAddress` transfers ownership
-- [ ] `computing-provider account changeWorkerAddress` updates worker
-- [ ] `computing-provider account changeBeneficiaryAddress` updates beneficiary
-- [ ] `computing-provider account changeTaskTypes` updates supported task types
-- [ ] All account changes require `--ownerAddress` for authorization
-
----
-
-## 19. Collateral Management
-
-### Add Collateral
-- [ ] `computing-provider collateral add <amount> --ecp --from=<addr>` deposits ECP collateral
-- [ ] `computing-provider collateral add <amount> --fcp --from=<addr>` deposits FCP collateral
-- [ ] `--account=<addr>` specifies target account
-- [ ] Transaction hash displayed on success
-
-### Withdraw Collateral
-- [ ] `computing-provider collateral withdraw-request <amount> --ecp --owner=<addr>` initiates request
-- [ ] `computing-provider collateral withdraw-confirm --ecp --owner=<addr>` completes withdrawal
-- [ ] `computing-provider collateral withdraw-view --ecp` shows pending withdrawals
-- [ ] Direct `collateral withdraw` also works
-- [ ] `--account=<addr>` specifies target account
-
-### Send Collateral
-- [ ] `computing-provider collateral send <target> <amount> --from=<addr>` transfers collateral
-
----
-
-## 20. Sequencer
-
-- [ ] `computing-provider sequencer token` prints sequencer token
-- [ ] `computing-provider sequencer add <amount> --from=<addr>` adds to sequencer
-- [ ] `computing-provider sequencer withdraw <amount> --owner=<addr>` withdraws from sequencer
-- [ ] `--account=<addr>` specifies target account
-
----
-
-## 21. Task Management (ECP)
-
-- [ ] `computing-provider task list` lists recent ECP tasks
-- [ ] `computing-provider task list --tail 20` limits to last 20 tasks
-- [ ] `computing-provider task get <job_uuid>` shows job details
-- [ ] `computing-provider task delete <job_uuid>` removes job
-- [ ] Task list shows: UUID, status, type, created time
-
----
-
-## 22. Local REST API
+## 17. Local REST API
 
 ### Status & Metrics
 - [ ] `GET /api/v1/computing/inference/metrics` returns JSON metrics
@@ -448,7 +374,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ---
 
-## 23. Dashboard
+## 18. Dashboard
 
 - [ ] `computing-provider dashboard` starts web UI on port 3060
 - [ ] Dashboard binds to `127.0.0.1` by default
@@ -466,7 +392,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ---
 
-## 24. Error Handling & Reconnection
+## 19. Error Handling & Reconnection
 
 ### WebSocket Reconnection
 - [ ] Server disconnect triggers automatic reconnect
@@ -491,7 +417,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ---
 
-## 25. Rate Limiting & Concurrency
+## 20. Rate Limiting & Concurrency
 
 ### Global Limits
 - [ ] Global rate limit enforced (requests/second)
@@ -513,7 +439,7 @@ This document provides a comprehensive, section-by-section checklist for manuall
 
 ---
 
-## 26. Hardware Detection
+## 21. Hardware Detection
 
 ### NVIDIA GPU (Linux)
 - [ ] `nvidia-smi` output parsed correctly

@@ -124,7 +124,6 @@ Create `cp-cliproxy/models.json`:
 > ```
 >
 > Without this, inference requests and benchmarks will silently fail (CLIProxyAPI returns a model-not-found error). The file is watched for changes — no restart required.
-```
 
 ---
 
@@ -189,4 +188,4 @@ curl http://localhost:8100/v1/chat/completions \
 | Models stay `unknown` health | Confirm CLIProxyAPI is running and `GET /v1/models` returns 200 |
 | `WebSocketURL` connection refused | Confirm swan-inference is running on port 8081; URL must not have `/ws` suffix |
 | Requests return wrong model / benchmarks score 0% | Add `local_model` to `models.json` if the marketplace model name has a prefix (e.g. `openai/gpt-5.5`) that CLIProxyAPI doesn't recognise |
-| Crash at startup — nil pointer in `ubi_service.go` | You are in the `docker` group but the session doesn't have it active. Run `sg docker -c "computing-provider --repo $CP run"` to activate the group for the subprocess |
+| Crash or Docker permission error at startup | You are in the `docker` group but the session does not have it active. Run `sg docker -c "computing-provider --repo $CP run"` to activate the group for the subprocess |

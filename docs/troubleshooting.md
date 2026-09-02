@@ -17,8 +17,8 @@ computing-provider inference status
 # Check inference config
 computing-provider inference config
 
-# Check wallet status
-computing-provider wallet list
+# Audit this node end to end
+computing-provider selfcheck
 
 # Check system resources
 htop
@@ -134,45 +134,7 @@ sudo systemctl restart docker
 docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
 ```
 
-### 3. Wallet Issues
-
-#### Symptoms
-- "Wallet not found" errors
-- "Invalid private key" errors
-- Balance showing as zero
-
-#### Solutions
-
-**Check Wallet Status**
-```bash
-# List wallets
-computing-provider wallet list
-
-# Verify addresses
-computing-provider info
-```
-
-**Reinitialize Wallet**
-```bash
-# Backup existing wallet (if needed)
-cp -r ~/.swan/computing/keystore ~/.swan/computing/keystore.backup
-
-# Create new wallet
-computing-provider wallet new
-
-# Or import existing wallet
-computing-provider wallet import <private_key_file>
-```
-
-**Check Network Configuration**
-```bash
-# Test RPC endpoint
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
-  https://mainnet-rpc.swanchain.io
-```
-
-### 4. Inference Mode Issues
+### 3. Inference Mode Issues
 
 #### Symptoms
 - "authentication required" or "invalid provider API key" errors
@@ -222,7 +184,7 @@ curl http://localhost:8085/api/v1/computing/inference/models
 curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
 ```
 
-### 5. Network Connectivity Issues
+### 4. Network Connectivity Issues
 
 #### Symptoms
 - "Connection refused" errors
@@ -253,55 +215,7 @@ Edit `~/.swan/computing/config.toml`:
 SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
 ```
 
-### 6. Task Execution Issues
-
-#### ECP2/ECP Issues
-
-**CP Account Empty**
-```bash
-# Create account first
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 4
-```
-
-**GPU Not Detected**
-```bash
-# Check NVIDIA drivers
-nvidia-smi
-
-# Check CUDA installation
-nvcc --version
-
-# Check GPU availability
-lspci | grep -i nvidia
-```
-
-**Task Failures**
-```bash
-# Check task details
-computing-provider task get <job_uuid>
-
-# Check system logs
-tail -f cp.log
-
-# Check resource usage
-htop
-nvidia-smi
-```
-
-**UBI/ZK Parameters Missing (ECP Mode)**
-```bash
-# Set parameter path
-export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
-
-# Verify parameters exist
-ls -la $FIL_PROOFS_PARAMETER_CACHE
-```
-
-### 7. Resource Exhaustion
+### 5. Resource Exhaustion
 
 #### Symptoms
 - Tasks stuck in pending
@@ -331,45 +245,9 @@ docker image prune
 docker system prune
 ```
 
-### 8. Collateral Issues
-
-#### Symptoms
-- "Insufficient collateral" errors
-- Cannot add collateral
-- Withdrawal failures
-
-#### Solutions
-
-**Check Collateral Status**
-```bash
-# Check provider info (includes collateral)
-computing-provider info
-
-# Check account balance
-computing-provider wallet list
-```
-
-**Add Collateral**
-```bash
-# Add collateral for ECP/ECP2
-computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
-
-# Verify addition
-computing-provider info
-```
-
-**Withdrawal Issues**
-```bash
-# Request withdrawal (7-day waiting period)
-computing-provider collateral withdraw-request --ecp --owner <OWNER_ADDRESS> <AMOUNT>
-
-# Confirm withdrawal after 7 days
-computing-provider collateral withdraw-confirm --ecp --owner <OWNER_ADDRESS>
-```
-
 ## Performance Issues
 
-### Slow Task Execution
+### Slow inference
 
 **Check System Performance**
 ```bash
@@ -437,11 +315,8 @@ docker logs <container_name>
 
 **Backup Important Data**
 ```bash
-# Backup configuration
+# Backup the whole repo — config, models.json, node identity, dashboard token
 cp -r ~/.swan/computing ~/.swan/computing.backup
-
-# Backup wallet
-cp -r ~/.swan/computing/keystore ~/.swan/computing/keystore.backup
 ```
 
 **Reset Provider**
@@ -452,15 +327,16 @@ pkill computing-provider
 # Remove repository
 rm -rf ~/.swan/computing
 
-# Reinitialize
-computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
+# Reinitialize, or re-run the wizard
+computing-provider init --node-name=<NAME>
 
-# Restore wallet
-cp -r ~/.swan/computing.backup/keystore ~/.swan/computing/
-
-# Restore configuration
+# Restore configuration and model mapping
 cp ~/.swan/computing.backup/config.toml ~/.swan/computing/
+cp ~/.swan/computing.backup/models.json ~/.swan/computing/
 ```
+
+Keep the backup: `private_key` in the repo is this node's identity, and a
+provider that comes back with a new one is a new provider to the marketplace.
 
 ## FAQ
 

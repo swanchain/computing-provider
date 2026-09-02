@@ -395,15 +395,9 @@ tail -f cp.log | grep -E "Registration|connected"
 If you must use Docker (not recommended for inference):
 
 ```bash
-# Pull ARM64 image
-docker pull --platform linux/arm64 swanhub/ubi-worker-cpu-arm64:latest
-
-# Run container
-docker run -d \
-    --name swan-provider \
-    -p 8085:8085 \
-    -v ~/.swan/computing:/root/.swan/computing \
-    swanhub/ubi-worker-cpu-arm64:latest
+# Run the provider binary directly instead — Docker on Apple Silicon
+# cannot reach the GPU, and Ollama serves models natively
+computing-provider run
 ```
 
 **Note**: Docker containers on Apple Silicon cannot access the GPU. Performance will be 10-15x slower than native.
