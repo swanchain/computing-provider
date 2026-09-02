@@ -385,6 +385,10 @@ computing-provider dashboard
 # Open http://localhost:3060
 ```
 
+![Provider Console overview: health cards, earnings over time, share by model, per-model status, and GPU utilisation](docs/images/dashboard.png)
+
+<sub>Overview tab. Model names, payout rates, and earnings figures are example values.</sub>
+
 The port and listen address are configurable, so you set them once rather than passing flags every time:
 
 ```toml
@@ -393,6 +397,7 @@ Host = "127.0.0.1"   # use 0.0.0.0 only on a network you trust
 Port = 3060
 ```
 
+```bash
 # To listen on every interface on a trusted network:
 computing-provider dashboard --host 0.0.0.0
 ```
