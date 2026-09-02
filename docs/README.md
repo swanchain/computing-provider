@@ -28,14 +28,17 @@ Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU accelera
 ## Quick Start
 
 1. [Installation Guide](installation.md)
-2. [Configuration](configuration.md)
-3. [Getting Started](getting-started.md)
+2. [Getting Started](getting-started.md)
+3. [Configuration](configuration.md)
+4. [Models](models.md)
 
 ## Documentation Sections
 
 ### Setup & Installation
-- [Installation Guide](installation.md) - Complete setup instructions
+- [Installation Guide](installation.md) - Requirements, binary install, building from source, updates
+- [Getting Started](getting-started.md) - First run, Linux and macOS walkthroughs
 - [Configuration](configuration.md) - Configuration files and settings
+- [Models](models.md) - Catalog, VRAM sizing, downloading weights, switching models
 
 ### Provider Modes
 - [Edge Computing Provider](ecp/README.md) - Inference and ZK-Proof mode setup

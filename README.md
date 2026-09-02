@@ -5,16 +5,21 @@
 
 Turn your GPU into an AI inference endpoint and join the Swan Chain decentralized computing network.
 
-## Quick Start (5 minutes)
+![Provider Console overview: health cards, earnings over time, share by model, per-model status, and GPU utilisation](docs/images/dashboard.png)
 
-**No wallet needed. No blockchain registration. No public IP required.**
+<sub>The built-in dashboard — `computing-provider dashboard`. Model names, payout rates, and earnings figures are example values.</sub>
 
-### Install
+**No wallet needed. No blockchain registration. No public IP required.** The
+provider dials out to Swan Inference over a WebSocket, so it works behind NAT.
 
-Every release publishes a prebuilt binary, so building from source is optional:
+---
+
+## Quick start
+
+### 1. Install
 
 ```bash
-# Linux x86-64 (also: computing-provider-linux-arm64, computing-provider-darwin-arm64)
+# Linux x86-64 — also computing-provider-linux-arm64, computing-provider-darwin-arm64
 curl -fL -o computing-provider \
   https://github.com/swanchain/computing-provider/releases/latest/download/computing-provider-linux-amd64
 chmod +x computing-provider && sudo mv computing-provider /usr/local/bin/
@@ -22,94 +27,57 @@ chmod +x computing-provider && sudo mv computing-provider /usr/local/bin/
 computing-provider version
 ```
 
-Already installed? Upgrade in place:
+Building from source is optional — see
+[installation.md](docs/installation.md#building-from-source).
+
+### 2. Start a model server
+
+**Linux (NVIDIA GPU)** — needs Docker with the
+[NVIDIA Container Toolkit](docs/installation.md#install-nvidia-container-toolkit):
 
 ```bash
-computing-provider update --check   # report only, change nothing
-sudo computing-provider update      # download, verify and replace the binary
-```
-
-`update` replaces the binary but **does not restart the provider** — a running
-agent stays on the old build until you restart it, which is deliberate: an
-agent that restarts itself mid-request drops that request.
-
-To build from source instead, follow the steps below.
-
-### Linux (NVIDIA GPU)
-
-```bash
-# 0. Install build tools (skip if already installed)
-sudo apt-get update && sudo apt-get install -y git make
-wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc && source ~/.bashrc
-
-# 1. Clone and build
-git clone https://github.com/swanchain/computing-provider.git
-cd computing-provider
-make clean && make mainnet && sudo make install
-
-# 2. Download model weights from HuggingFace (e.g., Qwen 2.5 7B)
 computing-provider models download Qwen/Qwen2.5-7B-Instruct
 
-# 3. Start SGLang with the downloaded model
 docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
   -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
   lmsysorg/sglang:latest \
   python3 -m sglang.launch_server --model-path /models \
     --host 0.0.0.0 --port 30000 \
     --served-model-name Qwen/Qwen2.5-7B-Instruct
-
-# 4. Run the setup wizard (handles auth, config, and model discovery)
-computing-provider setup
-
-# 5. Run the provider
-computing-provider run
-
-# 7. Verify your provider is connected
-computing-provider inference status
 ```
 
-The `models download` command downloads model weights directly from HuggingFace. Large weight files (LFS) are verified with SHA256 hashes. The setup wizard will:
-- Check prerequisites (Docker, GPU)
-- Create/login to your Swan Inference account
-- Auto-discover your running model servers
-- Auto-match local models to Swan Inference model IDs
-- Generate `config.toml` and `models.json`
-
-### macOS (Apple Silicon)
+**macOS (Apple Silicon)**:
 
 ```bash
-# 1. Install Ollama and pull a model
 brew install ollama
 ollama serve &
 ollama pull qwen2.5:7b
-
-# 2. Install Computing Provider
-brew install go
-git clone https://github.com/swanchain/computing-provider.git
-cd computing-provider
-make clean && make mainnet && sudo make install
-
-# 3. Run the setup wizard
-computing-provider setup
-
-# 4. Run the provider
-computing-provider run
-
-# 5. Verify your provider is connected
-computing-provider inference status
 ```
 
-The setup wizard auto-discovers Ollama models and matches them to Swan Inference model IDs (e.g., `qwen2.5:7b` → `qwen-2.5-7b`).
+### 3. Set up and run
 
-> **Want to maximize earnings?** The quickstart uses Qwen 2.5 7B as an example, but you are paid per token actually served. Serving other in-demand models means less competition and more requests routed to you. See the [Switching Models](#switching-models) section to get started.
+```bash
+computing-provider setup             # auth, config, and model discovery
+computing-provider run               # start serving
+computing-provider inference status  # confirm you are connected
+```
+
+The wizard checks prerequisites, creates or logs into your Swan Inference
+account, discovers the model servers you just started, matches them to catalog
+model IDs, and writes `config.toml` and `models.json`. Start your model server
+**before** running it, or it will have nothing to find.
+
+> **Earnings come from traffic, not hardware.** Qwen 2.5 7B is only an example.
+> Serving models with demand and few providers routes more requests to you —
+> `computing-provider inference recommend-models` ranks the catalog against your
+> GPU. See [models.md](docs/models.md).
 
 ---
 
-## What Happens After Setup
+## What happens after setup
 
-Once your provider is running, it goes through these stages automatically. Most providers are fully active within a day.
+Your provider moves through these stages on its own. Most are fully active
+within a day.
 
 ```
 Connect ──▶ Benchmark ──▶ Approval ──▶ Collateral ──▶ Active
@@ -124,17 +92,15 @@ Connect ──▶ Benchmark ──▶ Approval ──▶ Collateral ──▶ Ac
 | **Collateral** | Deposit collateral to secure your position and unlock earnings (card, USDC on Ethereum or Base, or SWAN on Swan Chain) | Instant |
 | **Active** | Start receiving inference requests and earning rewards | Ongoing |
 
-> **Grace period:** New providers get a 7-day grace period after activation. During this period, benchmark failures and low uptime won't affect your routing priority, giving you time to stabilize your setup.
+> **Grace period:** new providers get 7 days after activation during which
+> benchmark failures and low uptime do not affect routing priority, so you have
+> time to stabilise your setup.
 
-Check your current stage at any time:
-
-```bash
-computing-provider inference status
-```
+`computing-provider inference status` shows your current stage at any time.
 
 ---
 
-## How It Works
+## How it works
 
 ```
 Swan Inference (Cloud)
@@ -150,85 +116,32 @@ Swan Inference (Cloud)
 └───────────────────────┘
 ```
 
-1. Provider connects **outbound** to Swan Inference (no inbound ports needed)
-2. Registers available models
-3. Receives inference requests via WebSocket
-4. Forwards to local model server, returns response
-5. **Get paid per token** for completed requests (a beneficiary wallet is needed for payouts)
+1. The provider connects **outbound** to Swan Inference — no inbound ports
+2. It registers the models listed in `models.json`
+3. Inference requests arrive over that WebSocket
+4. Each is forwarded to your local model server and the response streamed back
+5. You are **paid per token** for completed requests
 
----
-
-## Reliability & Performance
-
-The provider manages request flow and backend health automatically — no manual tuning is required to run:
-
-- **Health checking** — each model endpoint is polled continuously; unhealthy backends are reported to Swan Inference so traffic routes away, and they recover automatically when they come back online.
-- **Rate limiting** — GPU-aware token-bucket limits (global and per-model); over-limit requests are rejected with HTTP 429 instead of overloading your GPU.
-- **Concurrency control** — global and per-model in-flight request slots protect the backend under burst load.
-- **Automatic retries** — transient upstream failures (connection refused/reset, 502/503/504, timeouts) are retried with exponential backoff and jitter.
-- **Hot-reload** — edits to `models.json` are picked up live via file watching; no restart needed to add, remove, or repoint a model.
-- **Observability** — failed requests are logged with model, latency, and status code; live metrics are available via the [web dashboard](#web-dashboard) and a Prometheus endpoint.
-- **Graceful shutdown** — SIGTERM/SIGINT drains cleanly, stopping the HTTP server before tearing down inference subsystems.
-
-Rate limits and concurrency slots can be tuned at runtime via the REST API (see [Useful Endpoints](#useful-endpoints)).
-
----
-
-## Prerequisites
-
-### Linux (NVIDIA GPU)
-
-| Category | Requirement |
-|----------|-------------|
-| **GPU** | NVIDIA RTX 3090, 4090, A100, H100, or equivalent |
-| **VRAM** | Minimum 16GB (24GB+ recommended) |
-| **RAM** | Minimum 32GB system memory |
-| **Storage** | 500GB+ SSD for model weights |
-| **OS** | Ubuntu 22.04+ or Debian 11+ |
-| **NVIDIA Driver** | 535.x or newer |
-| **CUDA** | 12.1 or newer |
-| **Docker** | 24.0+ with [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
-| **Network** | 100 Mbps minimum (1 Gbps recommended), stable connection with low latency |
-
-### macOS (Apple Silicon)
-
-| Category | Requirement |
-|----------|-------------|
-| **Chip** | Apple Silicon M1, M2, M3, or M4 |
-| **Memory** | 16GB+ unified memory (32GB+ recommended) |
-| **Storage** | 500GB+ SSD for model weights |
-| **OS** | macOS 13 Ventura or newer |
-| **Software** | [Ollama](https://ollama.ai) (latest version) |
-| **Network** | 100 Mbps minimum, stable connection with low latency |
-
-> **Ports:** Only outbound WebSocket connections are needed — no port forwarding or public IP required.
-
-### Install NVIDIA Container Toolkit (Linux only)
-
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-
-# Verify
-docker run --rm --gpus all nvidia/cuda:12.0-base-ubuntu22.04 nvidia-smi
-```
+Request flow is managed for you, with no tuning required to run: endpoints are
+health-checked continuously and unhealthy ones taken out of routing until they
+recover; GPU-aware rate limits and per-model concurrency slots reject excess
+work with HTTP 429 rather than overloading the GPU; transient upstream failures
+are retried with exponential backoff; `models.json` edits hot-reload; and
+SIGTERM/SIGINT drains cleanly. Limits can be retuned at runtime over the
+[REST API](#rest-api).
 
 ---
 
 ## Configuration
 
-### Model Configuration (`models.json`)
+Two files, both in `$CP_PATH` (default `~/.swan/computing`), both written by
+`computing-provider setup`:
 
-Map Swan Inference model IDs to your local inference endpoints:
+**`models.json`** maps catalog model IDs to your local servers:
 
 ```json
 {
-  "qwen-2.5-7b": {
+  "Qwen/Qwen2.5-7B-Instruct": {
     "endpoint": "http://localhost:30000",
     "gpu_memory": 16000,
     "category": "text-generation"
@@ -236,51 +149,7 @@ Map Swan Inference model IDs to your local inference endpoints:
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `endpoint` | URL of your local inference server |
-| `gpu_memory` | GPU memory required (MB) |
-| `category` | Model category (`text-generation`, `image-generation`, etc.) |
-| `local_model` | (Optional) Actual model name for local server (e.g., Ollama model name) |
-| `context_length` | (Optional) The real context window this backend accepts, in tokens. **Set this for any backend other than vLLM or SGLang** — see below |
-
-> **Note:** The `local_model` field is used when your local server uses different model names than Swan Inference. For example, Ollama uses `qwen2.5:7b` while Swan Inference expects `qwen-2.5-7b`. The setup wizard handles this mapping automatically.
-
-#### Context windows
-
-The provider reports each model's real context window so the marketplace advertises what you actually serve. It is detected automatically from `max_model_len` in the backend's `/v1/models` — but **that field is a vLLM and SGLang convention**. Ollama, llama.cpp, LiteLLM and other OpenAI-compatible proxies expose nothing, so no window is reported and Swan Inference falls back to the catalog's theoretical value for that model. Clients then size prompts to a window your backend will reject.
-
-Set it explicitly for those backends:
-
-```json
-{
-  "openai/gpt-5.5": {
-    "endpoint": "http://localhost:8317",
-    "local_model": "gpt-5.5",
-    "context_length": 128000
-  }
-}
-```
-
-An explicit `context_length` always wins over detection. To see what each model currently reports:
-
-```bash
-computing-provider inference status
-```
-
-```
-Reported context windows
-----------------------------------------
-  TheDrummer/Cydonia-24B-v4.3                 45056  (detected)
-  openai/gpt-5.5                             128000  (override)
-  Qwen/Qwen3.8-27B                                -  (not reported)
-```
-
-Anything showing `not reported` is being advertised at its catalog value, not yours. The provider also logs a warning once per model at startup.
-
-### Provider Configuration (`config.toml`)
-
-Located at `~/.swan/computing/config.toml`:
+**`config.toml`** holds provider settings:
 
 ```toml
 [API]
@@ -290,10 +159,18 @@ NodeName = "my-provider"
 [Inference]
 Enable = true
 WebSocketURL = "wss://inference-ws.swanchain.io"
-ServiceURL = "https://api.swanchain.io"
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"  # Required - get from https://inference.swanchain.io
-Models = ["qwen-2.5-7b"]
+ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"   # from https://inference.swanchain.io
+Models = ["Qwen/Qwen2.5-7B-Instruct"]
 ```
+
+Every field, plus alerts, self-check, dashboard and logging settings, is
+documented in [configuration.md](docs/configuration.md).
+
+> **Serving from Ollama, llama.cpp, LiteLLM or another proxy?** Set
+> `context_length` explicitly in `models.json`. Only vLLM and SGLang expose the
+> real window, so otherwise the marketplace advertises the catalog's theoretical
+> value and clients send prompts your backend rejects. See
+> [context windows](docs/configuration.md#context-windows).
 
 ---
 
@@ -301,11 +178,9 @@ Models = ["qwen-2.5-7b"]
 
 ### Self-check
 
-The failures that cost a provider money are quiet: the daemon stays up and looks healthy while a model earns nothing. `selfcheck` audits for exactly that.
-
-```bash
-computing-provider selfcheck
-```
+The failures that cost a provider money are quiet: the daemon stays up and looks
+healthy while a model earns nothing. `computing-provider selfcheck` audits for
+exactly that.
 
 ```
   OK   models.json                     8 models mapped
@@ -319,37 +194,35 @@ computing-provider selfcheck
   OK   disk space                      /home/you/.swan/computing: 92.1 GB free of 438 GB (78% used)
 ```
 
-It checks the things no error message reveals:
+It catches what no error message reveals: a model served but not advertised, a
+healthy model never registered upstream, a backend serving less context than you
+claim, one that answers health checks but cannot actually serve, a model that has
+never been called, and a disk about to fill.
 
-| Check | Catches |
-|-------|---------|
-| config/models.json agreement | A model served but not advertised, or advertised but not served |
-| registered with Swan Inference | A healthy model that was never sent upstream, so it receives no traffic |
-| context window | A backend serving less context than you advertise — clients' long prompts get rejected |
-| inference probe | A backend that answers health checks but cannot serve: dead engine, expired credentials |
-| traffic | A model registered and healthy that has never been called |
-| disk space | A volume filling before it takes the node down |
+The inference probe sends one `max_tokens: 1` completion per model. It is the
+only check that exercises the engine — `GET /v1/models` is answered by most
+backends without touching it, so a dead engine or expired API token looks healthy
+everywhere else.
 
-The inference probe sends one `max_tokens: 1` completion per model. It is the only check that exercises the engine — `GET /v1/models` is answered by most backends without touching it, so a dead engine or an expired API token looks healthy everywhere else.
-
-Exits non-zero when a check fails, so it works as a cron or monitoring check. `--json` for machine-readable output, `--no-inference` to skip the completion probe.
-
-The daemon runs the same audit every 10 minutes and acts on it: a model whose backend fails two consecutive inference probes is **deregistered from Swan Inference**, and re-registered automatically once it serves again. No traffic is better than traffic that fails, which is what a failing model costs your reliability score. Only backend-owned failures count — a client's over-long prompt or your own rate limit never pulls a model, and one you disabled by hand is never switched back on. Tune it under `[SelfCheck]`; see [docs/configuration.md](docs/configuration.md#self-check-and-auto-heal).
-
-When `[Alerts]` is configured, a failing audit posts a webhook or email; passing runs are logged locally and not sent, so an "all clear" never trains you to ignore it.
+It exits non-zero on failure, so it works as a cron or monitoring check
+(`--json` for machine-readable output, `--no-inference` to skip the probe). The
+daemon runs the same audit every 10 minutes and acts on it: a model whose backend
+fails two consecutive probes is **deregistered from Swan Inference** and
+re-registered once it serves again — no traffic beats traffic that fails. Only
+backend-owned failures count; an over-long client prompt or your own rate limit
+never pulls a model, and one you disabled by hand is never switched back on. Tune
+it under `[SelfCheck]`, see
+[configuration.md](docs/configuration.md#self-check-and-auto-heal).
 
 ### Alerts
 
-Set a webhook in `config.toml` and the provider tells you when something breaks:
+Point the provider at a webhook, an SMTP server, or both, and it tells you when
+something breaks:
 
 ```toml
 [Alerts]
 WebhookURL = "https://hooks.example.com/provider"
-```
 
-Or by email, with no receiver to run:
-
-```toml
 [Alerts.Email]
 Host = "smtp.gmail.com"
 Port = 587
@@ -357,457 +230,152 @@ Username = "you@example.com"
 To = ["you@example.com"]
 ```
 
-Keep the password out of `config.toml` — the provider reads `$CP_PATH/.env` at startup:
+Keep the password out of `config.toml` — the provider reads `$CP_PATH/.env` at
+startup:
 
 ```bash
-# Most providers (Gmail, Outlook, Yahoo) need an app password, not your login password
+# Gmail, Outlook and Yahoo need an app password, not your login password
 umask 077 && printf "SMTP_PASSWORD='your-app-password'\n" > $CP_PATH/.env
-computing-provider alerts test             # verify before you need it
+computing-provider alerts test    # verify before you need it
 ```
 
-Either transport, or both. Alerts fire on a model going unhealthy, a model that passes health checks while failing most of its requests, a lost connection to Swan Inference, and a failed daily self-check — each with a matching recovery event. See [docs/configuration.md](docs/configuration.md#alerts) for the payload and tuning.
+Alerts fire on a model going unhealthy, a model that passes health checks while
+failing most of its requests, a lost connection to Swan Inference, and a failed
+self-check — each with a matching recovery event. Passing runs are logged
+locally and never sent, so an "all clear" never trains you to ignore it. Payload
+and tuning in [configuration.md](docs/configuration.md#alerts).
 
-### Logging
-
-Logs rotate under `$CP_PATH/logs` by default. Point them at another disk with:
-
-```toml
-[Log]
-Dir = "/mnt/data/logs/cp"
-MaxSizeMB = 100
-MaxBackups = 5
-```
-
-### Web Dashboard
+### Dashboard
 
 ```bash
-computing-provider dashboard
-# Open http://localhost:3060
+computing-provider dashboard    # http://localhost:3060
 ```
 
-![Provider Console overview: health cards, earnings over time, share by model, per-model status, and GPU utilisation](docs/images/dashboard.png)
+Real-time metrics, earnings, model pricing, per-transaction token usage, GPU
+status, model management and request controls — the page shown at the top of
+this README.
 
-<sub>Overview tab. Model names, payout rates, and earnings figures are example values.</sub>
-
-The port and listen address are configurable, so you set them once rather than passing flags every time:
-
-```toml
-[Dashboard]
-Host = "127.0.0.1"   # use 0.0.0.0 only on a network you trust
-Port = 3060
-```
-
-```bash
-# To listen on every interface on a trusted network:
-computing-provider dashboard --host 0.0.0.0
-```
-
-The dashboard is read-only until you choose **Unlock controls** and paste the
-token from `$CP_PATH/dashboard.token`. That owner-only file is generated on
-first run. Model configuration, request limits, alerts, self-check, and logging
-can then be edited from **Settings**; stored secrets are never sent back to the
-browser.
-
-Features: real-time metrics, model pricing, per-transaction input/output token
-usage, GPU status, model management, request controls, and validated settings.
+It is read-only until you choose **Unlock controls** and paste the token from
+`$CP_PATH/dashboard.token`, an owner-only file generated on first run.
+Configuration, request limits, alerts, self-check and logging can then be edited
+from **Settings**; stored secrets are never sent back to the browser. Host and
+port are configurable under `[Dashboard]` — use `0.0.0.0` only on a network you
+trust.
 
 ### REST API
 
 ```bash
-# View metrics
 curl http://localhost:8085/api/v1/computing/inference/metrics
-
-# List models
-curl http://localhost:8085/api/v1/computing/inference/models
-
-# Check health
-curl http://localhost:8085/api/v1/computing/inference/health
 ```
-
-### Useful Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
+| `GET /inference/status` | Connection state, active models, what is registered upstream |
 | `GET /inference/metrics` | Request counts, latency, GPU stats |
 | `GET /inference/metrics/prometheus` | Prometheus format for Grafana |
 | `GET /inference/models` | List all models with status |
+| `GET /inference/health` | Health of every model |
 | `POST /inference/models/:id/enable` | Enable a model |
 | `POST /inference/models/:id/disable` | Disable a model |
-| `POST /inference/models/reload` | Hot-reload models.json |
-| `GET /inference/status` | Connection state, active models, and the models actually registered upstream |
+| `POST /inference/models/reload` | Hot-reload `models.json` |
 
 ---
 
-## Available Models
+## Getting paid
 
-Run `computing-provider models catalog` to see all supported models:
-
-```
-$ computing-provider models catalog
-Available models in Swan Model Repository (6):
-
-+--------------------------------------------------------+----------+-------+----------+----------------+
-|                        MODEL ID                        | CATEGORY | FILES |   SIZE   |     STATUS     |
-+--------------------------------------------------------+----------+-------+----------+----------------+
-| Qwen/Qwen2.5-0.5B                                      |   llm    |     1 | 942.3 MB |   downloaded   |
-| Qwen/Qwen3-8B                                          |   llm    |     5 |  15.3 GB | partial (3/5)  |
-| Sinensis/L3.3-MS-Nevoria-70b-AWQ                       |   llm    |     8 |  13.7 GB | not downloaded |
-| TheDrummer/Cydonia-24B-v4.1                            |   llm    |    19 |  43.9 GB | not downloaded |
-| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym |   llm    |     7 |   9.3 GB | not downloaded |
-| meganovaai/MN-Violet-Lotus-12B-AWQ                     |   llm    |    12 |   7.8 GB | not downloaded |
-+--------------------------------------------------------+----------+-------+----------+----------------+
-```
-
-### Hardware Requirements
-
-VRAM recommendation is roughly 2× the model file size on HuggingFace to account for KV cache and runtime overhead. Longer context lengths need more VRAM.
-
-| Model | HF Size | Recommended VRAM | Example GPU |
-|-------|---------|-----------------|-------------|
-| Qwen/Qwen2.5-0.5B | 1 GB | 2 GB+ | Any GPU |
-| meganovaai/MN-Violet-Lotus-12B-AWQ | 8.3 GB | 16 GB+ | RTX 4090, RTX 3090 |
-| jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym | 15.1 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
-| Qwen/Qwen3-8B | 16.4 GB | 32 GB+ | 2× RTX 3090/4090 or A100 |
-| Sinensis/L3.3-MS-Nevoria-70b-AWQ | 39.8 GB | 80 GB+ | A100 80GB or 4× RTX 3090/4090 |
-| TheDrummer/Cydonia-24B-v4.1 | 47.2 GB | 96 GB+ | 2× A100 or 4× RTX 3090/4090 |
-
----
-
-## Switching Models
-
-You can add, remove, or swap models without restarting the provider.
-
-### 1. Start the new model server
-
-```bash
-# Example: switch from Qwen 2.5 7B to Mistral Small 24B (AWQ)
-
-# Stop the old server (optional — you can run multiple models)
-docker stop sglang && docker rm sglang
-
-# Download the new model weights
-computing-provider models download jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
-
-# Start the new model server
-docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
-  -v ~/.swan/models/jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym:/models \
-  lmsysorg/sglang:latest \
-  python3 -m sglang.launch_server --model-path /models \
-    --host 0.0.0.0 --port 30000 \
-    --served-model-name jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym
-
-# Verify the server is healthy
-curl http://localhost:30000/v1/models
-```
-
-### 2. Update `models.json`
-
-Edit `~/.swan/computing/models.json` to point to the new model:
-
-```json
-{
-  "jeffcookio/Mistral-Small-3.2-24B-Instruct-2506-awq-sym": {
-    "endpoint": "http://localhost:30000",
-    "gpu_memory": 16000,
-    "category": "text-generation"
-  }
-}
-```
-
-The provider watches `models.json` and **hot-reloads automatically** — no restart needed. You can also trigger a manual reload:
-
-```bash
-curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
-```
-
-### 3. Verify
-
-```bash
-# Check the provider picked up the new model
-curl http://localhost:8085/api/v1/computing/inference/models
-
-# Check status on Swan Inference
-computing-provider inference status
-```
-
-> **Tip:** To run multiple models simultaneously, start each on a different port and add all of them to `models.json`. Use `--gpus '"device=0"'` and `--gpus '"device=1"'` to pin each model to a specific GPU.
-
----
-
-## Getting Paid
-
-You are paid **per token, for every request you serve**. Each model in the catalog publishes a payout price per 1M input and output tokens; your earnings accrue at that rate and are shown in the [Provider Dashboard](https://inference.swanchain.io/dashboard) and by `computing-provider inference status`. There is no UBI and no allocation for idle hardware — the Swan 1.0 UBI program has ended — so traffic is the only thing that earns.
-
-Set the wallet that payouts go to:
+You are paid **per token, for every request you serve**. Each catalog model
+publishes a payout price per 1M input and output tokens; earnings accrue at that
+rate and appear in the
+[Provider Dashboard](https://inference.swanchain.io/dashboard) and in
+`computing-provider inference status`. There is no UBI and no allocation for idle
+hardware — the Swan 1.0 UBI program has ended — so traffic is the only thing that
+earns.
 
 ```bash
 computing-provider inference set-beneficiary 0xYourWalletAddress
 ```
 
-Payouts are requested from the dashboard: minimum $10, flat $1 fee, one request per chain per hour. Earnings can also be converted into inference credit on the same account.
+Payouts are requested from the dashboard: minimum $10, flat $1 fee, one request
+per chain per hour. Earnings can also be converted into inference credit on the
+same account.
 
-**Collateral is required for activation**, not optional. Deposit on-chain (USDC on Ethereum or Base, SWAN on Swan Chain) or by card; it is refundable with a 7-day waiting period.
-
-```bash
-# Get deposit instructions (chains, contracts, minimums) and check your status
-computing-provider inference deposit
-computing-provider inference deposit --check
-```
-
-> **Tip:** `computing-provider inference recommend-models` ranks catalog models by current demand against your hardware — the fastest way to find traffic.
-
----
-
-## CLI Reference
-
-### Basic Commands
+**Collateral is required for activation**, not optional. Deposit on-chain (USDC
+on Ethereum or Base, SWAN on Swan Chain) or by card; it is refundable with a
+7-day waiting period.
 
 ```bash
-computing-provider version                   # Print the installed build
-computing-provider update --check            # Is a newer release available?
-sudo computing-provider update               # Install the newest release
-computing-provider setup                     # Interactive setup wizard (recommended)
-computing-provider run                       # Start provider
-computing-provider inference status          # Check status on Swan Inference
-computing-provider inference config          # Show inference config
-computing-provider inference deposit         # Get collateral deposit instructions
-computing-provider inference deposit --check # Check current collateral status
-computing-provider inference set-beneficiary 0x...  # Set reward wallet
-computing-provider dashboard                 # Web UI (port 3060)
-```
-
-### Setup Wizard
-
-The setup wizard is the recommended way to configure a new provider:
-
-```bash
-computing-provider setup                     # Full interactive setup
-computing-provider setup --skip-discovery    # Skip model discovery
-computing-provider setup --api-key=sk-prov-xxx  # Use existing API key
-
-# Subcommands
-computing-provider setup discover            # Just discover model servers
-computing-provider setup login               # Login to existing account
-computing-provider setup signup              # Create new account
-```
-
-### Hardware Info
-
-```bash
-computing-provider research hardware         # All hardware info
-computing-provider research gpu-info         # GPU details
-computing-provider research gpu-benchmark    # Run benchmark
+computing-provider inference deposit          # chains, contracts, minimums
+computing-provider inference deposit --check  # current collateral status
 ```
 
 ---
 
-## Keeping Up To Date
+## CLI reference
 
 ```bash
-computing-provider version         # what you are running
-computing-provider update --check  # what is available
-sudo computing-provider update     # install it
+computing-provider setup                     # interactive setup (recommended)
+computing-provider run                       # start the provider
+computing-provider selfcheck                 # audit this node
+computing-provider dashboard                 # web UI on port 3060
+
+computing-provider version                   # installed build
+computing-provider update --check            # is a newer release available?
+sudo computing-provider update               # install the newest release
+
+computing-provider inference status          # stage, models, earnings, context
+computing-provider inference config          # show inference config
+computing-provider inference deposit         # collateral instructions
+computing-provider inference recommend-models
+computing-provider inference set-beneficiary 0x...
+
+computing-provider models catalog            # supported models
+computing-provider models download <id>      # fetch weights
+computing-provider models list               # what is on disk
+
+computing-provider research hardware         # hardware, GPU info, benchmarks
 ```
 
-`update` downloads the binary for your platform from the GitHub release,
-verifies its SHA-256 against the checksums published with the release when there
-are any, and replaces the executable atomically — a crash mid-update cannot
-leave a half-written binary where the agent used to be. `sudo` is needed only
-because the binary usually lives in `/usr/local/bin`.
+`setup` also takes `--skip-discovery` and `--api-key=sk-prov-xxx`, and has
+`discover`, `login` and `signup` subcommands. Full reference in
+[docs/cli/](docs/cli/README.md); `--help` works on every command.
 
-It deliberately does **not** restart the provider. Restart when it suits you:
+Updates are verified against the checksums published with each release and the
+binary is replaced atomically. `update` deliberately does **not** restart a
+running provider — see
+[keeping up to date](docs/installation.md#keeping-up-to-date).
 
-```bash
-sudo systemctl restart computing-provider   # under systemd
-# otherwise stop the process and run `computing-provider run` again
-```
+---
 
-Releases publish a `checksums.txt` and a signature over it. `update` checks the
-SHA-256 automatically and refuses to install on a mismatch; to verify by hand:
+## Documentation
 
-```bash
-sha256sum -c checksums.txt --ignore-missing
-
-cosign verify-blob \
-  --certificate checksums.txt.pem \
-  --signature checksums.txt.sig \
-  --certificate-identity-regexp 'https://github.com/swanchain/computing-provider/.github/workflows/release.yaml@.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  checksums.txt
-```
-
-The checksums prove the download arrived intact. The signature is what proves it
-came from the release workflow — anyone who could publish a release could rewrite
-the checksums to match a binary of their own, but not that signature.
-
-Swan Inference may also mention a newer release in the message it returns when
-the agent registers, which `computing-provider run` logs verbatim at startup.
-That depends on the server sending it, so treat it as a convenience rather than
-something to rely on — `update --check` is what actually asks.
-
-If a release has no binary for your platform, `update` says so and prints the
-source-build commands instead.
+| Guide | Covers |
+|-------|--------|
+| [Installation](docs/installation.md) | Requirements, binary install, building from source, updates |
+| [Getting started](docs/getting-started.md) | First run, Linux and macOS walkthroughs |
+| [Configuration](docs/configuration.md) | `config.toml`, `models.json`, alerts, self-check, dashboard |
+| [Models](docs/models.md) | Catalog, VRAM sizing, downloading weights, switching models |
+| [SGLang deployment](docs/sglang-deployment.md) | Running SGLang for inference |
+| [SGLang tuning](docs/sglang-best-practices.md) | GPU configs, memory tuning, multi-GPU TP |
+| [Apple Silicon](docs/apple-silicon-support.md) | Ollama setup on M-series Macs |
+| [Troubleshooting](docs/troubleshooting.md) | Error reference and FAQ |
 
 ## Troubleshooting
 
-| Error | Solution |
-|-------|----------|
-| `go: command not found` | Install Go 1.21+: see [go.dev/dl](https://go.dev/dl/) |
-| `permission denied...docker.sock` | Add user to docker group: `sudo usermod -aG docker $USER` |
-| `could not select device driver "nvidia"` | Install [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) |
-| `authentication required` | Set ApiKey in config.toml or INFERENCE_API_KEY env var |
-| `invalid provider API key` | Verify key starts with `sk-prov-` and is not revoked |
-| `WebSocket connection failed` | Check WebSocketURL and network connectivity |
-| Provider not receiving requests | Check `models.json` matches your inference server |
-| `cuda>=12.x unsatisfied condition` | Use an older SGLang tag: `lmsysorg/sglang:v0.4.7.post1-cu124` |
+Start with `computing-provider selfcheck` — it names the problem more precisely
+than the logs will. The two most common:
 
-### Check Logs
+| Symptom | Cause |
+|---------|-------|
+| Online but receiving no requests | `--served-model-name`, the `models.json` key, and the catalog ID must all match exactly |
+| `invalid provider API key` | Provider keys start with `sk-prov-`; consumer keys (`sk-swan-*`) do not work |
 
-```bash
-# Provider logs
-tail -f cp.log
+Full error reference and FAQ: [docs/troubleshooting.md](docs/troubleshooting.md).
 
-# Inference server logs
-docker logs sglang
-```
+## Getting help
 
----
-
-## FAQ
-
-### Setup & Installation
-
-**Q: `make mainnet` fails with `go: command not found`**
-Install Go 1.22+. On Linux: download from [go.dev/dl](https://go.dev/dl/) and add to PATH. On macOS: `brew install go`. Make sure to restart your shell or `source ~/.bashrc` after installing.
-
-**Q: SGLang container fails with `cuda>=12.x unsatisfied condition`**
-Your NVIDIA driver is too old for the latest SGLang image. The error looks like:
-```
-nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9, please update your driver to a newer version, or use an earlier cuda container
-```
-First, check what CUDA version your driver supports:
-```bash
-nvidia-smi   # Max CUDA version is shown in the top-right corner
-```
-Then either update your driver (`sudo apt install nvidia-driver-550`) or use an older SGLang tag that matches your CUDA version:
-```bash
-# For CUDA 12.4 compatible drivers
-docker run -d --gpus all -p 30000:30000 --ipc=host --name sglang \
-  -v ~/.swan/models/Qwen/Qwen2.5-7B-Instruct:/models \
-  lmsysorg/sglang:v0.4.7.post1-cu124 \
-  python3 -m sglang.launch_server --model-path /models \
-    --host 0.0.0.0 --port 30000 \
-    --served-model-name Qwen/Qwen2.5-7B-Instruct
-```
-
-**Q: `docker: Error response from daemon: could not select device driver "nvidia"`**
-The NVIDIA Container Toolkit is not installed. Follow the [NVIDIA Container Toolkit](#install-nvidia-container-toolkit) section, then restart Docker.
-
-**Q: `computing-provider setup` doesn't detect my running model server**
-The setup wizard scans common ports (30000, 8080, 11434). Make sure your model server is running *before* you start the wizard. You can verify manually:
-```bash
-curl http://localhost:30000/v1/models   # SGLang/vLLM
-curl http://localhost:11434/api/tags    # Ollama
-```
-If your server uses a non-standard port, the wizard may not find it — you can manually edit `~/.swan/computing/models.json` afterward.
-
-### Model Issues
-
-**Q: My provider is online but not receiving any inference requests**
-The most common cause is a model name mismatch. The `--served-model-name` in your SGLang/vLLM command **must exactly match** the key in `models.json`, and that key must match a model ID registered on Swan Inference. Run `computing-provider models catalog` to see valid model IDs.
-
-**Q: SGLang container starts but immediately exits**
-Check logs with `docker logs sglang`. Common causes:
-- **Out of VRAM**: The model is too large for a single GPU. Use tensor parallelism to split it across multiple GPUs with `--tp 2` (or `--tp 4`). For example, a 12B model in bf16 needs ~23 GB — too large for a single 24GB GPU once KV cache is included, but fits easily across 2 GPUs.
-- **Unbalanced GPU memory**: If another model server (e.g., vLLM) is already using one of your GPUs, SGLang will fail with `memory capacity is unbalanced`. Pin SGLang to specific free GPUs instead of using `--gpus all`:
-  ```bash
-  # Check which GPUs are free
-  nvidia-smi
-  # Run on specific GPUs (e.g., GPUs 0 and 2)
-  docker run -d --gpus '"device=0,2"' -p 30000:30000 --ipc=host \
-    -v ~/.swan/models/YourModel:/models \
-    lmsysorg/sglang:v0.4.7.post1-cu124 \
-    python3 -m sglang.launch_server --model-path /models \
-      --host 0.0.0.0 --port 30000 --tp 2 \
-      --served-model-name YourModel
-  ```
-- **Shared memory**: Add `--shm-size 4g` to your `docker run` command.
-- **Port conflict**: Port 30000 is already in use. Check with `docker ps` or `lsof -i :30000`.
-
-**Q: `models download` fails for Llama or other gated models**
-Some HuggingFace models require accepting a license agreement. Visit the model page on [huggingface.co](https://huggingface.co), accept the terms, then set your HuggingFace token:
-```bash
-export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
-computing-provider models download meta-llama/Llama-3.3-70B-Instruct
-```
-
-### Connection & Authentication
-
-**Q: `WebSocket connection failed` or provider can't connect**
-- Verify the WebSocket URL in `~/.swan/computing/config.toml` is `wss://inference-ws.swanchain.io` (not `http://` or `https://`)
-- Check that outbound port 443 isn't blocked by your firewall or cloud security group
-- If behind a corporate proxy, WebSocket connections may be blocked — check with your network admin
-
-**Q: `invalid provider API key` or `authentication required`**
-- Your API key must start with `sk-prov-`. Consumer keys (`sk-swan-*`) won't work.
-- Verify your key in `~/.swan/computing/config.toml` under `[Inference].ApiKey`
-- You can also set it via environment variable: `export INFERENCE_API_KEY=sk-prov-xxx`
-
-**Q: Provider is stuck in `pending` status**
-Providers are auto-activated when all conditions are met: collateral deposited, GPU meets minimum hardware requirements, and registration benchmark passes. Check your status:
-```bash
-computing-provider inference status
-```
-If you're just testing, ask the Swan team on [Discord](https://discord.gg/3uQUWzaS7U) about dev mode access which skips these requirements.
-
-### Earnings & Collateral
-
-**Q: How do I earn?**
-Per token: input and output tokens of every request you serve, multiplied by that model's published payout price. There is no UBI or daily allocation any more — only served traffic earns. See [Getting Paid](#getting-paid).
-```bash
-computing-provider inference status   # Shows current stage and earnings summary
-```
-Request a payout from the dashboard once your withdrawable balance is at least $10 (flat $1 fee). Set a beneficiary wallet first:
-```bash
-computing-provider inference set-beneficiary 0xYourWalletAddress
-```
-
-**Q: What are the collateral deposit options?**
-Collateral is required before activation. Deposit via:
-- **Card:** Stripe, through the Provider Dashboard
-- **On-chain:** USDC on Ethereum or Base, or SWAN on Swan Chain
-
-Run `computing-provider inference deposit` to see supported chains, contract addresses, and minimum amounts. Deposit via the [Provider Dashboard](https://inference.swanchain.io/dashboard) or directly to the contract from your wallet.
-
-**Q: What happens if I fail benchmarks?**
-The system runs periodic benchmarks (math, code, reasoning, latency) to verify provider quality. Passing resets your failure counter. Consecutive failures may result in collateral slashing (default: 10% after 2 consecutive failures).
-
-### Configuration
-
-**Q: I edited `config.toml` but nothing changed**
-Make sure you're editing the right file. The provider reads config from `~/.swan/computing/config.toml` (or wherever `$CP_PATH` points), **not** the `config.toml` in the git repo directory.
-
-**Q: How do I change models without restarting?**
-Edit `~/.swan/computing/models.json` — the provider watches this file and hot-reloads automatically. You can also reload via the API:
-```bash
-curl -X POST http://localhost:8085/api/v1/computing/inference/models/reload
-```
-
-**Q: Port 8085 or 30000 is already in use**
-Find and stop the conflicting process:
-```bash
-lsof -i :30000   # Find what's using the port
-docker ps         # Check for leftover containers
-docker rm -f sglang  # Remove old SGLang container
-```
-
----
-
-## Getting Help
-
-- [Discord](https://discord.gg/3uQUWzaS7U) - Community support
-- [GitHub Issues](https://github.com/swanchain/computing-provider/issues) - Bug reports
-- [Documentation](https://docs.swanchain.io) - Full docs
+- [Discord](https://discord.gg/3uQUWzaS7U) — community support
+- [GitHub Issues](https://github.com/swanchain/computing-provider/issues) — bug reports
+- [docs.swanchain.io](https://docs.swanchain.io) — full documentation
 
 ## License
 
