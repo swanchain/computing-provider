@@ -1,74 +1,67 @@
-# Go Computing Provider Documentation
+# Computing Provider Documentation
 
-Welcome to the comprehensive documentation for the Go Computing Provider, a decentralized computing network client for Swan Chain.
+Computing Provider v2 turns a GPU into an AI inference endpoint on the Swan Chain
+network. It connects outbound to Swan Inference over a WebSocket — no inbound
+ports, no public IP — registers the models you serve, and forwards inference
+requests to your local model server (SGLang, vLLM or Ollama).
 
-## Overview
+**Inference only.** The legacy ZK-proof and UBI-task workloads, wallets and
+smart-contract bindings were removed from this client; that code now lives in the
+legacy [go-computing-provider](https://github.com/swanchain/go-computing-provider)
+repository. No wallet is required here — a beneficiary address is optional, for
+payouts.
 
-The Go Computing Provider is a command-line tool that enables individuals and organizations to participate in Swan Chain's decentralized computing network by offering computational resources such as processing power (CPU and GPU), memory, storage, and bandwidth.
+**Key features**
 
-**Key Features:**
-- Docker-based deployment (no Kubernetes required)
-- NVIDIA GPU support via Container Toolkit
-- AI inference and ZK proof generation
-- Cross-platform support (Linux, macOS including Apple Silicon)
+- Docker-based deployment, no Kubernetes
+- NVIDIA GPU support via the Container Toolkit
+- Cross-platform: Linux, and macOS on Apple Silicon
+- Continuous health checking with automatic deregistration and recovery
+- Built-in dashboard, alerting and self-audit
 
-## Provider Modes
+## Quick start
 
-| Mode | Task Type | Description |
-|------|-----------|-------------|
-| **Inference** (Default) | 4 | Deploy AI inference containers via Docker |
-| ZK-Proof | 1, 2 | FIL-C2 and mining ZK-SNARK proofs |
-
-### Inference Mode (Default)
-The primary mode for Computing Provider v2, allowing operators to deploy AI inference containers with GPU support. Inference mode connects to **Swan Inference**, the decentralized inference marketplace.
-
-### ZK-Proof Mode
-Specializes in ZK-SNARK proof generation (FIL-C2, Aleo, etc.) using GPU acceleration. Ideal for real-time proof generation applications.
-
-## Quick Start
-
-1. [Installation Guide](installation.md)
+1. [Installation](installation.md)
 2. [Getting Started](getting-started.md)
 3. [Configuration](configuration.md)
 4. [Models](models.md)
 
-## Documentation Sections
+## Documentation
 
-### Setup & Installation
-- [Installation Guide](installation.md) - Requirements, binary install, building from source, updates
-- [Getting Started](getting-started.md) - First run, Linux and macOS walkthroughs
-- [Configuration](configuration.md) - Configuration files and settings
-- [Models](models.md) - Catalog, VRAM sizing, downloading weights, switching models
-
-### Provider Modes
-- [Edge Computing Provider](ecp/README.md) - Inference and ZK-Proof mode setup
-- [UBI Tasks](ubi/architecture.md) - ZK proof task management
+### Setup and installation
+- [Installation](installation.md) — requirements, binary install, building from source, updates
+- [Getting Started](getting-started.md) — first run, Linux and macOS walkthroughs
+- [Configuration](configuration.md) — `config.toml`, `models.json`, alerts, self-check, dashboard
+- [Models](models.md) — catalog, VRAM sizing, downloading weights, switching models
 
 ### Operations
-- [Command Line Interface](cli/README.md) - Complete CLI reference
-- [Task Management](cli/task.md) - Managing computing tasks
-- Wallet Management - `computing-provider wallet --help`
-- `computing-provider inference status` - Check provider status on Swan Inference
-- `computing-provider inference config` - Show inference configuration
-- `computing-provider dashboard` - Web-based monitoring UI (port 3060)
+- [Command Line Interface](cli/README.md) — complete CLI reference
+- [Troubleshooting](troubleshooting.md) — error reference and FAQ
 
-### Hardware & Research
-- `computing-provider research hardware` - Display system hardware info
-- `computing-provider research gpu-info` - Display GPU information
-- `computing-provider research gpu-benchmark` - Run GPU benchmark tests
+Useful commands:
 
-### Advanced Topics
-- [SGLang Deployment](sglang-deployment.md) - Deploy SGLang for inference
-- [SGLang Performance Tuning](sglang-best-practices.md) - GPU configs, memory tuning, latency optimization
-- [Troubleshooting](troubleshooting.md) - Common issues and solutions
+```bash
+computing-provider inference status   # stage, models, earnings, context windows
+computing-provider selfcheck          # audit this node
+computing-provider dashboard          # web UI on port 3060
+computing-provider research hardware  # CPU, memory, disk, GPUs
+```
 
+### Inference backends
+- [SGLang Deployment](sglang-deployment.md) — deploying SGLang for inference
+- [SGLang Performance Tuning](sglang-best-practices.md) — GPU configs, memory tuning, latency
+- [Apple Silicon Support](apple-silicon-support.md) — Ollama on M-series Macs
+- [CLIProxy + Computing Provider](guides/cliproxy-computing-provider.md) — serving through a proxy
 
-## Getting Help
+### Development
+- [Testing Plan](testing-plan.md) — end-to-end manual test checklist
 
-- [Discord Community](https://discord.gg/swanchain)
+## Getting help
+
+- [Discord](https://discord.gg/3uQUWzaS7U)
 - [GitHub Issues](https://github.com/swanchain/computing-provider/issues)
 - [Swan Chain Documentation](https://docs.swanchain.io)
 
 ## License
 
-Apache License 2.0 - see [LICENSE](../LICENSE) file for details.
+Apache License 2.0 — see [LICENSE](../LICENSE).

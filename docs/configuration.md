@@ -29,32 +29,6 @@ PortRange = ["40000-40050"]     # Ports for multi-port containers
 Pricing = true
 ```
 
-### UBI Configuration (ZK Proofs)
-
-```toml
-[UBI]
-UbiEnginePk = ""                # ZK engine public key (auto-configured)
-EnableSequencer = true          # Submit proofs to Sequencer (reduces gas)
-AutoChainProof = false          # Fallback to chain when sequencer unavailable
-VerifySign = true
-```
-
-### RPC Configuration
-
-```toml
-[RPC]
-SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
-```
-
-### Registry Configuration (Optional)
-
-```toml
-[Registry]
-ServerAddress = ""              # Docker registry for image storage
-UserName = ""
-Password = ""
-```
-
 ### Inference Mode Configuration
 
 ```toml
@@ -290,6 +264,40 @@ Sends one message through every configured transport and reports what failed. Wo
 
 Delivery is asynchronous and never blocks inference: events are queued and sent in order by a single worker, and are dropped (with a log line) if a transport is too slow to keep up. A failing transport never stops the other.
 
+### Health checks
+
+```toml
+[HealthCheck]
+DeepCheckEvery = 10    # engine probe every Nth check (default 10; -1 disables)
+DeepCheckTimeout = 30  # seconds to wait for that completion
+```
+
+Each model endpoint gets a cheap probe (`GET /v1/models`, falling back to
+`/health`) every interval. Most backends answer that from a static registry, so
+it stays 200 after the inference engine behind it has died — which is why every
+`DeepCheckEvery`-th check also sends a real one-token completion. Only that
+probe distinguishes a live HTTP server from a backend that can actually serve.
+
+The cadence is **per endpoint, not per model**, and models sharing an endpoint
+are probed one at a time in rotation, so a proxy serving six models sees one
+engine probe per cycle rather than a burst of six.
+
+Raise `DeepCheckEvery`, or set it to `-1`, when a model is backed by a metered
+upstream rather than a local GPU.
+
+### Request limits
+
+```toml
+[RequestLimits]
+RequestsPerSecond = 500   # global token-bucket rate limit
+MaxConcurrent = 50        # global in-flight request slots
+```
+
+Over-limit requests are rejected with HTTP 429 rather than queued onto an
+overloaded GPU. Both can also be changed at runtime, globally or per model,
+through the REST API — see the endpoint table in the
+[main README](../README.md#rest-api).
+
 ### models.json field reference
 
 Each key in `models.json` is the marketplace model ID (must match a value in `Models` above).
@@ -324,145 +332,18 @@ export CP_PATH=~/.swan/computing
 computing-provider --repo /custom/path init
 ```
 
-## Wallet Configuration
+## Development mode (local testing)
 
-### Address Types
-
-The Computing Provider uses three different wallet addresses:
-
-1. **Owner Address**: Controls account settings and permissions
-2. **Worker Address**: Used for submitting proofs and paying gas fees
-3. **Beneficiary Address**: Receives all earnings
-
-### Setting Up Wallets
+Point the provider at a local Swan Inference instead of production:
 
 ```bash
-# Create new wallet
-computing-provider wallet new
-
-# Import existing wallet
-computing-provider wallet import <private_key_file>
-
-# List wallets
-computing-provider wallet list
-```
-
-## Account Configuration
-
-### Create Account
-
-```bash
-# For Inference mode - task type 4
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 4
-
-# For ZK proofs - task types 1,2,4
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 1,2,4
-```
-
-### Add Collateral
-
-```bash
-# Add collateral for Inference/ZK-Proof modes
-computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
-```
-
-## Network Configuration
-
-### Supported Networks
-
-- **Mainnet**: Chain ID 254
-- **Testnet**: Chain ID 20241133
-
-### RPC Endpoints
-
-```toml
-[RPC]
-# Mainnet
-SWAN_CHAIN_RPC = "https://mainnet-rpc.swanchain.io"
-
-# Testnet
-SWAN_CHAIN_RPC = "https://testnet-rpc.swanchain.io"
-```
-
-## Pricing Configuration
-
-Resource pricing is configured in `$CP_PATH/price.toml`. Generate and manage with CLI commands:
-
-```bash
-computing-provider price generate   # Generate default pricing config
-computing-provider price view       # View current pricing
-```
-
-## Inference Mode Configuration
-
-For AI inference with Swan Inference:
-
-```toml
-[API]
-Domain = "*.example.com"        # Wildcard domain for services (optional for Inference mode)
-PortRange = ["40000-40050", "40060"]
-
-[Inference]
-Enable = true                                        # Enabled by default
-WebSocketURL = "wss://inference-ws.swanchain.io"     # Production
-ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: your provider API key
-Models = ["meta-llama/Llama-3.2-3B-Instruct"]         # Models this provider serves
-```
-
-To verify your configuration:
-```bash
-computing-provider inference config    # Show current inference config
-computing-provider inference status    # Check status on Swan Inference
-```
-
-### Development Mode (Local Testing)
-
-For local development, Inference mode supports Node ID based authentication without requiring on-chain account registration:
-
-```bash
-# Build for testnet
 make clean && make testnet
-
-# Start with local Swan Inference
 INFERENCE_WS_URL=ws://localhost:8081 ./computing-provider run
 ```
 
-**Authentication Flow:**
-1. Provider connects to Swan Inference via WebSocket
-2. Sends registration with Node ID and wallet signature
-3. Swan Inference verifies signature and registers provider
-4. No on-chain transaction required
-
-This is suitable for:
-- Local development and testing
-- Integration testing with Swan Inference
-- Rapid iteration without gas costs
-
-For production, on-chain account registration on Swan Chain is required for collateral and rewards.
-
-## ECP Mode Configuration (ZK Proofs)
-
-For ZK proof generation:
-
-```bash
-# Required environment variables
-export FIL_PROOFS_PARAMETER_CACHE=<path_to_v28_params>
-export RUST_GPU_TOOLS_CUSTOM_GPU="<GPU_MODEL>:<CORES>"
-```
-
-```toml
-[UBI]
-EnableSequencer = true
-AutoChainProof = false
-```
+The provider authenticates with its node identity and provider API key, so a
+local run needs nothing registered anywhere. Collateral is still required before
+a production provider is activated.
 
 ## Validation
 
@@ -483,7 +364,7 @@ computing-provider state
 1. **Invalid TOML syntax**: Use a TOML validator
 2. **Missing required fields**: Check the sample configuration
 3. **Permission errors**: Ensure proper file permissions
-4. **Network connectivity**: Verify RPC endpoints
+4. **Network connectivity**: check outbound access to `WebSocketURL` on port 443
 
 ### Debug Commands
 
@@ -500,4 +381,5 @@ computing-provider state
 After configuring your Computing Provider:
 
 1. [Start the provider](getting-started.md)
-2. [Monitor tasks](cli/task.md)
+2. [Choose which models to serve](models.md)
+3. [CLI reference](cli/README.md)

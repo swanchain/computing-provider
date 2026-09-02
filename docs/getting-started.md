@@ -47,13 +47,6 @@ That's it! The setup wizard will:
 - Auto-match local models to Swan Inference model IDs
 - Generate `config.toml` and `models.json`
 
-## Choose Provider Mode
-
-| Mode | Use Case | Requirements | Blockchain |
-|------|----------|--------------|------------|
-| **Inference** (Default) | AI model inference | Ollama/Docker | Not required |
-| **ECP** (ZK Proofs) | FIL-C2 proofs | NVIDIA GPU, v28 params | Required |
-
 ## Inference Mode Setup (Linux)
 
 ### 1. Install Docker with NVIDIA Container Toolkit
@@ -159,77 +152,6 @@ nohup computing-provider run >> cp.log 2>&1 &
 
 For detailed macOS instructions, see [Apple Silicon Support](apple-silicon-support.md).
 
-## ECP Setup (ZK Proofs)
-
-ECP mode requires blockchain registration for proof submission and rewards.
-
-### 1. Prerequisites
-
-Download v28 parameters (~200GB):
-
-```bash
-export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
-# Download parameters (see Filecoin documentation)
-```
-
-### 2. Initialize with Public IP
-
-```bash
-computing-provider init --multi-address=/ip4/<PUBLIC_IP>/tcp/<PORT> --node-name=<NAME>
-```
-
-### 3. Set Up Wallet
-
-```bash
-# Create new wallet (can be done offline)
-computing-provider wallet new
-
-# List wallets
-computing-provider wallet list
-```
-
-### 4. Create Account (On-Chain)
-
-```bash
-computing-provider account create \
-  --ownerAddress <OWNER_ADDRESS> \
-  --workerAddress <WORKER_ADDRESS> \
-  --beneficiaryAddress <BENEFICIARY_ADDRESS> \
-  --task-types 1,2,4
-```
-
-### 5. Add Collateral
-
-```bash
-computing-provider collateral add --ecp --from <OWNER_ADDRESS> <AMOUNT>
-```
-
-### 6. Configure Sequencer
-
-Edit `$CP_PATH/config.toml`:
-
-```toml
-[UBI]
-EnableSequencer = true
-AutoChainProof = false
-```
-
-Add sequencer deposit:
-
-```bash
-computing-provider sequencer add --from <OWNER_ADDRESS> <AMOUNT>
-```
-
-### 7. Start ECP Provider
-
-```bash
-export CP_PATH=~/.swan/computing
-export FIL_PROOFS_PARAMETER_CACHE=/path/to/v28/params
-export RUST_GPU_TOOLS_CUSTOM_GPU="GeForce RTX 4090:16384"
-
-nohup computing-provider run >> cp.log 2>&1 &
-```
-
 ## Start Your Provider
 
 ### 1. Verify Configuration
@@ -266,35 +188,6 @@ computing-provider state
 
 # List tasks
 computing-provider task list
-```
-
-## Monitoring Tasks
-
-### View Task List
-
-```bash
-# List all tasks
-computing-provider task list
-
-# Show recent tasks
-computing-provider task list --tail 10
-```
-
-### View Task Details
-
-```bash
-# Get task details
-computing-provider task get <job_uuid>
-```
-
-### View UBI Tasks (ZK Proofs)
-
-```bash
-# List UBI tasks
-computing-provider ubi list
-
-# Show recent UBI tasks
-computing-provider ubi list --tail 10
 ```
 
 ## Verification and Monitoring

@@ -1,193 +1,174 @@
-# Command Line Interface (CLI)
-
-The Go Computing Provider provides a comprehensive command-line interface for managing all aspects of your computing provider operations.
-
-## Overview
-
-The CLI is accessed through the `computing-provider` command and provides subcommands for different operations:
+# Command Line Interface
 
 ```bash
 computing-provider [global-flags] <command> [command-flags] [arguments]
 ```
 
-## Global Flags
+`--help` works on every command and subcommand, and is authoritative — this page
+is a map, not a substitute.
 
-- `--repo <path>`: Repository directory for computing-provider client (default: `~/.swan/computing`)
-- `--version`: Show version information
-- `--help`: Show help information
+## Global flags
 
-## Commands Overview
+| Flag | Description |
+|------|-------------|
+| `--repo <path>` | Provider repository directory (default `~/.swan/computing`) |
+| `--version` | Print version information |
+| `--help`, `-h` | Help for any command or subcommand |
 
-### Core Commands
-- `init` - Initialize a new computing provider repository
-- `info` - Display provider information
-- `state` - Show provider state
+## Environment variables
 
-### Inference Commands
-- `inference status` - Check provider status on Swan Inference
-- `inference config` - Show current inference configuration
+| Variable | Effect |
+|----------|--------|
+| `CP_PATH` | Repository directory; same as `--repo` |
+| `INFERENCE_API_KEY` | Provider API key, overriding `config.toml` |
+| `INFERENCE_WS_URL` | WebSocket URL, useful for local development |
 
-### Monitoring
-- `dashboard` - Start the inference dashboard web UI
+Secrets belong in `$CP_PATH/.env` rather than `config.toml` — see
+[configuration.md](../configuration.md).
 
-### Account Management
-- `account` - Manage provider account settings
-- `wallet` - Manage wallet operations
+## Commands
 
-### Task Management
-- [`task`](task.md) - Manage computing tasks
-- `ubi-task` - Manage UBI tasks
+| Command | Purpose |
+|---------|---------|
+| `setup` | Interactive setup wizard: auth, config, model discovery |
+| `run` | Start the provider |
+| `selfcheck` | Audit this node for the failures that earn nothing |
+| `dashboard` | Web UI for monitoring and settings |
+| `inference` | Status, config, collateral, beneficiary, model selection |
+| `models` | Catalog, weight download, verification, local model files |
+| `alerts` | Test the configured alert transports |
+| `research` | Hardware and GPU information, benchmarks |
+| `init` | Create a provider repository without the wizard |
+| `info`, `state` | Provider information and current state |
+| `version`, `update` | Show the installed build; install a newer release |
 
-### Financial Operations
-- `collateral` - Manage provider collateral
-- `price` - Manage pricing settings
+### `setup`
 
-### Other Operations
-- `sequencer` - Sequencer operations
-- `contract` - Smart contract interactions
-- `collateral` - Collateral management
-
-## Environment Variables
-
-The CLI respects the following environment variables:
-
-- `CP_PATH`: Repository directory path (default: `~/.swan/computing`)
-- `INFERENCE_API_KEY`: Provider API key (overrides config)
-- `INFERENCE_WS_URL`: WebSocket URL (useful for local dev)
-
-## Examples
-
-### Basic Usage
+The recommended path for a new provider. Start your model server **first** — the
+wizard discovers what is already running.
 
 ```bash
-# Initialize a new repository
-computing-provider init
+computing-provider setup                        # full interactive setup
+computing-provider setup --skip-discovery       # skip model discovery
+computing-provider setup --api-key=sk-prov-xxx  # use an existing key
 
-# Start the provider (ECP mode)
+computing-provider setup discover               # only discover model servers
+computing-provider setup login                  # log into an existing account
+computing-provider setup signup                 # create an account
+```
+
+### `run`
+
+```bash
 computing-provider run
-
-# Check provider status
-computing-provider state
-
-# List tasks
-computing-provider task list
+computing-provider run --host 0.0.0.0   # only on a trusted network
 ```
 
-### With Custom Repository Path
+Starts the WebSocket connection to Swan Inference, registers the models in
+`models.json`, and serves the local REST API. Shuts down cleanly on
+SIGTERM/SIGINT.
+
+### `selfcheck`
 
 ```bash
-# Use custom repository path
-computing-provider --repo /custom/path init
-
-# Or set environment variable
-export CP_PATH=/custom/path
-computing-provider init
+computing-provider selfcheck
+computing-provider selfcheck --json           # machine-readable
+computing-provider selfcheck --no-inference   # skip the completion probe
+computing-provider selfcheck --min-free-gb 50 # disk threshold
 ```
 
-### Getting Help
-
-```bash
-# General help
-computing-provider --help
-
-# Command-specific help
-computing-provider task --help
-computing-provider wallet --help
-
-# Subcommand help
-computing-provider task list --help
-```
-
-## Command Categories
-
-### Setup Commands
-- `init` - Initialize provider repository
-
-### Runtime Commands
-- `run` - Start provider service (Inference or ZK-Proof mode)
-- `dashboard` - Start the inference dashboard web UI
-
-### Information Commands
-- `info` - Provider information
-- `state` - Provider state
-- `inference status` - Check status on Swan Inference
-- `inference config` - Show inference configuration
-
-### Management Commands
-- `account` - Account management
-- `wallet` - Wallet operations
-- `task` - Task management
-- `collateral` - Collateral management
-
-## Output Formats
-
-The CLI supports different output formats:
-
-### Table Format (Default)
-```bash
-computing-provider task list
-```
-
-### With Tail Option
-```bash
-computing-provider task list --tail 10
-```
-
-## Inference Commands
-
-### `inference status`
-
-Check your provider's status on Swan Inference. Validates your API key and shows registration status.
-
-```bash
-# Check status (human-readable)
-computing-provider inference status
-
-# JSON output (for scripting)
-computing-provider inference status --json
-```
-
-### `inference config`
-
-Display the current inference configuration (API key is masked).
-
-```bash
-computing-provider inference config
-```
-
-## Dashboard
+Exits non-zero when a check fails, so it works directly as a cron or monitoring
+check. The daemon runs the same audit on a timer — see
+[configuration.md](../configuration.md#self-check-and-auto-heal).
 
 ### `dashboard`
 
-Start the inference dashboard web UI for real-time monitoring.
-
 ```bash
-# Start on default port 3060
-computing-provider dashboard
-
-# Custom port
+computing-provider dashboard                      # http://localhost:3060
 computing-provider dashboard --port 8080
-
-# Custom API server address
 computing-provider dashboard --api http://localhost:8085
-
-# Listen on all interfaces (trusted networks only)
-computing-provider dashboard --host 0.0.0.0
+computing-provider dashboard --host 0.0.0.0       # trusted networks only
 ```
 
-The default host is `127.0.0.1`. Read-only monitoring is public to the local
-listener; writes and settings require the token generated at
-`$CP_PATH/dashboard.token` through the dashboard's **Unlock controls** action.
+Defaults to `127.0.0.1`. Read-only for anyone who can reach the listener; writes
+and settings need the token at `$CP_PATH/dashboard.token`, entered through
+**Unlock controls**.
 
-Features: real-time metrics, model pricing, per-transaction input/output token
-usage, GPU status, model management, request controls, and validated settings.
+### `inference`
 
-## Security Considerations
+```bash
+computing-provider inference status                 # stage, models, earnings, context windows
+computing-provider inference status --json
+computing-provider inference config                 # current config, API key masked
+computing-provider inference deposit                # collateral instructions
+computing-provider inference deposit --check        # current collateral status
+computing-provider inference set-beneficiary 0x...  # wallet that payouts go to
+computing-provider inference recommend-models       # rank catalog models by demand
+computing-provider inference recommend-models --vram 24 --top 10 --category llm
+computing-provider inference keygen                 # generate a provider API key
+computing-provider inference request-approval       # request approval to start earning
+```
 
-- Private keys are stored securely in the repository
-- Sensitive operations require confirmation
-- Wallet operations are isolated
+### `models`
 
-## Next Steps
+```bash
+computing-provider models catalog          # supported models and local status
+computing-provider models catalog --json
+computing-provider models download <id>    # fetch weights from HuggingFace
+computing-provider models download <id> --dest /mnt/weights
+computing-provider models list             # what is on disk
+computing-provider models verify           # re-check SHA256 of local weights
+computing-provider models rm <id>          # delete local weights
+```
 
-- [Start managing tasks](task.md)
+Gated repositories need `HF_TOKEN` set. See [models.md](../models.md).
+
+### `alerts`
+
+```bash
+computing-provider alerts test
+computing-provider alerts test --message "hello from my node"
+```
+
+Sends through every configured transport, so you find out the SMTP password is
+wrong now rather than during an outage.
+
+### `research`
+
+```bash
+computing-provider research hardware        # CPU, memory, disk, GPUs
+computing-provider research gpu-info        # GPU details
+computing-provider research gpu-info --json
+computing-provider research gpu-benchmark   # run a benchmark
+computing-provider research gpu-benchmark --gpu 0 --iterations 5
+```
+
+### `init`, `info`, `state`
+
+```bash
+computing-provider init --node-name my-provider --port 8085
+computing-provider info    # provider information
+computing-provider state   # current state
+```
+
+`setup` calls `init` for you; run it directly only when configuring by hand.
+
+### `version` and `update`
+
+```bash
+computing-provider version
+computing-provider update --check   # report only, change nothing
+sudo computing-provider update      # download, verify, replace the binary
+sudo computing-provider update --yes
+```
+
+`update` verifies the download against the release checksums and replaces the
+binary atomically. It does **not** restart a running provider. Details and
+manual signature verification in
+[installation.md](../installation.md#keeping-up-to-date).
+
+## Next steps
+
+- [Configuration](../configuration.md) — every field in `config.toml` and `models.json`
+- [Models](../models.md) — choosing, downloading and switching models
+- [Troubleshooting](../troubleshooting.md) — error reference and FAQ
