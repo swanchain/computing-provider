@@ -4,6 +4,8 @@ import {
   ArrowUpFromLine,
   CheckCircle,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Clock,
   RefreshCw,
@@ -11,7 +13,7 @@ import {
 } from 'lucide-react';
 import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
-import type { ModelStatus, RequestLog } from '../types';
+import type { ModelStatus, RequestLog, RequestSource } from '../types';
 
 interface RequestHistoryPanelProps {
   models: ModelStatus[];
@@ -59,6 +61,8 @@ const SOURCE_LABELS: Record<string, { label: string; title: string; className: s
     className: 'bg-slate-500/10 text-slate-400 ring-slate-500/30',
   },
 };
+
+const PAGE_SIZES = [25, 50, 100];
 
 function SourceBadge({ source }: { source?: string }) {
   // Records written before this field existed all came over the WebSocket,
@@ -114,7 +118,18 @@ function RequestReceipt({ request }: { request: RequestLog }) {
 
 export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
   const [selectedModel, setSelectedModel] = useState('');
+  const [selectedSource, setSelectedSource] = useState<RequestSource | ''>('');
+  const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
+  const [page, setPage] = useState(0);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+
+  // Changing what is being looked at always returns to the first page —
+  // staying on page 4 of a filter that now matches six rows shows nothing.
+  const applyFilter = (apply: () => void) => {
+    apply();
+    setPage(0);
+    setExpandedRow(null);
+  };
 
   const {
     data: historyData,
@@ -122,14 +137,31 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
     loading,
     refetch,
   } = usePolling(
-    useCallback(() => api.getRequestHistory(50, selectedModel || undefined), [selectedModel]),
-    10000,
+    useCallback(
+      () => api.getRequestHistory({
+        limit: pageSize,
+        offset: page * pageSize,
+        model: selectedModel || undefined,
+        source: selectedSource || undefined,
+      }),
+      [pageSize, page, selectedModel, selectedSource],
+    ),
+    // Auto-refresh only on the newest page. Further back, an arriving request
+    // would shift every row down by one and the reader would lose their place.
+    page === 0 ? 10000 : 0,
   );
 
   const requests = historyData?.requests ?? [];
-  const inputTotal = requests.reduce((total, request) => total + request.tokens_in, 0);
-  const outputTotal = requests.reduce((total, request) => total + request.tokens_out, 0);
+  const total = historyData?.total ?? 0;
+  const inputTotal = requests.reduce((sum, request) => sum + request.tokens_in, 0);
+  const outputTotal = requests.reduce((sum, request) => sum + request.tokens_out, 0);
   const toggleExpanded = (requestID: string) => setExpandedRow((current) => current === requestID ? null : requestID);
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const firstShown = total === 0 ? 0 : page * pageSize + 1;
+  const lastShown = page * pageSize + requests.length;
+  const canPrev = page > 0;
+  const canNext = lastShown < total;
 
   return (
     <div className="space-y-5">
@@ -143,11 +175,23 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
           <select
             id="transaction-model-filter"
             value={selectedModel}
-            onChange={(event) => setSelectedModel(event.target.value)}
+            onChange={(event) => applyFilter(() => setSelectedModel(event.target.value))}
             className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 sm:min-w-56"
           >
             <option value="">All models</option>
             {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
+          </select>
+          <label htmlFor="transaction-source-filter" className="sr-only">Filter transactions by source</label>
+          <select
+            id="transaction-source-filter"
+            value={selectedSource}
+            onChange={(event) => applyFilter(() => setSelectedSource(event.target.value as RequestSource | ''))}
+            className="min-h-10 min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+          >
+            <option value="">All sources</option>
+            {Object.entries(SOURCE_LABELS).map(([value, meta]) => (
+              <option key={value} value={value}>{meta.label}</option>
+            ))}
           </select>
           <button
             type="button"
@@ -162,9 +206,11 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
 
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
-          <p className="text-xs text-slate-500">Shown</p>
-          <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{requests.length}</p>
-          <p className="mt-1 hidden text-xs text-slate-500 sm:block">latest transactions</p>
+          <p className="text-xs text-slate-500">Matching</p>
+          <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{total.toLocaleString()}</p>
+          <p className="mt-1 hidden text-xs text-slate-500 sm:block">
+            {selectedModel || selectedSource ? 'transactions match the filters' : 'transactions in history'}
+          </p>
         </div>
         <div className="rounded-xl border border-blue-900/70 bg-blue-950/20 p-3 sm:p-4">
           <p className="flex items-center gap-1 text-xs text-blue-300"><ArrowDownToLine aria-hidden="true" size={13} /> Input tokens</p>
@@ -193,8 +239,24 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
         ) : requests.length === 0 ? (
           <div className="px-4 py-12 text-center text-slate-400">
             <Clock aria-hidden="true" size={32} className="mx-auto mb-3 text-slate-600" />
-            <p className="font-medium text-slate-300">No transactions yet</p>
-            <p className="mt-1 text-sm">Requests will appear here after the provider serves inference.</p>
+            {selectedModel || selectedSource ? (
+              <>
+                <p className="font-medium text-slate-300">No transactions match these filters</p>
+                <p className="mt-1 text-sm">Nothing recorded for {selectedSource ? `${SOURCE_LABELS[selectedSource].label.toLowerCase()} traffic` : 'this source'}{selectedModel ? ` on ${selectedModel}` : ''} yet.</p>
+                <button
+                  type="button"
+                  onClick={() => applyFilter(() => { setSelectedModel(''); setSelectedSource(''); })}
+                  className="mt-4 rounded-lg bg-slate-800 px-4 py-2 text-sm text-white hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  Clear filters
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-slate-300">No transactions yet</p>
+                <p className="mt-1 text-sm">Requests will appear here after the provider serves inference.</p>
+              </>
+            )}
           </div>
         ) : (
           <>
@@ -269,7 +331,53 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
         )}
       </div>
 
-      <p className="text-center text-xs text-slate-500" aria-live="polite">Showing the latest {requests.length} transaction{requests.length === 1 ? '' : 's'}{selectedModel ? ` for ${selectedModel}` : ''}. Auto-refreshes every 10 seconds.</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-slate-500" aria-live="polite">
+          {total === 0
+            ? 'No transactions to show.'
+            : `Showing ${firstShown.toLocaleString()}\u2013${lastShown.toLocaleString()} of ${total.toLocaleString()}`}
+          {selectedModel ? ` for ${selectedModel}` : ''}
+          {selectedSource ? ` from ${SOURCE_LABELS[selectedSource].label.toLowerCase()}` : ''}
+          {'. '}
+          {page === 0
+            ? 'Auto-refreshes every 10 seconds.'
+            : 'Auto-refresh is paused while viewing older pages.'}
+        </p>
+
+        <div className="flex items-center gap-2">
+          <label htmlFor="transaction-page-size" className="text-xs text-slate-500">Per page</label>
+          <select
+            id="transaction-page-size"
+            value={pageSize}
+            onChange={(event) => applyFilter(() => setPageSize(Number(event.target.value)))}
+            className="min-h-9 rounded-lg border border-slate-700 bg-slate-900 px-2 text-xs text-slate-200 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+          >
+            {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+          </select>
+
+          <div className="ml-1 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => { setPage((current) => Math.max(0, current - 1)); setExpandedRow(null); }}
+              disabled={!canPrev}
+              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Previous page"
+            >
+              <ChevronLeft aria-hidden="true" size={16} />
+            </button>
+            <span className="px-2 text-xs tabular-nums text-slate-400">{page + 1} / {pageCount}</span>
+            <button
+              type="button"
+              onClick={() => { setPage((current) => current + 1); setExpandedRow(null); }}
+              disabled={!canNext}
+              className="inline-flex min-h-9 min-w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Next page"
+            >
+              <ChevronRight aria-hidden="true" size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

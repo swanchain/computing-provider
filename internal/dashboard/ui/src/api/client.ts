@@ -106,10 +106,12 @@ export const api = {
   setModelConcurrency: (id: string, max: number) => postJson<{ success: boolean }>(`/concurrency/model/${modelPath(id)}`, { max }),
 
   // Request History
-  getRequestHistory: (limit?: number, model?: string) => {
+  getRequestHistory: (opts: { limit?: number; offset?: number; model?: string; source?: string } = {}) => {
     const params = new URLSearchParams();
-    if (limit) params.set('limit', limit.toString());
-    if (model) params.set('model', model);
+    if (opts.limit) params.set('limit', opts.limit.toString());
+    if (opts.offset) params.set('offset', opts.offset.toString());
+    if (opts.model) params.set('model', opts.model);
+    if (opts.source) params.set('source', opts.source);
     const query = params.toString();
     return fetchJson<RequestHistoryResponse>(`/requests${query ? `?${query}` : ''}`);
   },

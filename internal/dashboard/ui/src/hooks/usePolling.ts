@@ -29,6 +29,10 @@ export function usePolling<T>(
 
   useEffect(() => {
     refetch();
+    // A non-positive interval fetches once and then leaves the data alone —
+    // for views where a background refresh would move content the reader is
+    // in the middle of, such as a paged list.
+    if (intervalMs <= 0) return;
     const interval = setInterval(refetch, intervalMs);
     return () => clearInterval(interval);
   }, [refetch, intervalMs]);

@@ -266,11 +266,17 @@ export interface RequestLog {
    * WebSocket, "health" for the engine probe, "selfcheck" for the audit probe.
    * Absent on records written before the field existed.
    */
-  source?: 'hub' | 'health' | 'selfcheck';
+  source?: RequestSource;
 }
+
+export type RequestSource = 'hub' | 'health' | 'selfcheck';
 
 export interface RequestHistoryResponse {
   requests: RequestLog[];
+  /** Records matching the filters, not the number on this page. */
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface HistoricalDataPoint {

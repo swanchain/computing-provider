@@ -418,10 +418,7 @@ func runDaemon(cctx *cli.Context) error {
 
 	// Request history endpoint
 	router.GET("/inference/requests", func(c *gin.Context) {
-		limitStr := c.DefaultQuery("limit", "100")
-		modelFilter := c.Query("model")
-
-		limit, err := strconv.Atoi(limitStr)
+		limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
 		if err != nil || limit <= 0 {
 			limit = 100
 		}
@@ -429,8 +426,31 @@ func runDaemon(cctx *cli.Context) error {
 			limit = 1000
 		}
 
-		history := inferenceService.GetRequestHistory(limit, modelFilter)
-		c.JSON(200, gin.H{"requests": history})
+		offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+		if err != nil || offset < 0 {
+			offset = 0
+		}
+
+		// An unrecognised source is rejected rather than quietly matching
+		// nothing: an empty table is indistinguishable from "no such traffic",
+		// and a typo would read as a working filter.
+		source := c.Query("source")
+		switch computing.RequestSource(source) {
+		case "", computing.SourceHub, computing.SourceHealth, computing.SourceSelfCheck:
+		default:
+			c.JSON(400, gin.H{"error": "unknown source", "valid": []string{
+				string(computing.SourceHub), string(computing.SourceHealth), string(computing.SourceSelfCheck),
+			}})
+			return
+		}
+
+		page := inferenceService.QueryRequestHistory(computing.RequestHistoryQuery{
+			Limit:  limit,
+			Offset: offset,
+			Model:  c.Query("model"),
+			Source: source,
+		})
+		c.JSON(200, page)
 	})
 
 	// Model detailed metrics endpoint

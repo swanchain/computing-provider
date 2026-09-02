@@ -419,24 +419,77 @@ func (m *InferenceMetrics) RecordRequest(req RequestMetric) {
 	m.requestHistory = append(m.requestHistory, req)
 }
 
-// GetRequestHistory returns recent requests, optionally filtered by model
+// RequestHistoryQuery selects a page of request history. A zero value asks for
+// the most recent 100 requests from every model and every source.
+type RequestHistoryQuery struct {
+	Limit  int    // page size; <= 0 means 100
+	Offset int    // records to skip, most recent first
+	Model  string // empty matches every model
+	Source string // empty matches every source
+}
+
+// RequestHistoryPage is one page of history plus the size of the full result,
+// so a caller can page without holding the whole history. Total counts what
+// matched the filters, not what fits on the page.
+type RequestHistoryPage struct {
+	Requests []RequestMetric `json:"requests"`
+	Total    int             `json:"total"`
+	Limit    int             `json:"limit"`
+	Offset   int             `json:"offset"`
+}
+
+// matchesSource reports whether a record belongs to the requested source.
+//
+// Records written before the Source field existed have none, and every one of
+// them arrived over the WebSocket — that was the only path recording anything.
+// Filtering for hub traffic therefore has to include them, or an operator
+// filtering to "Hub" watches their older history disappear.
+func matchesSource(req RequestMetric, source string) bool {
+	if source == "" {
+		return true
+	}
+	if req.Source == "" {
+		return source == string(SourceHub)
+	}
+	return string(req.Source) == source
+}
+
+// GetRequestHistory returns recent requests, optionally filtered by model.
 func (m *InferenceMetrics) GetRequestHistory(limit int, modelFilter string) []RequestMetric {
+	return m.QueryRequestHistory(RequestHistoryQuery{Limit: limit, Model: modelFilter}).Requests
+}
+
+// QueryRequestHistory returns one page of request history, most recent first,
+// along with the total number of records matching the filters.
+func (m *InferenceMetrics) QueryRequestHistory(q RequestHistoryQuery) RequestHistoryPage {
 	m.historyMu.RLock()
 	defer m.historyMu.RUnlock()
 
-	if limit <= 0 {
-		limit = 100
+	if q.Limit <= 0 {
+		q.Limit = 100
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 
-	var result []RequestMetric
-	// Iterate in reverse to get most recent first
-	for i := len(m.requestHistory) - 1; i >= 0 && len(result) < limit; i-- {
+	page := RequestHistoryPage{Requests: []RequestMetric{}, Limit: q.Limit, Offset: q.Offset}
+
+	// Reverse order gives most recent first. Every match is counted so the
+	// caller learns the real total, but only the requested window is copied.
+	for i := len(m.requestHistory) - 1; i >= 0; i-- {
 		req := m.requestHistory[i]
-		if modelFilter == "" || req.Model == modelFilter {
-			result = append(result, req)
+		if q.Model != "" && req.Model != q.Model {
+			continue
 		}
+		if !matchesSource(req, q.Source) {
+			continue
+		}
+		if page.Total >= q.Offset && len(page.Requests) < q.Limit {
+			page.Requests = append(page.Requests, req)
+		}
+		page.Total++
 	}
-	return result
+	return page
 }
 
 // Helper functions

@@ -1269,6 +1269,15 @@ func (s *InferenceService) GetRequestHistory(limit int, modelFilter string) []Re
 	return s.client.metrics.GetRequestHistory(limit, modelFilter)
 }
 
+// QueryRequestHistory returns one page of request history along with the total
+// matching the filters.
+func (s *InferenceService) QueryRequestHistory(q RequestHistoryQuery) RequestHistoryPage {
+	if s.client == nil {
+		return RequestHistoryPage{Requests: []RequestMetric{}, Limit: q.Limit, Offset: q.Offset}
+	}
+	return s.client.metrics.QueryRequestHistory(q)
+}
+
 // GetModelDetailedMetrics returns detailed metrics for a specific model including recent requests
 func (s *InferenceService) GetModelDetailedMetrics(modelID string) map[string]interface{} {
 	result := make(map[string]interface{})
