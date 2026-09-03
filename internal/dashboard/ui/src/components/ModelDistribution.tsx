@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import { AlertCircle } from 'lucide-react';
+import { buildModelColours, colourFor } from '../lib/modelPalette';
 import type { Earnings } from '../types';
 
 interface ModelDistributionProps {
@@ -9,10 +10,6 @@ interface ModelDistributionProps {
 }
 
 type Metric = 'earnings' | 'tokens';
-
-// Distinguishable at small sizes and in sequence, rather than a gradient where
-// adjacent slices are hard to tell apart.
-const COLOURS = ['#34d399', '#60a5fa', '#a78bfa', '#fbbf24', '#f87171', '#22d3ee', '#f472b6', '#a3e635'];
 
 function formatUSD(v: number) {
   if (v === 0) return '$0.00';
@@ -44,6 +41,11 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
     }))
     .filter((r) => r.value > 0)
     .sort((a, b) => b.value - a.value);
+
+  // Same assignment the earnings chart uses, so a model is one colour across
+  // the whole page. Keyed on the model, never on its position in this list: a
+  // slice must not change colour because another model overtook it.
+  const colours = buildModelColours(earnings?.models);
 
   const total = rows.reduce((s, r) => s + r.value, 0);
   const unpriced = (earnings?.models ?? []).filter((m) => !m.priced).length;
@@ -95,7 +97,7 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
                   onMouseLeave={() => setActive(null)}
                 >
                   {rows.map((_, i) => (
-                    <Cell key={i} fill={COLOURS[i % COLOURS.length]} opacity={active === null || active === i ? 1 : 0.35} />
+                    <Cell key={i} fill={colourFor(colours, rows[i]?.model ?? '')} opacity={active === null || active === i ? 1 : 0.35} />
                   ))}
                 </Pie>
               </PieChart>
@@ -115,7 +117,7 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
                   onMouseLeave={() => setActive(null)}
                   className={`flex items-center gap-2 rounded px-1 py-0.5 text-xs transition ${active === i ? 'bg-slate-800' : ''}`}
                 >
-                  <span className="block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: COLOURS[i % COLOURS.length] }} />
+                  <span className="block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colourFor(colours, r.model) }} />
                   <span className="min-w-0 flex-1 truncate font-mono text-slate-300" title={r.model}>{r.model}</span>
                   <span className="shrink-0 tabular-nums text-slate-400">{pct.toFixed(1)}%</span>
                   <span className="w-20 shrink-0 text-right tabular-nums text-slate-500">

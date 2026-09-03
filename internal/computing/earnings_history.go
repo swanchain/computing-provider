@@ -11,6 +11,20 @@ type EarningsPoint struct {
 	TokensIn  int64     `json:"tokens_in"`
 	TokensOut int64     `json:"tokens_out"`
 	USD       float64   `json:"usd"`
+	// Models splits this bucket by model, for samples recorded with a per-model
+	// breakdown. Absent for intervals stored before that was captured: those
+	// are unattributed, not zero, and the UI must say which it is rather than
+	// inventing a split from today's mix.
+	Models map[string]ModelEarningsPoint `json:"models,omitempty"`
+	// Unattributed is the part of USD this bucket cannot assign to any model.
+	Unattributed float64 `json:"unattributed,omitempty"`
+}
+
+// ModelEarningsPoint is one model's contribution to a bucket.
+type ModelEarningsPoint struct {
+	TokensIn  int64   `json:"tokens_in"`
+	TokensOut int64   `json:"tokens_out"`
+	USD       float64 `json:"usd"`
 }
 
 // EarningsSeries is a priced time series built from this node's own history.
@@ -90,6 +104,7 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 	inRate, outRate := blendedRate(metrics, rates)
 
 	var prevIn, prevOut int64
+	prevModels := map[string]ModelTokenCounts{}
 	first := true
 	for _, s := range snapshots {
 		var dIn, dOut int64
@@ -113,23 +128,107 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 		usd := float64(dIn)/tokensPerPriceUnit*inRate + float64(dOut)/tokensPerPriceUnit*outRate
 		out.TotalUSD += usd
 
+		// Split the same delta by model where the sample carries one. Each
+		// model is differenced against its own previous value, because models
+		// are added and removed independently and a restart resets them all.
+		perModel, attributed := splitByModel(s.ModelTokens, prevModels, rates, inRate, outRate)
+		if s.ModelTokens != nil {
+			prevModels = s.ModelTokens
+		}
+		// Only what the split could not account for is unattributed. Comparing
+		// against the bucket's own priced total keeps the segments summing to
+		// the bar rather than to a separately-rounded figure.
+		unattributed := usd - attributed
+		if unattributed < 0 {
+			unattributed = 0
+		}
+
 		key := s.Timestamp
 		if bucket > 0 {
 			key = s.Timestamp.Truncate(bucket)
 		}
 		if n := len(out.Points); n > 0 && out.Points[n-1].Timestamp.Equal(key) {
-			out.Points[n-1].TokensIn += dIn
-			out.Points[n-1].TokensOut += dOut
-			out.Points[n-1].USD += usd
+			p := &out.Points[n-1]
+			p.TokensIn += dIn
+			p.TokensOut += dOut
+			p.USD += usd
+			p.Unattributed += unattributed
+			mergeModelPoints(p, perModel)
 			continue
 		}
-		out.Points = append(out.Points, EarningsPoint{
+		point := EarningsPoint{
 			Timestamp: key, TokensIn: dIn, TokensOut: dOut, USD: usd,
-		})
+			Unattributed: unattributed,
+		}
+		mergeModelPoints(&point, perModel)
+		out.Points = append(out.Points, point)
 	}
 
 	if n := len(snapshots); n > 0 {
 		out.Covers = snapshots[n-1].Timestamp.Sub(snapshots[0].Timestamp).Round(time.Hour).String()
 	}
 	return out
+}
+
+// splitByModel differences each model's cumulative counters against the
+// previous sample and prices the result, returning the per-model contributions
+// and the total USD they account for.
+//
+// A model priced at its own rate is exact; one with no published rate falls
+// back to the node's blended rate so its tokens still appear rather than
+// silently vanishing from the chart.
+func splitByModel(
+	current, previous map[string]ModelTokenCounts,
+	rates map[string]ModelPrice,
+	blendedIn, blendedOut float64,
+) (map[string]ModelEarningsPoint, float64) {
+	if len(current) == 0 {
+		return nil, 0
+	}
+	split := make(map[string]ModelEarningsPoint, len(current))
+	var attributed float64
+	for id, now := range current {
+		before, seen := previous[id]
+		var dIn, dOut int64
+		switch {
+		case !seen:
+			// First sight of this model in the window. Its counter starts from
+			// whatever it already held, so treating the whole value as earned
+			// here would credit traffic served before the window.
+			dIn, dOut = 0, 0
+		case now.In < before.In || now.Out < before.Out:
+			// Restart: everything this counter holds was served since it.
+			dIn, dOut = now.In, now.Out
+		default:
+			dIn, dOut = now.In-before.In, now.Out-before.Out
+		}
+		if dIn == 0 && dOut == 0 {
+			continue
+		}
+		inRate, outRate := blendedIn, blendedOut
+		if r, ok := rates[id]; ok {
+			inRate, outRate = r.ProviderInputPrice, r.ProviderOutputPrice
+		}
+		usd := float64(dIn)/tokensPerPriceUnit*inRate + float64(dOut)/tokensPerPriceUnit*outRate
+		split[id] = ModelEarningsPoint{TokensIn: dIn, TokensOut: dOut, USD: usd}
+		attributed += usd
+	}
+	return split, attributed
+}
+
+// mergeModelPoints accumulates a sample's per-model split into a bucket.
+func mergeModelPoints(point *EarningsPoint, split map[string]ModelEarningsPoint) {
+	if len(split) == 0 {
+		return
+	}
+	if point.Models == nil {
+		point.Models = make(map[string]ModelEarningsPoint, len(split))
+	}
+	for id, add := range split {
+		existing := point.Models[id]
+		existing.TokensIn += add.TokensIn
+		existing.TokensOut += add.TokensOut
+		existing.USD += add.USD
+		point.Models[id] = existing
+	}
 }

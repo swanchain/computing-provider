@@ -213,7 +213,7 @@ function App() {
               </div>
               <MetricsPanel metrics={metrics} loading={metricsLoading} error={metricsError} earnings={earnings} />
               <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(320px,1fr)]">
-                <EarningsChart />
+                <EarningsChart models={earnings?.models} />
                 <ModelDistribution earnings={earnings} loading={!earnings} />
               </div>
             </section>

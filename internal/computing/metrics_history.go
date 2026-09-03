@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -25,6 +26,23 @@ type MetricsHistoryEntity struct {
 	ActiveRequests    int64     `json:"active_requests"`
 	TotalTokensIn     int64     `json:"total_tokens_in"`
 	TotalTokensOut    int64     `json:"total_tokens_out"`
+	// ModelTokens is a JSON map of model ID to that model's cumulative token
+	// counters at this instant, so a past bucket can be split by model rather
+	// than priced at a node-wide blended rate.
+	//
+	// Stored as JSON in one column rather than a second table: it is written
+	// and read as a whole, never queried by model, and a joined table would buy
+	// nothing for the cost of a second migration. Rows written before this
+	// column existed have it empty, and those intervals stay unattributed —
+	// history cannot be split after the fact.
+	ModelTokens string `gorm:"type:text" json:"model_tokens,omitempty"`
+}
+
+// ModelTokenCounts is one model's cumulative token counters. Like the node-wide
+// counters, they reset when the provider restarts.
+type ModelTokenCounts struct {
+	In  int64 `json:"in"`
+	Out int64 `json:"out"`
 }
 
 func (MetricsHistoryEntity) TableName() string {
@@ -45,6 +63,9 @@ type HistoricalDataPoint struct {
 	// between points means a restart rather than negative traffic.
 	TotalTokensIn  int64 `json:"total_tokens_in"`
 	TotalTokensOut int64 `json:"total_tokens_out"`
+	// ModelTokens is the same cumulative split, per model. Empty for samples
+	// recorded before the column existed.
+	ModelTokens map[string]ModelTokenCounts `json:"model_tokens,omitempty"`
 }
 
 // MetricsHistory manages historical metrics storage and retrieval
@@ -162,11 +183,50 @@ func (h *MetricsHistory) recordSnapshot(metricsProvider func() *InferenceMetrics
 		ActiveRequests:    snapshot.ActiveRequests,
 		TotalTokensIn:     snapshot.TotalTokensIn,
 		TotalTokensOut:    snapshot.TotalTokensOut,
+		ModelTokens:       encodeModelTokens(snapshot.ModelMetrics),
 	}
 
 	if err := database.Create(&entry).Error; err != nil {
 		logs.GetLogger().Warnf("Failed to record metrics history: %v", err)
 	}
+}
+
+// encodeModelTokens serialises the per-model cumulative counters. A failure to
+// encode costs the per-model split for that sample and nothing else, so it is
+// logged rather than dropping the whole snapshot.
+func encodeModelTokens(models map[string]*ModelMetrics) string {
+	if len(models) == 0 {
+		return ""
+	}
+	counts := make(map[string]ModelTokenCounts, len(models))
+	for id, m := range models {
+		if m == nil {
+			continue
+		}
+		counts[id] = ModelTokenCounts{In: m.TotalTokensIn, Out: m.TotalTokensOut}
+	}
+	if len(counts) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(counts)
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to encode per-model tokens: %v", err)
+		return ""
+	}
+	return string(encoded)
+}
+
+// decodeModelTokens is the inverse. Unreadable or absent JSON yields no split,
+// which the caller reports as unattributed rather than as zero.
+func decodeModelTokens(encoded string) map[string]ModelTokenCounts {
+	if encoded == "" {
+		return nil
+	}
+	var counts map[string]ModelTokenCounts
+	if err := json.Unmarshal([]byte(encoded), &counts); err != nil {
+		return nil
+	}
+	return counts
 }
 
 // pruneLoop periodically removes old data
@@ -249,6 +309,7 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 				RequestsPerMinute: e.RequestsPerMinute,
 				TotalTokensIn:     e.TotalTokensIn,
 				TotalTokensOut:    e.TotalTokensOut,
+				ModelTokens:       decodeModelTokens(e.ModelTokens),
 			}
 		}
 		return result
@@ -306,6 +367,7 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 			RequestsPerMinute: sumReqPerMin / count,
 			TotalTokensIn:     last.TotalTokensIn,
 			TotalTokensOut:    last.TotalTokensOut,
+			ModelTokens:       decodeModelTokens(last.ModelTokens),
 		})
 	}
 

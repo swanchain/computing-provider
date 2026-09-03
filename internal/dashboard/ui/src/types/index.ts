@@ -232,11 +232,25 @@ export interface Earnings {
   unpriced_models: number;
 }
 
+export interface ModelEarningsPoint {
+  tokens_in: number;
+  tokens_out: number;
+  usd: number;
+}
+
 export interface EarningsPoint {
   timestamp: string;
   tokens_in: number;
   tokens_out: number;
   usd: number;
+  /**
+   * Per-model split of this interval. Absent for intervals recorded before the
+   * provider stored one — those are unattributed, not empty, and must not be
+   * split using today's model mix.
+   */
+  models?: Record<string, ModelEarningsPoint>;
+  /** The part of `usd` that could not be assigned to any model. */
+  unattributed?: number;
 }
 
 export interface EarningsSeries {
