@@ -180,6 +180,38 @@ curl http://localhost:8100/v1/chat/completions \
 
 ---
 
+## Managing auth from the provider CLI
+
+Once the provider is installed, it can inspect and re-authenticate the proxy
+directly, so you do not have to remember CLIProxyAPI's own flags:
+
+```bash
+computing-provider cliproxy status --probe
+computing-provider cliproxy login --device      # headless box: prints a code and URL
+```
+
+`status` lists each stored credential with its account, plan and expiry, and
+`--probe` sends one single-token completion per model to prove they actually
+serve.
+
+That distinction matters more than it sounds. This is a real failure mode:
+
+```
+  expiring  codex        someone@example.com (plus)
+            expires 2026-09-08 23:37 UTC (in 128h0m0s)
+
+Live probe
+  HTTP 503  gpt-5.5
+            auth_unavailable: no auth available (providers=codex, model=gpt-5.5)
+```
+
+The credential is not expired and not disabled — the upstream is rejecting it
+anyway, and CLIProxyAPI keeps answering `/v1/models` from a static registry, so
+the model reports healthy while every request fails. Re-authenticating will not
+help here; check whether the account still has access. CLIProxyAPI's own log
+records the status it received from upstream, which is the fastest way to tell
+an account problem from a token one.
+
 ## Troubleshooting
 
 | Symptom | Fix |

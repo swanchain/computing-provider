@@ -43,6 +43,7 @@ func main() {
 			inferenceCmd,
 			modelsCmd,
 			selfcheckCmd,
+			cliproxyCmd,
 			versionCmd,
 			updateCmd,
 			alertsCmd,
@@ -65,6 +66,7 @@ func main() {
 					strings.EqualFold(firstArg, inferenceCmd.Name) ||
 					strings.EqualFold(firstArg, modelsCmd.Name) ||
 					strings.EqualFold(firstArg, alertsCmd.Name) ||
+					strings.EqualFold(firstArg, cliproxyCmd.Name) ||
 					strings.EqualFold(firstArg, versionCmd.Name) ||
 					strings.EqualFold(firstArg, updateCmd.Name) {
 					return nil

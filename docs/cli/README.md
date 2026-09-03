@@ -37,6 +37,7 @@ Secrets belong in `$CP_PATH/.env` rather than `config.toml` — see
 | `inference` | Status, config, collateral, beneficiary, model selection |
 | `models` | Catalog, weight download, verification, local model files |
 | `alerts` | Test the configured alert transports |
+| `cliproxy` | Inspect and authenticate a local CLIProxyAPI backend |
 | `research` | Hardware and GPU information, benchmarks |
 | `init` | Create a provider repository without the wizard |
 | `info`, `state` | Provider information and current state |
@@ -132,6 +133,38 @@ computing-provider alerts test --message "hello from my node"
 
 Sends through every configured transport, so you find out the SMTP password is
 wrong now rather than during an outage.
+
+### `cliproxy`
+
+For providers serving through [CLIProxyAPI](../guides/cliproxy-computing-provider.md),
+which turns a personal ChatGPT/Claude/Gemini subscription into an
+OpenAI-compatible endpoint.
+
+```bash
+computing-provider cliproxy status            # credentials: provider, account, plan, expiry
+computing-provider cliproxy status --probe    # also send one real completion per model
+computing-provider cliproxy status --json
+
+computing-provider cliproxy login                      # codex, browser flow
+computing-provider cliproxy login --device             # codex, device code (headless boxes)
+computing-provider cliproxy login --provider claude    # also: kimi, xai, antigravity
+```
+
+`status` reads credential metadata only — no token is read or printed — and
+exits non-zero when a credential is expired or disabled, so it works as a cron
+check.
+
+**`--probe` is the one that finds real outages.** A credential can be unexpired
+and enabled and still be rejected upstream, and the proxy answers `/v1/models`
+from a static registry either way — so the model looks healthy while every
+completion fails. Only a real completion tells them apart. Probed models come
+from the `models.json` entries pointing at `--endpoint` (default
+`http://127.0.0.1:8317`), using the `local_model` name and the `api_key` already
+configured there; name models as arguments to override.
+
+`login` runs the CLIProxyAPI binary's own OAuth flow (found on `PATH`, or pass
+`--bin`) and leaves the credential where the proxy watches for it, so no restart
+is needed.
 
 ### `research`
 
