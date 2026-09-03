@@ -260,3 +260,56 @@ func TestErrorMessageFallsBackToRawBody(t *testing.T) {
 		t.Errorf("a long body should be truncated, got %d chars", len(got))
 	}
 }
+
+// CLIProxyAPI can print "authentication failed" and still exit 0 — an upstream
+// 504 while polling for the device token does exactly that. Only a written
+// credential proves a login worked.
+func TestChangedSinceDetectsWhatALoginWrote(t *testing.T) {
+	dir := t.TempDir()
+	stamp := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	writeFile(t, dir, "codex-old@example.com-plus.json", credFile("old@example.com", "codex", stamp, false))
+
+	before := Snapshot(dir)
+	if len(before) != 1 {
+		t.Fatalf("snapshot has %d entries, want 1", len(before))
+	}
+
+	// Nothing written: the login did not happen, whatever its exit status said.
+	if got := ChangedSince(before, Snapshot(dir)); len(got) != 0 {
+		t.Errorf("ChangedSince = %v, want empty when no credential was written", got)
+	}
+
+	// A new account logs in.
+	writeFile(t, dir, "codex-new@example.com-pro.json", credFile("new@example.com", "codex", stamp, false))
+	got := ChangedSince(before, Snapshot(dir))
+	if len(got) != 1 || got[0] != "codex-new@example.com-pro.json" {
+		t.Errorf("ChangedSince = %v, want the newly written credential", got)
+	}
+}
+
+func TestChangedSinceDetectsRefreshOfAnExistingCredential(t *testing.T) {
+	dir := t.TempDir()
+	name := "codex-a@example.com-plus.json"
+	stamp := time.Now().UTC().Format(time.RFC3339)
+	writeFile(t, dir, name, credFile("a@example.com", "codex", stamp, false))
+
+	before := Snapshot(dir)
+	// Re-authenticating the same account rewrites the same filename, so the
+	// check has to be on modification time, not on the set of names.
+	later := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(filepath.Join(dir, name), later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ChangedSince(before, Snapshot(dir))
+	if len(got) != 1 || got[0] != name {
+		t.Errorf("ChangedSince = %v, want the rewritten credential", got)
+	}
+}
+
+func TestSnapshotOfMissingDirIsEmptyNotAnError(t *testing.T) {
+	// The first login on a fresh machine creates the directory.
+	if got := Snapshot(filepath.Join(t.TempDir(), "nope")); len(got) != 0 {
+		t.Errorf("Snapshot of a missing dir = %v, want empty", got)
+	}
+}

@@ -263,6 +263,11 @@ instead of expecting a browser on this machine.`,
 			Name:  "config",
 			Usage: "CLIProxyAPI config.yaml to use",
 		},
+		&cli.StringFlag{
+			Name:  "auth-dir",
+			Usage: "Directory the credential should land in (used to confirm the login actually wrote one)",
+			Value: cliproxy.DefaultAuthDir,
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		provider := cctx.String("provider")
@@ -295,6 +300,16 @@ instead of expecting a browser on this machine.`,
 			args = append(args, "-config", configPath)
 		}
 
+		// Judge the login by what it writes, not by how it exits: CLIProxyAPI
+		// can print "authentication failed" and still exit 0.
+		authDir := cctx.String("auth-dir")
+		if configPath := cctx.String("config"); configPath != "" {
+			if fromConfig, err := cliproxy.AuthDirFromConfig(configPath); err == nil {
+				authDir = fromConfig
+			}
+		}
+		before := cliproxy.Snapshot(authDir)
+
 		fmt.Printf("%s %s %s\n\n", color.HiBlackString("running"), bin, strings.Join(args, " "))
 
 		// The flow is interactive — it prints a URL and waits. Wire the child
@@ -320,11 +335,19 @@ instead of expecting a browser on this machine.`,
 			}
 		}()
 
-		if err := cmd.Wait(); err != nil {
-			return fmt.Errorf("login did not complete: %w", err)
+		waitErr := cmd.Wait()
+
+		written := cliproxy.ChangedSince(before, cliproxy.Snapshot(authDir))
+		if len(written) == 0 {
+			if waitErr != nil {
+				return fmt.Errorf("login failed and wrote no credential to %s: %w", cliproxy.ExpandPath(authDir), waitErr)
+			}
+			// The usual case: the flow reported a failure above and exited 0.
+			return fmt.Errorf("login wrote no credential to %s — read the output above for why; "+
+				"a polling timeout usually just needs retrying", cliproxy.ExpandPath(authDir))
 		}
 
-		fmt.Printf("\n%s\n", color.GreenString("Login finished."))
+		fmt.Printf("\n%s %s\n", color.GreenString("Login finished:"), strings.Join(written, ", "))
 		fmt.Printf("%s\n", color.HiBlackString("CLIProxyAPI watches its auth directory, so no restart is needed."))
 		fmt.Printf("%s\n", color.HiBlackString("Confirm with: computing-provider cliproxy status --probe"))
 		return nil

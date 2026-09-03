@@ -193,6 +193,48 @@ func ReadCredentials(authDir string) ([]Credential, error) {
 	return creds, nil
 }
 
+// Snapshot records the modification time of every credential in an auth
+// directory, so a login can be judged by what it wrote rather than by how it
+// exited. A missing directory yields an empty snapshot, not an error: the first
+// login on a fresh machine creates it.
+func Snapshot(authDir string) map[string]time.Time {
+	snap := map[string]time.Time{}
+	entries, err := os.ReadDir(ExpandPath(authDir))
+	if err != nil {
+		return snap
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		snap[entry.Name()] = info.ModTime()
+	}
+	return snap
+}
+
+// ChangedSince names the credentials written or rewritten between two
+// snapshots.
+//
+// This is the only reliable evidence that a login worked. CLIProxyAPI can print
+// a failure and still exit 0 — an upstream 504 while polling for the device
+// token does exactly that — so an exit status of zero means the process ended,
+// not that anyone authenticated.
+func ChangedSince(before, after map[string]time.Time) []string {
+	var changed []string
+	for name, modAfter := range after {
+		modBefore, existed := before[name]
+		if !existed || modAfter.After(modBefore) {
+			changed = append(changed, name)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
 // ProbeResult is the outcome of one real completion through the proxy.
 type ProbeResult struct {
 	Model string `json:"model"`
