@@ -262,6 +262,38 @@ from **Settings**; stored secrets are never sent back to the browser. Host and
 port are configurable under `[Dashboard]` — use `0.0.0.0` only on a network you
 trust.
 
+### Subscription-backed models
+
+If you serve models through [CLIProxyAPI](docs/guides/cliproxy-computing-provider.md) —
+which turns a personal ChatGPT, Claude or Gemini subscription into an
+OpenAI-compatible endpoint — the provider can check and renew that backend's
+logins for you:
+
+```bash
+computing-provider cliproxy status           # account, plan and expiry per credential
+computing-provider cliproxy status --probe   # and one real completion per model
+computing-provider cliproxy login --device   # re-authenticate; prints a code and a URL
+```
+
+`status` reads credential metadata only — never a token — and exits non-zero on
+an expired or disabled login, so it works as a cron check.
+
+**Use `--probe`.** A login can be unexpired, enabled, and still rejected by the
+subscription upstream, and the proxy answers `/v1/models` from a static list
+either way — so the model reports healthy while every request fails. Only a real
+completion tells those apart:
+
+```
+  expiring  codex   you@example.com (plus)   expires 2026-09-08 (in 128h0m0s)
+
+Live probe
+  HTTP 503  gpt-5.5
+            auth_unavailable: no auth available (providers=codex, model=gpt-5.5)
+```
+
+That credential is not expired. Re-authenticating will not help — check whether
+the account still has access.
+
 ### REST API
 
 ```bash
@@ -332,6 +364,9 @@ computing-provider models catalog            # supported models
 computing-provider models download <id>      # fetch weights
 computing-provider models list               # what is on disk
 
+computing-provider cliproxy status --probe   # subscription-backed models: are they serving?
+computing-provider cliproxy login --device   # re-authenticate one
+
 computing-provider research hardware         # hardware, GPU info, benchmarks
 ```
 
@@ -357,6 +392,7 @@ running provider — see
 | [SGLang deployment](docs/sglang-deployment.md) | Running SGLang for inference |
 | [SGLang tuning](docs/sglang-best-practices.md) | GPU configs, memory tuning, multi-GPU TP |
 | [Apple Silicon](docs/apple-silicon-support.md) | Ollama setup on M-series Macs |
+| [CLIProxyAPI](docs/guides/cliproxy-computing-provider.md) | Serving a ChatGPT/Claude subscription as an endpoint |
 | [Troubleshooting](docs/troubleshooting.md) | Error reference and FAQ |
 
 ## Troubleshooting
