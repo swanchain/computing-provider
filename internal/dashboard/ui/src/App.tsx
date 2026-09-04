@@ -229,23 +229,25 @@ function App() {
         {activeView === 'overview' && (
           <div className="space-y-6">
             <section aria-labelledby="provider-health-heading">
-              <div className="mb-3">
-                <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider overview</h2>
-                <p className="mt-1 text-sm text-slate-300">Current service health, traffic, and earnings.</p>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+                <div className="min-w-0">
+                  <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider overview</h2>
+                  <p className="mt-1 text-sm text-slate-300">Current service health, traffic, and earnings.</p>
+                </div>
+                <OperationalSummary
+                  status={status}
+                  metrics={metrics}
+                  models={models}
+                  loading={statusLoading || metricsLoading || modelsLoading}
+                  dataIssues={[
+                    { label: 'connection', error: statusError },
+                    { label: 'metrics', error: metricsError },
+                    { label: 'models', error: modelsError },
+                    { label: 'request controls', error: requestMgmtError },
+                    { label: 'earnings', error: earningsError },
+                  ]}
+                />
               </div>
-              <OperationalSummary
-                status={status}
-                metrics={metrics}
-                models={models}
-                loading={statusLoading || metricsLoading || modelsLoading}
-                dataIssues={[
-                  { label: 'connection', error: statusError },
-                  { label: 'metrics', error: metricsError },
-                  { label: 'models', error: modelsError },
-                  { label: 'request controls', error: requestMgmtError },
-                  { label: 'earnings', error: earningsError },
-                ]}
-              />
               <MetricsPanel
                 metrics={metrics}
                 loading={metricsLoading}
@@ -283,7 +285,6 @@ function App() {
                   />
                 </div>
                 <div className="min-w-0 space-y-6">
-                  <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
                   <section aria-labelledby="earnings-heading">
                     <div className="mb-3">
                       <h2 id="earnings-heading" className="text-xl font-semibold text-white">Earnings and traffic mix</h2>
@@ -294,6 +295,7 @@ function App() {
                       <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
                     </div>
                   </section>
+                  <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
                 </div>
               </div>
             </section>

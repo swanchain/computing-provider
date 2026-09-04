@@ -92,25 +92,31 @@ export function OperationalSummary({ status, metrics, models, dataIssues, loadin
   }[severity];
   const Icon = visual.Icon;
 
+  // A single row beside the page title rather than a full-width card below it.
+  // The banner earns its space when something is wrong; when every signal is
+  // healthy it was a paragraph saying so, pushing the actual figures down the
+  // page. Severity still carries its own colour and icon, the detail is kept in
+  // the title attribute rather than dropped, and anything non-healthy keeps the
+  // jump-to-operations action.
+  const detail = `${visual.title}. ${visual.copy}`;
   return (
     <div
       role={severity === 'critical' ? 'alert' : 'status'}
-      className={`mb-4 flex flex-col gap-3 rounded-xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${visual.className}`}
+      title={detail}
+      className={`flex min-w-0 max-w-full items-center gap-2 rounded-lg border px-3 py-1.5 ${visual.className}`}
     >
-      <div className="flex min-w-0 items-start gap-3">
-        <Icon aria-hidden="true" size={20} className={`mt-0.5 shrink-0 ${visual.iconClass}`} />
-        <div className="min-w-0">
-          <p className={`font-medium ${visual.titleClass}`}>{visual.title}</p>
-          <p className="mt-0.5 text-sm text-slate-300">{visual.copy}</p>
-        </div>
-      </div>
+      <Icon aria-hidden="true" size={16} className={`shrink-0 ${visual.iconClass}`} />
+      <p className={`min-w-0 truncate text-sm font-medium ${visual.titleClass}`}>
+        {visual.title}
+        {visual.copy && <span className="ml-2 font-normal text-slate-300">{visual.copy}</span>}
+      </p>
       {severity !== 'healthy' && (
         <button
           type="button"
           onClick={() => document.getElementById('operations-heading')?.scrollIntoView({ behavior: 'smooth' })}
-          className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 self-start rounded-lg border border-current/30 px-3 text-sm font-medium text-slate-200 hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400 sm:self-auto"
+          className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-md border border-current/30 px-2 py-1 text-xs font-medium text-slate-200 hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-blue-400"
         >
-          Review operations <ChevronDown aria-hidden="true" size={15} />
+          Review <ChevronDown aria-hidden="true" size={13} />
         </button>
       )}
     </div>
