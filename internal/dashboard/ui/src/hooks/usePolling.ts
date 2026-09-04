@@ -4,6 +4,8 @@ interface UsePollingResult<T> {
   data: T | null;
   error: Error | null;
   loading: boolean;
+  refreshing: boolean;
+  lastUpdated: Date | null;
   refetch: () => Promise<void>;
 }
 
@@ -14,16 +16,21 @@ export function usePolling<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const refetch = useCallback(async () => {
+    setRefreshing(true);
     try {
       const result = await fetchFn();
       setData(result);
       setError(null);
+      setLastUpdated(new Date());
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [fetchFn]);
 
@@ -37,5 +44,5 @@ export function usePolling<T>(
     return () => clearInterval(interval);
   }, [refetch, intervalMs]);
 
-  return { data, error, loading, refetch };
+  return { data, error, loading, refreshing, lastUpdated, refetch };
 }

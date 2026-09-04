@@ -7,6 +7,7 @@ import type { Earnings } from '../types';
 interface ModelDistributionProps {
   earnings: Earnings | null;
   loading: boolean;
+  error?: Error | null;
 }
 
 type Metric = 'earnings' | 'tokens';
@@ -24,7 +25,7 @@ function formatTokens(v: number) {
   return v.toLocaleString();
 }
 
-export function ModelDistribution({ earnings, loading }: ModelDistributionProps) {
+export function ModelDistribution({ earnings, loading, error }: ModelDistributionProps) {
   const [metric, setMetric] = useState<Metric>('earnings');
   const [active, setActive] = useState<number | null>(null);
 
@@ -55,7 +56,7 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
   }
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60">
+    <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <h3 className="text-sm font-medium text-slate-300">Share by model</h3>
         <div className="flex gap-1" role="group" aria-label="Distribute by">
@@ -75,7 +76,12 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
         </div>
       </div>
 
-      {rows.length === 0 ? (
+      {error && !earnings ? (
+        <div className="px-4 py-8">
+          <p className="text-sm font-medium text-amber-200">Traffic mix is unavailable</p>
+          <p className="mt-1 text-xs text-slate-300">{error.message}</p>
+        </div>
+      ) : rows.length === 0 ? (
         <p className="px-4 py-8 text-sm text-slate-400">
           No {metric === 'earnings' ? 'priced earnings' : 'traffic'} recorded since the node started.
         </p>
@@ -115,12 +121,12 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
                   key={r.model}
                   onMouseEnter={() => setActive(i)}
                   onMouseLeave={() => setActive(null)}
-                  className={`flex items-center gap-2 rounded px-1 py-0.5 text-xs transition ${active === i ? 'bg-slate-800' : ''}`}
+                  className={`flex items-start gap-2 rounded px-1 py-0.5 text-xs transition ${active === i ? 'bg-slate-800' : ''}`}
                 >
-                  <span className="block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colourFor(colours, r.model) }} />
-                  <span className="min-w-0 flex-1 truncate font-mono text-slate-300" title={r.model}>{r.model}</span>
-                  <span className="shrink-0 tabular-nums text-slate-400">{pct.toFixed(1)}%</span>
-                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-500">
+                  <span className="mt-0.5 block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colourFor(colours, r.model) }} />
+                  <span className="min-w-0 flex-1 break-all font-mono text-slate-300">{r.model}</span>
+                  <span className="shrink-0 tabular-nums text-slate-300">{pct.toFixed(1)}%</span>
+                  <span className="w-20 shrink-0 text-right tabular-nums text-slate-400">
                     {metric === 'earnings' ? formatUSD(r.usd) : formatTokens(r.tokens)}
                   </span>
                 </li>
@@ -130,7 +136,7 @@ export function ModelDistribution({ earnings, loading }: ModelDistributionProps)
         </div>
       )}
 
-      <p className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
+      <p className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-300">
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <span>
           Share of traffic served since this node last started — its counters reset on restart, so

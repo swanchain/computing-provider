@@ -116,9 +116,10 @@ export function EarningsChart({ models }: EarningsChartProps) {
   );
 
   const colours = useMemo(() => buildModelColours(models), [models]);
-  const points = data?.points ?? [];
+  const points = useMemo(() => data?.points ?? [], [data?.points]);
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
-  const active = hovered !== null ? points[hovered] : null;
+  const activeIndex = hovered ?? (points.length > 0 ? points.length - 1 : null);
+  const active = activeIndex !== null ? points[activeIndex] : null;
   const activeSegments = active ? segmentsFor(active, colours) : [];
 
   // Which models actually appear anywhere in this window — the legend should
@@ -145,12 +146,16 @@ export function EarningsChart({ models }: EarningsChartProps) {
   }, [points, colours]);
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60">
+    <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div>
           <h3 className="text-sm font-medium text-slate-300">Earnings over time</h3>
-          <p className="text-xs text-slate-500">
-            {loading && !data ? 'Loading…' : `${formatUSD(data?.total_usd ?? 0)} in this window`}
+          <p className="text-xs text-slate-400">
+            {loading && !data
+              ? 'Loading…'
+              : error && data
+                ? `${formatUSD(data.total_usd)} · showing stale data`
+                : `${formatUSD(data?.total_usd ?? 0)} in this window`}
           </p>
         </div>
         <div className="flex gap-1" role="group" aria-label="Time window">
@@ -179,13 +184,16 @@ export function EarningsChart({ models }: EarningsChartProps) {
           {/* The readout sits above the bars in fixed space rather than
               floating over them: a tooltip that follows the cursor covers the
               neighbouring bars an operator is trying to compare against, and
-              reserving the row stops the chart jumping as it appears. */}
-          <div className="mb-2 min-h-[4.5rem]" aria-live="polite">
+              reserving the row stops the chart jumping as it appears. The
+              latest interval is selected initially so this space is useful
+              before the operator interacts with the chart. */}
+          <div className="mb-2 h-36" aria-live="polite">
             {active ? (
               <div className="text-xs">
                 <div className="flex items-baseline gap-2">
                   <span className="font-mono text-sm text-white">{formatUSD(active.usd)}</span>
                   <span className="text-slate-400">{new Date(active.timestamp).toLocaleString()}</span>
+                  {hovered === null && <span className="ml-auto text-slate-400">Latest interval</span>}
                 </div>
                 {activeSegments.length > 0 ? (
                   <ul className="mt-1 space-y-0.5">
@@ -199,7 +207,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
                         <span className="min-w-0 flex-1 truncate text-slate-300">{s.label}</span>
                         <span className="font-mono text-slate-400">{formatUSD(s.usd)}</span>
                         {s.key !== '__unattributed' && (
-                          <span className="w-28 shrink-0 text-right font-mono text-slate-500">
+                          <span className="w-28 shrink-0 text-right font-mono text-slate-400">
                             {formatTokens(s.tokensIn)} in / {formatTokens(s.tokensOut)} out
                           </span>
                         )}
@@ -209,12 +217,12 @@ export function EarningsChart({ models }: EarningsChartProps) {
                 ) : (
                   <div className="mt-1 text-slate-400">
                     {formatTokens(active.tokens_in)} in / {formatTokens(active.tokens_out)} out
-                    <span className="ml-2 text-slate-500">— recorded before the per-model split</span>
+                    <span className="ml-2 text-slate-400">— recorded before the per-model split</span>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="text-xs text-slate-500">
+              <div className="text-xs text-slate-400">
                 Hover a bar for its models and usage. {points.length} intervals shown.
               </div>
             )}
@@ -222,13 +230,13 @@ export function EarningsChart({ models }: EarningsChartProps) {
 
           <div className="flex h-32 items-end gap-px"
                onMouseLeave={() => setHovered(null)}
-               role="img"
+               role="group"
                aria-label={`Earnings per interval over ${window_}, split by model, totalling ${formatUSD(data?.total_usd ?? 0)}`}>
             {points.map((p, i) => {
               // Against a zero peak every bar would be full height, which reads
               // as a busy period rather than an idle one.
               const h = peak > 0 ? Math.max(2, (p.usd / peak) * 100) : 2;
-              const on = hovered === i;
+              const on = activeIndex === i;
               const segments = segmentsFor(p, colours);
               const describe = segments.length
                 ? segments.map((s) => `${s.label} ${formatUSD(s.usd)}`).join(', ')
@@ -280,7 +288,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
             })}
           </div>
 
-          <div className="mt-2 flex justify-between text-xs text-slate-500">
+          <div className="mt-2 flex justify-between text-xs text-slate-400">
             <span>{points[0] && new Date(points[0].timestamp).toLocaleString()}</span>
             <span>{points[points.length - 1] && new Date(points[points.length - 1].timestamp).toLocaleString()}</span>
           </div>
@@ -294,7 +302,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
                     className="h-2 w-2 shrink-0 rounded-sm"
                     style={{ backgroundColor: entry.colour }}
                   />
-                  <span className="truncate text-slate-400" title={entry.label}>{entry.label}</span>
+                  <span className="break-all text-slate-400">{entry.label}</span>
                 </li>
               ))}
             </ul>

@@ -14,16 +14,43 @@ export function AuthDialog({ open, onClose, onAuthenticated }: AuthDialogProps) 
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setError('');
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     window.setTimeout(() => inputRef.current?.focus(), 0);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -48,10 +75,12 @@ export function AuthDialog({ open, onClose, onAuthenticated }: AuthDialogProps) 
 
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
       aria-labelledby="unlock-title"
+      aria-describedby="unlock-description"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -64,7 +93,7 @@ export function AuthDialog({ open, onClose, onAuthenticated }: AuthDialogProps) 
             </div>
             <div>
               <h2 id="unlock-title" className="text-lg font-semibold text-white">Unlock operator controls</h2>
-              <p className="mt-1 text-sm text-slate-400">Monitoring stays read-only until this browser tab is unlocked.</p>
+              <p id="unlock-description" className="mt-1 text-sm text-slate-300">Monitoring stays read-only until this browser tab is unlocked.</p>
             </div>
           </div>
           <button
@@ -87,11 +116,11 @@ export function AuthDialog({ open, onClose, onAuthenticated }: AuthDialogProps) 
               autoComplete="off"
               value={token}
               onChange={(event) => setToken(event.target.value)}
-              className="min-h-11 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 font-mono text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30"
+              className="min-h-11 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 font-mono text-sm text-white outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30"
               placeholder="Paste dashboard.token"
               aria-describedby="token-help"
             />
-            <p id="token-help" className="mt-2 text-xs leading-5 text-slate-400">
+            <p id="token-help" className="mt-2 text-xs leading-5 text-slate-300">
               On the provider host, read <code className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-300">$CP_PATH/dashboard.token</code>. The token is kept only for this browser tab.
             </p>
           </div>

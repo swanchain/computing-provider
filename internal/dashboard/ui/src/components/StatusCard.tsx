@@ -21,11 +21,11 @@ export function StatusCard({ title, value, subtitle, icon, color = 'blue' }: Sta
   return (
     <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-900 p-3 sm:p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="truncate text-xs text-slate-400 sm:text-sm">{title}</span>
-        {icon && <span className={colorClasses[color]}>{icon}</span>}
+        <span className="truncate text-xs text-slate-300 sm:text-sm">{title}</span>
+        {icon && <span aria-hidden="true" className={colorClasses[color]}>{icon}</span>}
       </div>
       <div className={`truncate text-lg font-bold sm:text-2xl ${colorClasses[color]}`} title={String(value)}>{value}</div>
-      {subtitle && <div className="mt-1 truncate text-[11px] text-slate-500 sm:text-xs" title={subtitle}>{subtitle}</div>}
+      {subtitle && <div className="mt-1 truncate text-[11px] text-slate-400 sm:text-xs" title={subtitle}>{subtitle}</div>}
     </div>
   );
 }

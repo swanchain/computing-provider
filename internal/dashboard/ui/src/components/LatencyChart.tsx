@@ -43,7 +43,7 @@ export function LatencyChart({ metrics }: LatencyChartProps) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
         <h3 className="text-lg font-semibold text-slate-200 mb-4">Latency Over Time</h3>
-        <div className="h-48 flex items-center justify-center text-slate-500">
+        <div className="h-48 flex items-center justify-center text-slate-400">
           Collecting data...
         </div>
       </div>

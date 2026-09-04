@@ -1,4 +1,4 @@
-import { Activity, Clock, Coins, Wifi, Zap } from 'lucide-react';
+import { Activity, Clock, Coins, Gauge, ShieldCheck } from 'lucide-react';
 import { StatusCard } from './StatusCard';
 import type { Earnings, InferenceMetrics } from '../types';
 
@@ -7,6 +7,8 @@ interface MetricsPanelProps {
   loading: boolean;
   error?: Error | null;
   earnings?: Earnings | null;
+  earningsError?: Error | null;
+  earningsLoading?: boolean;
 }
 
 // Sub-cent sums are common on a quiet day; rounding them to $0.00 makes a
@@ -24,11 +26,11 @@ function formatNumber(n: number): string {
   return n.toFixed(0);
 }
 
-export function MetricsPanel({ metrics, loading, error, earnings }: MetricsPanelProps) {
+export function MetricsPanel({ metrics, loading, error, earnings, earningsError, earningsLoading }: MetricsPanelProps) {
   if (loading) {
     return (
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-4">
-        {[...Array(4)].map((_, i) => (
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-5">
+        {[...Array(5)].map((_, i) => (
           <div key={i} className="animate-pulse rounded-xl border border-slate-700 bg-slate-900 p-3 sm:p-4">
             <div className="h-4 bg-slate-700 rounded w-20 mb-2"></div>
             <div className="h-8 bg-slate-700 rounded w-16"></div>
@@ -38,64 +40,56 @@ export function MetricsPanel({ metrics, loading, error, earnings }: MetricsPanel
     );
   }
 
-  if (!metrics) {
-    return (
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-4">
-        <StatusCard title="Total Requests" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Activity size={20} />} color="blue" />
-        <StatusCard title="Success Rate" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Zap size={20} />} color="blue" />
-        <StatusCard title="Avg Latency" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Clock size={20} />} color="blue" />
-        <StatusCard title="Connection" value="Unknown" subtitle={error ? "API unreachable" : "No data"} icon={<Wifi size={20} />} color="red" />
-        <StatusCard title="Earned" value="--" subtitle={error ? "API unreachable" : "No data"} icon={<Coins size={20} />} color="green" />
-      </div>
-    );
-  }
-
-  const successRate = metrics.total_requests > 0
+  const hasRequests = Boolean(metrics && metrics.total_requests > 0);
+  const successRate = hasRequests && metrics
     ? ((metrics.successful_requests / metrics.total_requests) * 100).toFixed(1)
-    : '100.0';
-
-  const isConnected = metrics.connection_state === 'connected';
+    : null;
+  const platformUnavailable = Boolean(earnings?.platform?.unavailable);
+  const earningsUnavailable = Boolean(earningsError) || (!earnings && !earningsLoading) || platformUnavailable;
+  const uptime = earningsUnavailable ? null : earnings?.platform?.uptime_7d_percent;
+  const uptimeColor = uptime == null ? 'gray' : uptime >= 99 ? 'green' : uptime >= 95 ? 'yellow' : 'red';
+  const successColor = successRate == null ? 'gray' : parseFloat(successRate) >= 99 ? 'green' : parseFloat(successRate) >= 95 ? 'yellow' : 'red';
 
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-5 md:gap-4">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 md:gap-4 xl:grid-cols-5">
       <StatusCard
-        title="Total Requests"
-        value={formatNumber(metrics.total_requests)}
-        subtitle={`${metrics.successful_requests} successful`}
-        icon={<Activity size={20} />}
+        title="7-day uptime"
+        value={uptime == null ? '--' : `${uptime.toFixed(2)}%`}
+        subtitle={earningsLoading && !earnings ? 'Loading platform data' : earningsUnavailable ? 'Platform data unavailable' : 'reported by Swan Inference'}
+        icon={<ShieldCheck aria-hidden="true" size={20} />}
+        color={uptimeColor}
+      />
+      <StatusCard
+        title="Session success"
+        value={successRate == null ? '--' : `${successRate}%`}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `${metrics.failed_requests} failed of ${formatNumber(metrics.total_requests)}` : 'No requests served yet'}
+        icon={<Activity aria-hidden="true" size={20} />}
+        color={successColor}
+      />
+      <StatusCard
+        title="P95 latency"
+        value={metrics && hasRequests ? `${metrics.p95_latency_ms.toFixed(0)}ms` : '--'}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `Average ${metrics.avg_latency_ms.toFixed(0)}ms · no SLA applied` : 'No requests served yet'}
+        icon={<Clock aria-hidden="true" size={20} />}
         color="blue"
       />
       <StatusCard
-        title="Success Rate"
-        value={`${successRate}%`}
-        subtitle={`${metrics.failed_requests} failed`}
-        icon={<Zap size={20} />}
-        color={parseFloat(successRate) >= 95 ? 'green' : parseFloat(successRate) >= 80 ? 'yellow' : 'red'}
+        title="Request rate"
+        value={metrics ? `${metrics.requests_per_minute.toFixed(1)}/min` : '--'}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : `${metrics.active_requests} active now`}
+        icon={<Gauge aria-hidden="true" size={20} />}
+        color="blue"
       />
       <StatusCard
-        title="Avg Latency"
-        value={`${metrics.avg_latency_ms.toFixed(0)}ms`}
-        subtitle={`P99: ${metrics.p99_latency_ms.toFixed(0)}ms`}
-        icon={<Clock size={20} />}
-        color={metrics.avg_latency_ms < 100 ? 'green' : metrics.avg_latency_ms < 500 ? 'yellow' : 'red'}
+        title="Lifetime earned"
+        value={earningsUnavailable || !earnings ? '--' : formatUSD(earnings.platform.total_usd)}
+        // Swan Inference publishes one figure: lifetime gross. There is no
+        // paid/outstanding balance to show, so the subtitle says what the
+        // number is rather than implying it is money waiting to be drawn.
+        subtitle={earningsLoading && !earnings ? 'Loading platform data' : earningsUnavailable ? 'Platform data unavailable' : 'authoritative platform total'}
+        icon={<Coins aria-hidden="true" size={20} />}
+        color={earningsUnavailable ? 'gray' : 'green'}
       />
-      <StatusCard
-        title="Connection"
-        value={isConnected ? 'Connected' : 'Disconnected'}
-        subtitle={`${metrics.active_requests} active requests`}
-        icon={<Wifi size={20} />}
-        color={isConnected ? 'green' : 'red'}
-      />
-        <StatusCard
-          title="Earned"
-          value={earnings?.platform?.unavailable ? '--' : formatUSD(earnings?.platform?.total_usd ?? 0)}
-          // Swan Inference publishes one figure: lifetime gross. There is no
-          // paid/outstanding balance to show, so the subtitle says what the
-          // number is rather than implying it is money waiting to be drawn.
-          subtitle={earnings?.platform?.unavailable ? 'Swan Inference unreachable' : 'all time, from Swan Inference'}
-          icon={<Coins size={20} />}
-          color="green"
-        />
     </div>
   );
 }

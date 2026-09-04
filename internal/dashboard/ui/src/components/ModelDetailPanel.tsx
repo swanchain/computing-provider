@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, CheckCircle, XCircle, AlertCircle, Activity, Clock, Zap, CircleDollarSign } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { api } from '../api/client';
@@ -13,6 +13,45 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
   const [data, setData] = useState<ModelDetailedMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ));
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+    };
+  }, [onClose]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -72,23 +111,25 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
     }));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="model-detail-title">
+    <div ref={dialogRef} className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="model-detail-title" aria-describedby="model-detail-description">
       <div
         className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-xl border border-slate-700 bg-slate-900"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-700 bg-slate-900 p-4">
           <div>
             <h2 id="model-detail-title" className="break-words text-xl font-semibold text-slate-100">{modelId}</h2>
-            <p className="text-sm text-slate-400">Model Details</p>
+            <p id="model-detail-description" className="text-sm text-slate-300">Health, usage, pricing, and recent requests</p>
           </div>
           <button
+            ref={closeButtonRef}
+            type="button"
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
+            className="inline-flex min-h-10 min-w-10 items-center justify-center rounded text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label="Close model details"
           >
-            <X size={20} />
-            <span className="sr-only">Close model details</span>
+            <X aria-hidden="true" size={20} />
           </button>
         </div>
 
@@ -119,7 +160,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                   {healthy ? 'Healthy' : 'Unhealthy'}
                 </p>
                 {data?.health?.consecutive_fails ? (
-                  <p className="text-xs text-slate-500 mt-1">
+                  <p className="text-xs text-slate-400 mt-1">
                     {data.health.consecutive_fails} consecutive failures
                   </p>
                 ) : null}
@@ -133,7 +174,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                 <p className="text-lg font-semibold text-slate-100">
                   {data?.metrics?.total_requests?.toLocaleString() ?? 0}
                 </p>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-400 mt-1">
                   {data?.metrics?.successful_requests ?? 0} successful, {data?.metrics?.failed_requests ?? 0} failed
                 </p>
               </div>
@@ -146,7 +187,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                 <p className="text-lg font-semibold text-slate-100">
                   {formatLatency(data?.metrics?.avg_latency_ms ?? 0)}
                 </p>
-                <p className="text-xs text-slate-500 mt-1">
+                <p className="text-xs text-slate-400 mt-1">
                   {data?.metrics?.active_requests ?? 0} active requests
                 </p>
               </div>
@@ -176,7 +217,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                   <p className="text-2xl font-semibold text-slate-100">
                     {(data?.metrics?.tokens_per_second ?? 0).toFixed(1)}
                   </p>
-                    <p className="text-xs text-slate-500">Tokens/sec</p>
+                    <p className="text-xs text-slate-400">Tokens/sec</p>
                   </div>
                 </div>
               </div>
@@ -219,9 +260,9 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
             {/* Model transactions */}
             <div className="bg-slate-700/50 rounded-lg p-4">
               <h4 className="text-sm font-medium text-slate-200">Transactions for this model</h4>
-              <p className="mb-3 mt-1 text-xs text-slate-500">Latest 20 local requests, with input and output tokens shown separately.</p>
+              <p className="mb-3 mt-1 text-xs text-slate-400">Latest 20 local requests, with input and output tokens shown separately.</p>
               {(data?.recent_requests ?? []).length === 0 ? (
-                <p className="text-slate-500 text-center py-4">No transactions recorded for this model</p>
+                <p className="text-slate-400 text-center py-4">No transactions recorded for this model</p>
               ) : (
                 <>
                 <div className="space-y-2 sm:hidden">
@@ -230,7 +271,7 @@ export function ModelDetailPanel({ modelId, onClose }: ModelDetailPanelProps) {
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate font-mono text-xs text-slate-300" title={req.request_id}>{req.request_id}</p>
-                          <p className="mt-1 text-xs text-slate-500">{formatTime(req.start_time)} · {formatLatency(req.latency_ms)}</p>
+                          <p className="mt-1 text-xs text-slate-400">{formatTime(req.start_time)} · {formatLatency(req.latency_ms)}</p>
                         </div>
                         {req.success ? <CheckCircle size={16} className="shrink-0 text-green-400" /> : <XCircle size={16} className="shrink-0 text-red-400" />}
                       </div>

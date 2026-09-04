@@ -30,13 +30,22 @@ interface SettingsPanelProps {
   authenticated: boolean;
   onUnlock: () => void;
   onModelsSaved: () => void;
+  onDirtyChange: (dirty: boolean) => void;
 }
 
 type SaveKey = 'limits' | 'models' | 'alerts' | 'self-check' | 'logging';
 type SaveState = { key: SaveKey; type: 'success' | 'error'; message: string } | null;
 type EditableModel = DashboardModel & { isNew?: boolean };
 
-const inputClass = 'min-h-11 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20';
+const SETTINGS_NAV: Array<{ id: SaveKey; label: string }> = [
+  { id: 'limits', label: 'Limits' },
+  { id: 'models', label: 'Models' },
+  { id: 'alerts', label: 'Alerts' },
+  { id: 'self-check', label: 'Self-check' },
+  { id: 'logging', label: 'Logging' },
+];
+
+const inputClass = 'min-h-11 w-full rounded-lg border border-slate-600 bg-slate-950 px-3 text-sm text-slate-100 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20';
 const labelClass = 'mb-1.5 block text-sm font-medium text-slate-200';
 
 function ApplyBadge({ restartRequired }: { restartRequired: boolean }) {
@@ -57,6 +66,7 @@ function SettingsSection({
   description,
   icon,
   restartRequired,
+  dirty,
   children,
 }: {
   id: string;
@@ -64,10 +74,11 @@ function SettingsSection({
   description: string;
   icon: ReactNode;
   restartRequired: boolean;
+  dirty?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section aria-labelledby={`${id}-title`} className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+    <section aria-labelledby={`${id}-title`} className="scroll-mt-14 overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 px-4 py-4 sm:px-5">
         <div className="flex min-w-0 gap-3">
           <div className="mt-0.5 rounded-lg bg-slate-800 p-2 text-blue-400">{icon}</div>
@@ -76,7 +87,10 @@ function SettingsSection({
             <p className="mt-1 max-w-2xl text-sm leading-5 text-slate-400">{description}</p>
           </div>
         </div>
-        <ApplyBadge restartRequired={restartRequired} />
+        <div className="flex flex-wrap items-center gap-2">
+          {dirty && <span className="inline-flex items-center rounded-full border border-blue-800/70 bg-blue-950/40 px-2.5 py-1 text-xs font-medium text-blue-200">Unsaved</span>}
+          <ApplyBadge restartRequired={restartRequired} />
+        </div>
       </div>
       <div className="p-4 sm:p-5">{children}</div>
     </section>
@@ -114,7 +128,7 @@ function Toggle({
     <label className="flex min-h-11 cursor-pointer items-start justify-between gap-4 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5">
       <span>
         <span className="block text-sm font-medium text-slate-200">{label}</span>
-        {description && <span className="mt-0.5 block text-xs leading-4 text-slate-500">{description}</span>}
+        {description && <span className="mt-0.5 block text-xs leading-4 text-slate-400">{description}</span>}
       </span>
       <input
         type="checkbox"
@@ -139,13 +153,24 @@ function SaveButton({ saving, label = 'Save settings' }: { saving: boolean; labe
   );
 }
 
-export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: SettingsPanelProps) {
+export function SettingsPanel({ authenticated, onUnlock, onModelsSaved, onDirtyChange }: SettingsPanelProps) {
   const [settings, setSettings] = useState<DashboardSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState<SaveKey | null>(null);
   const [saveState, setSaveState] = useState<SaveState>(null);
   const [initialModelIDs, setInitialModelIDs] = useState<string[]>([]);
+  const [dirtySections, setDirtySections] = useState<Set<SaveKey>>(() => new Set());
+  const [restartPending, setRestartPending] = useState(() => sessionStorage.getItem('computing-provider-restart-pending') === 'true');
+
+  const markDirty = (key: SaveKey) => {
+    setDirtySections((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+    setSaveState((current) => current?.key === key ? null : current);
+  };
 
   const loadSettings = useCallback(async () => {
     if (!authenticated) return;
@@ -155,6 +180,7 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
       const response = await api.getSettings();
       setSettings({ ...response, models: response.models.map((model) => ({ ...model })) });
       setInitialModelIDs(response.models.map((model) => model.id));
+      setDirtySections(new Set());
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Unable to load settings');
     } finally {
@@ -164,8 +190,26 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
 
   useEffect(() => {
     if (authenticated) loadSettings();
-    else setSettings(null);
+    else {
+      setSettings(null);
+      setDirtySections(new Set());
+    }
   }, [authenticated, loadSettings]);
+
+  useEffect(() => {
+    const dirty = dirtySections.size > 0;
+    onDirtyChange(dirty);
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', warnBeforeUnload);
+      onDirtyChange(false);
+    };
+  }, [dirtySections, onDirtyChange]);
 
   const runSave = async (key: SaveKey, action: () => Promise<SettingsSaveResult>) => {
     setSaving(key);
@@ -179,6 +223,15 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
           ? 'Saved. Restart computing-provider when convenient to apply this section.'
           : 'Saved and applied to the running provider.',
       });
+      setDirtySections((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+      if (result.restart_required) {
+        sessionStorage.setItem('computing-provider-restart-pending', 'true');
+        setRestartPending(true);
+      }
       return true;
     } catch (error) {
       setSaveState({ key, type: 'error', message: error instanceof Error ? error.message : 'Save failed' });
@@ -231,16 +284,19 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
     );
   }
 
-  const updateAlerts = (patch: Partial<AlertSettings>) => setSettings((current) => current ? ({ ...current, alerts: { ...current.alerts, ...patch } }) : current);
-  const updateSelfCheck = (patch: Partial<SelfCheckSettings>) => setSettings((current) => current ? ({ ...current, self_check: { ...current.self_check, ...patch } }) : current);
-  const updateLog = (patch: Partial<LogSettings>) => setSettings((current) => current ? ({ ...current, log: { ...current.log, ...patch } }) : current);
-  const updateLimits = (patch: Partial<RequestLimitSettings>) => setSettings((current) => current ? ({ ...current, limits: { ...current.limits, ...patch } }) : current);
+  const updateAlerts = (patch: Partial<AlertSettings>) => { markDirty('alerts'); setSettings((current) => current ? ({ ...current, alerts: { ...current.alerts, ...patch } }) : current); };
+  const updateSelfCheck = (patch: Partial<SelfCheckSettings>) => { markDirty('self-check'); setSettings((current) => current ? ({ ...current, self_check: { ...current.self_check, ...patch } }) : current); };
+  const updateLog = (patch: Partial<LogSettings>) => { markDirty('logging'); setSettings((current) => current ? ({ ...current, log: { ...current.log, ...patch } }) : current); };
+  const updateLimits = (patch: Partial<RequestLimitSettings>) => { markDirty('limits'); setSettings((current) => current ? ({ ...current, limits: { ...current.limits, ...patch } }) : current); };
   const updateEmail = (patch: Partial<AlertSettings['email']>) => updateAlerts({ email: { ...settings.alerts.email, ...patch } });
-  const updateModel = (index: number, patch: Partial<EditableModel>) => setSettings((current) => {
-    if (!current) return current;
-    const models = current.models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model);
-    return { ...current, models };
-  });
+  const updateModel = (index: number, patch: Partial<EditableModel>) => {
+    markDirty('models');
+    setSettings((current) => {
+      if (!current) return current;
+      const models = current.models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model);
+      return { ...current, models };
+    });
+  };
 
   const saveAlerts = async (event: FormEvent) => {
     event.preventDefault();
@@ -250,7 +306,19 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
       .filter(Boolean);
     const payload = { ...settings.alerts, email: { ...settings.alerts.email, to: recipients } };
     if (await runSave('alerts', () => api.updateAlerts(payload))) {
-      updateEmail({ password: '', clear_password: false, to: recipients, password_set: payload.email.clear_password ? false : payload.email.password_set || Boolean(payload.email.password) });
+      setSettings((current) => current ? ({
+        ...current,
+        alerts: {
+          ...current.alerts,
+          email: {
+            ...current.alerts.email,
+            password: '',
+            clear_password: false,
+            to: recipients,
+            password_set: payload.email.clear_password ? false : payload.email.password_set || Boolean(payload.email.password),
+          },
+        },
+      }) : current);
     }
   };
 
@@ -263,6 +331,16 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
     }
   };
 
+  const reloadFromDisk = () => {
+    if (dirtySections.size > 0 && !window.confirm('Reload settings from disk and discard unsaved changes?')) return;
+    loadSettings();
+  };
+
+  const dismissRestartReminder = () => {
+    sessionStorage.removeItem('computing-provider-restart-pending');
+    setRestartPending(false);
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -270,20 +348,47 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
           <h1 className="text-2xl font-semibold text-white">Provider settings</h1>
           <p className="mt-1 text-sm text-slate-400">Validated edits to config.toml and models.json. Secrets are write-only.</p>
         </div>
-        <button type="button" onClick={loadSettings} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50">
+        <button type="button" onClick={reloadFromDisk} disabled={loading} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50">
           <RotateCcw aria-hidden="true" className={loading ? 'animate-spin' : ''} size={16} /> Reload from disk
         </button>
       </div>
 
+      <nav aria-label="Settings sections" className="sticky top-0 z-20 -mx-1 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/95 p-1 shadow-lg shadow-slate-950/30 backdrop-blur">
+        <div className="flex min-w-max gap-1">
+          {SETTINGS_NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => document.getElementById(`${item.id}-title`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="inline-flex min-h-10 items-center rounded-lg px-3 text-sm text-slate-300 hover:bg-slate-800 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {item.label}
+              {dirtySections.has(item.id) && <span className="ml-2 h-2 w-2 rounded-full bg-blue-400" aria-label="Unsaved changes" />}
+            </button>
+          ))}
+        </div>
+      </nav>
+
+      {dirtySections.size > 0 && (
+        <p role="status" className="rounded-lg border border-blue-800/70 bg-blue-950/30 px-4 py-3 text-sm text-blue-100">
+          Unsaved changes in {dirtySections.size} section{dirtySections.size === 1 ? '' : 's'}. Save each marked section before leaving Settings.
+        </p>
+      )}
+      {restartPending && (
+        <div role="status" className="flex flex-col gap-3 rounded-lg border border-amber-800/70 bg-amber-950/30 px-4 py-3 text-sm text-amber-100 sm:flex-row sm:items-center sm:justify-between">
+          <span>Saved configuration is waiting for a provider-daemon restart before it takes effect.</span>
+          <button type="button" onClick={dismissRestartReminder} className="min-h-10 self-start rounded-lg border border-amber-700/70 px-3 text-amber-100 hover:bg-amber-900/30 sm:self-auto">Dismiss</button>
+        </div>
+      )}
       {loadError && <p role="alert" className="rounded-lg border border-red-800/60 bg-red-950/20 px-4 py-3 text-sm text-red-300">{loadError}</p>}
 
-      <SettingsSection id="limits" title="Request limits" description="Protect the provider from more work than it can serve. Both values are persisted and applied immediately." icon={<Gauge aria-hidden="true" size={19} />} restartRequired={false}>
+      <SettingsSection id="limits" title="Request limits" description="Protect the provider from more work than it can serve. Both values are persisted and applied immediately." icon={<Gauge aria-hidden="true" size={19} />} restartRequired={false} dirty={dirtySections.has('limits')}>
         <form onSubmit={(event) => { event.preventDefault(); runSave('limits', () => api.updateLimits(settings.limits)); }} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className={labelClass} htmlFor="requests-per-second">Requests per second</label>
               <input id="requests-per-second" type="number" min="0.1" max="100000" step="0.1" required value={settings.limits.requests_per_second} onChange={(event) => updateLimits({ requests_per_second: Number(event.target.value) })} className={inputClass} />
-              <p className="mt-1 text-xs text-slate-500">Base global rate; GPU-aware adaptation may lower or raise the live rate.</p>
+              <p className="mt-1 text-xs text-slate-400">Base global rate; GPU-aware adaptation may lower or raise the live rate.</p>
             </div>
             <div>
               <label className={labelClass} htmlFor="max-concurrent">Maximum concurrent requests</label>
@@ -294,7 +399,7 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
         </form>
       </SettingsSection>
 
-      <SettingsSection id="models" title="Model endpoint map" description="Add, repoint, or remove local inference endpoints. Saving hot-reloads models.json and updates the advertised model list." icon={<ServerCog aria-hidden="true" size={19} />} restartRequired={false}>
+      <SettingsSection id="models" title="Model endpoint map" description="Add, repoint, or remove local inference endpoints. Saving hot-reloads models.json and updates the advertised model list." icon={<ServerCog aria-hidden="true" size={19} />} restartRequired={false} dirty={dirtySections.has('models')}>
         <form onSubmit={saveModels} className="space-y-4">
           {settings.models.length === 0 ? (
             <div className="rounded-lg border border-dashed border-slate-700 px-4 py-8 text-center text-sm text-slate-400">No models configured. Add one to begin serving inference.</div>
@@ -315,6 +420,7 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
                       type="button"
                       onClick={() => {
                         if (!window.confirm(`Remove ${model.id || 'this model'} from the configuration? The change takes effect when you save.`)) return;
+                        markDirty('models');
                         setSettings((current) => current ? ({ ...current, models: current.models.filter((_, modelIndex) => modelIndex !== index) }) : current);
                       }}
                       className="mt-auto inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-red-900/70 px-3 text-sm text-red-300 hover:bg-red-950/40"
@@ -355,14 +461,14 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
               ))}
             </div>
           )}
-          <button type="button" onClick={() => setSettings((current) => current ? ({ ...current, models: [...current.models, { id: '', endpoint: '', gpu_memory: 0, category: 'text-generation', api_key_set: false, context_length: 0, isNew: true } as EditableModel] }) : current)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-slate-600 px-3 text-sm text-slate-300 hover:border-blue-500 hover:text-white">
+          <button type="button" onClick={() => { markDirty('models'); setSettings((current) => current ? ({ ...current, models: [...current.models, { id: '', endpoint: '', gpu_memory: 0, category: 'text-generation', api_key_set: false, context_length: 0, isNew: true } as EditableModel] }) : current); }} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-slate-600 px-3 text-sm text-slate-200 hover:border-blue-500 hover:text-white">
             <Plus aria-hidden="true" size={16} /> Add model
           </button>
           <div className="flex flex-wrap items-center justify-between gap-3"><SaveFeedback state={saveState} section="models" /><div className="ml-auto flex items-center gap-3">{removedModelCount > 0 && <span className="text-xs text-amber-300">{removedModelCount} removal pending</span>}<SaveButton saving={saving === 'models'} label="Save and hot-reload" /></div></div>
         </form>
       </SettingsSection>
 
-      <SettingsSection id="alerts" title="Alert delivery" description="Configure webhook and SMTP delivery. Stored passwords are never returned to the browser." icon={<Bell aria-hidden="true" size={19} />} restartRequired={true}>
+      <SettingsSection id="alerts" title="Alert delivery" description="Configure webhook and SMTP delivery. Stored passwords are never returned to the browser." icon={<Bell aria-hidden="true" size={19} />} restartRequired={true} dirty={dirtySections.has('alerts')}>
         <form onSubmit={saveAlerts} className="space-y-5">
           <div>
             <label className={labelClass} htmlFor="webhook-url">Webhook URL</label>
@@ -394,7 +500,7 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
         </form>
       </SettingsSection>
 
-      <SettingsSection id="self-check" title="Self-check behavior" description="Control periodic inference audits and automatic routing recovery." icon={<ShieldCheck aria-hidden="true" size={19} />} restartRequired={true}>
+      <SettingsSection id="self-check" title="Self-check behavior" description="Control periodic inference audits and automatic routing recovery." icon={<ShieldCheck aria-hidden="true" size={19} />} restartRequired={true} dirty={dirtySections.has('self-check')}>
         <form onSubmit={(event) => { event.preventDefault(); runSave('self-check', () => api.updateSelfCheck(settings.self_check)); }} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Toggle checked={settings.self_check.enable} onChange={(enable) => updateSelfCheck({ enable })} label="Periodic self-check" description="Audit configured models on a schedule." />
@@ -409,7 +515,7 @@ export function SettingsPanel({ authenticated, onUnlock, onModelsSaved }: Settin
         </form>
       </SettingsSection>
 
-      <SettingsSection id="logging" title="Logging and retention" description="Choose log verbosity, destination, rotation, and retention." icon={<Settings2 aria-hidden="true" size={19} />} restartRequired={true}>
+      <SettingsSection id="logging" title="Logging and retention" description="Choose log verbosity, destination, rotation, and retention." icon={<Settings2 aria-hidden="true" size={19} />} restartRequired={true} dirty={dirtySections.has('logging')}>
         <form onSubmit={(event) => { event.preventDefault(); runSave('logging', () => api.updateLogging(settings.log)); }} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="sm:col-span-2 lg:col-span-3"><label className={labelClass} htmlFor="log-dir">Log directory</label><input id="log-dir" required value={settings.log.dir} onChange={(event) => updateLog({ dir: event.target.value })} className={`${inputClass} font-mono`} /></div>

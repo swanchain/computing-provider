@@ -91,24 +91,24 @@ function RequestReceipt({ request }: { request: RequestLog }) {
   return (
     <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
       <div>
-        <span className="block text-slate-500">Request ID</span>
+        <span className="block text-slate-400">Request ID</span>
         <span className="mt-1 block break-all font-mono text-slate-300">{request.request_id}</span>
       </div>
       <div>
-        <span className="block text-slate-500">Completed</span>
+        <span className="block text-slate-400">Completed</span>
         <span className="mt-1 block text-slate-300">{formatStarted(request.end_time, true)}</span>
       </div>
       <div>
-        <span className="block text-slate-500">Total tokens</span>
+        <span className="block text-slate-400">Total tokens</span>
         <span className="mt-1 block font-mono text-slate-300">{(request.tokens_in + request.tokens_out).toLocaleString()}</span>
       </div>
       <div>
-        <span className="block text-slate-500">Delivery</span>
+        <span className="block text-slate-400">Delivery</span>
         <span className="mt-1 block text-slate-300">{request.streaming ? 'Streaming' : 'Single response'}</span>
       </div>
       {request.error_reason && (
         <div className="sm:col-span-2 lg:col-span-4">
-          <span className="block text-slate-500">Error</span>
+          <span className="block text-slate-400">Error</span>
           <span className="mt-1 block break-words text-red-300">{request.error_reason}</span>
         </div>
       )}
@@ -167,11 +167,11 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Transactions</h1>
-          <p className="mt-1 text-sm text-slate-400">The latest inference requests, with input and output usage shown separately for every transaction.</p>
+          <h1 className="text-2xl font-semibold text-white">Requests</h1>
+          <p className="mt-1 text-sm text-slate-300">The latest inference requests, with input and output usage shown separately.</p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          <label htmlFor="transaction-model-filter" className="sr-only">Filter transactions by model</label>
+          <label htmlFor="transaction-model-filter" className="sr-only">Filter requests by model</label>
           <select
             id="transaction-model-filter"
             value={selectedModel}
@@ -181,7 +181,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
             <option value="">All models</option>
             {models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
           </select>
-          <label htmlFor="transaction-source-filter" className="sr-only">Filter transactions by source</label>
+          <label htmlFor="transaction-source-filter" className="sr-only">Filter requests by source</label>
           <select
             id="transaction-source-filter"
             value={selectedSource}
@@ -197,7 +197,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
             type="button"
             onClick={refetch}
             className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            aria-label="Refresh transactions"
+            aria-label="Refresh requests"
           >
             <RefreshCw aria-hidden="true" size={16} className={loading ? 'animate-spin' : ''} />
           </button>
@@ -206,21 +206,21 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
 
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-3 sm:p-4">
-          <p className="text-xs text-slate-500">Matching</p>
+          <p className="text-xs text-slate-400">Matching</p>
           <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{total.toLocaleString()}</p>
-          <p className="mt-1 hidden text-xs text-slate-500 sm:block">
-            {selectedModel || selectedSource ? 'transactions match the filters' : 'transactions in history'}
+          <p className="mt-1 hidden text-xs text-slate-400 sm:block">
+            {selectedModel || selectedSource ? 'requests match the filters' : 'requests in history'}
           </p>
         </div>
         <div className="rounded-xl border border-blue-900/70 bg-blue-950/20 p-3 sm:p-4">
           <p className="flex items-center gap-1 text-xs text-blue-300"><ArrowDownToLine aria-hidden="true" size={13} /> Input tokens</p>
           <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{inputTotal.toLocaleString()}</p>
-          <p className="mt-1 hidden text-xs text-slate-500 sm:block">across rows shown</p>
+          <p className="mt-1 hidden text-xs text-slate-400 sm:block">across rows shown</p>
         </div>
         <div className="rounded-xl border border-violet-900/70 bg-violet-950/20 p-3 sm:p-4">
           <p className="flex items-center gap-1 text-xs text-violet-300"><ArrowUpFromLine aria-hidden="true" size={13} /> Output tokens</p>
           <p className="mt-1 text-lg font-semibold text-white sm:text-xl">{outputTotal.toLocaleString()}</p>
-          <p className="mt-1 hidden text-xs text-slate-500 sm:block">across rows shown</p>
+          <p className="mt-1 hidden text-xs text-slate-400 sm:block">across rows shown</p>
         </div>
       </div>
 
@@ -232,7 +232,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
         ) : error && requests.length === 0 ? (
           <div className="px-4 py-12 text-center">
             <XCircle aria-hidden="true" size={32} className="mx-auto mb-3 text-red-400" />
-            <p className="font-medium text-red-200">Transactions are unavailable</p>
+            <p className="font-medium text-red-200">Requests are unavailable</p>
             <p className="mt-1 text-sm text-slate-400">{error.message}</p>
             <button type="button" onClick={refetch} className="mt-4 rounded-lg bg-slate-800 px-4 py-2 text-sm text-white">Try again</button>
           </div>
@@ -241,7 +241,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
             <Clock aria-hidden="true" size={32} className="mx-auto mb-3 text-slate-600" />
             {selectedModel || selectedSource ? (
               <>
-                <p className="font-medium text-slate-300">No transactions match these filters</p>
+                <p className="font-medium text-slate-300">No requests match these filters</p>
                 <p className="mt-1 text-sm">Nothing recorded for {selectedSource ? `${SOURCE_LABELS[selectedSource].label.toLowerCase()} traffic` : 'this source'}{selectedModel ? ` on ${selectedModel}` : ''} yet.</p>
                 <button
                   type="button"
@@ -253,7 +253,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
               </>
             ) : (
               <>
-                <p className="font-medium text-slate-300">No transactions yet</p>
+                <p className="font-medium text-slate-300">No requests yet</p>
                 <p className="mt-1 text-sm">Requests will appear here after the provider serves inference.</p>
               </>
             )}
@@ -263,7 +263,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
             <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[840px] text-sm">
                 <thead>
-                  <tr className="border-b border-slate-800 bg-slate-950/40 text-xs uppercase tracking-wide text-slate-500">
+                  <tr className="border-b border-slate-800 bg-slate-950/40 text-xs uppercase tracking-wide text-slate-400">
                     <th className="px-4 py-3 text-left font-medium">Started</th>
                     <th className="px-4 py-3 text-left font-medium">Model</th>
                     <th className="px-4 py-3 text-left font-medium">Source</th>
@@ -312,11 +312,11 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
                   <article key={request.request_id} className={request.success ? '' : 'bg-red-950/10'}>
                     <button type="button" onClick={() => toggleExpanded(request.request_id)} aria-expanded={expanded} aria-controls={`mobile-receipt-${request.request_id}`} className="w-full p-4 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
                       <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0"><p className="truncate font-mono text-sm text-white">{request.model}</p><p className="mt-1 text-xs text-slate-500">{formatStarted(request.start_time, true)}{request.streaming ? ' · Streaming' : ''}</p></div>
-                        <span className="mt-0.5 flex-shrink-0 text-slate-500">{expanded ? <ChevronUp aria-hidden="true" size={18} /> : <ChevronDown aria-hidden="true" size={18} />}</span>
+                        <div className="min-w-0"><p className="truncate font-mono text-sm text-white">{request.model}</p><p className="mt-1 text-xs text-slate-400">{formatStarted(request.start_time, true)}{request.streaming ? ' · Streaming' : ''}</p></div>
+                        <span className="mt-0.5 flex shrink-0 items-center gap-2 text-slate-400"><SourceBadge source={request.source} />{expanded ? <ChevronUp aria-hidden="true" size={18} /> : <ChevronDown aria-hidden="true" size={18} />}</span>
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2">
-                        <div><span className="block text-[11px] text-slate-500">Latency</span><span className={`mt-0.5 block font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</span></div>
+                        <div><span className="block text-[11px] text-slate-400">Latency</span><span className={`mt-0.5 block font-mono text-xs ${latencyClass(request.latency_ms)}`}>{formatLatency(request.latency_ms)}</span></div>
                         <div><span className="flex items-center gap-1 text-[11px] text-blue-300"><ArrowDownToLine aria-hidden="true" size={11} /> Input</span><span className="mt-0.5 block font-mono text-sm text-blue-100">{request.tokens_in.toLocaleString()}</span></div>
                         <div><span className="flex items-center gap-1 text-[11px] text-violet-300"><ArrowUpFromLine aria-hidden="true" size={11} /> Output</span><span className="mt-0.5 block font-mono text-sm text-violet-100">{request.tokens_out.toLocaleString()}</span></div>
                       </div>
@@ -332,9 +332,9 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-slate-500" aria-live="polite">
+        <p className="text-xs text-slate-400" aria-live="polite">
           {total === 0
-            ? 'No transactions to show.'
+            ? 'No requests to show.'
             : `Showing ${firstShown.toLocaleString()}\u2013${lastShown.toLocaleString()} of ${total.toLocaleString()}`}
           {selectedModel ? ` for ${selectedModel}` : ''}
           {selectedSource ? ` from ${SOURCE_LABELS[selectedSource].label.toLowerCase()}` : ''}
@@ -345,7 +345,7 @@ export function RequestHistoryPanel({ models }: RequestHistoryPanelProps) {
         </p>
 
         <div className="flex items-center gap-2">
-          <label htmlFor="transaction-page-size" className="text-xs text-slate-500">Per page</label>
+          <label htmlFor="transaction-page-size" className="text-xs text-slate-400">Per page</label>
           <select
             id="transaction-page-size"
             value={pageSize}

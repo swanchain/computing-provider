@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, AlertCircle, LockKeyhole, Power, RefreshCw, RotateCcw } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp, LockKeyhole, Power, RefreshCw, RotateCcw } from 'lucide-react';
 import { api } from '../api/client';
-import type { ModelPrice, ModelStatus } from '../types';
+import type { ModelPrice, ModelsResponse, ModelStatus } from '../types';
 
 // A strip of recent health samples, oldest to newest. The current state is one
 // dot; whether it has been flapping is the shape of the whole row, which a
@@ -34,7 +34,7 @@ function HealthStrip({ samples }: { samples: string[] }) {
           />
         ))}
       </div>
-      <span className="text-[10px] text-slate-500">recent</span>
+      <span className="text-[10px] text-slate-400">recent</span>
     </div>
   );
 }
@@ -49,6 +49,8 @@ interface ModelsPanelProps {
   onModelClick?: (modelId: string) => void;
   authenticated: boolean;
   onUnlock: () => void;
+  summary?: ModelsResponse['summary'];
+  compact?: boolean;
 }
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
@@ -58,9 +60,10 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 4,
 });
 
-export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock }: ModelsPanelProps) {
+export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   const requireAccess = () => {
     if (authenticated) return true;
@@ -128,15 +131,28 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
   }
 
   const isHealthy = (model: ModelStatus) => model.health_string === 'healthy';
+  const attentionModels = models.filter((model) => !model.enabled || !isHealthy(model));
+  const shownModels = compact && !showAll ? attentionModels : models;
+  const readyCount = summary?.ready ?? models.filter((model) => model.enabled && isHealthy(model)).length;
+  const unhealthyCount = summary?.unhealthy ?? models.filter((model) => model.enabled && !isHealthy(model)).length;
+  const disabledCount = summary?.disabled ?? models.filter((model) => !model.enabled).length;
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+    <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h3 className="text-lg font-semibold text-slate-200">Models</h3>
+        <div>
+          <h3 className="text-lg font-semibold text-slate-100">Models</h3>
+          <p className="mt-0.5 text-xs text-slate-400">
+            {readyCount} ready
+            {unhealthyCount > 0 && ` · ${unhealthyCount} unhealthy`}
+            {disabledCount > 0 && ` · ${disabledCount} disabled`}
+          </p>
+        </div>
         <button
+          type="button"
           onClick={handleReload}
           disabled={actionLoading === 'reload'}
-          className="flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-700 px-3 text-sm transition-colors hover:bg-slate-600 disabled:opacity-50"
+          className="flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-600 bg-slate-800 px-3 text-sm transition-colors hover:bg-slate-700 disabled:opacity-50"
         >
           {authenticated ? <RotateCcw aria-hidden="true" size={14} className={actionLoading === 'reload' ? 'animate-spin' : ''} /> : <LockKeyhole aria-hidden="true" size={14} />}
           Reload Config
@@ -147,9 +163,15 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
 
       {!models || models.length === 0 ? (
         <p className="text-slate-400">{error ? 'API unreachable' : 'No models configured'}</p>
+      ) : compact && !showAll && attentionModels.length === 0 ? (
+        <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/20 px-4 py-5 text-center">
+          <CheckCircle aria-hidden="true" size={24} className="mx-auto text-emerald-300" />
+          <p className="mt-2 text-sm font-medium text-emerald-100">All configured models are ready</p>
+          <p className="mt-1 text-xs text-slate-400">Healthy models are collapsed to keep operational exceptions visible.</p>
+        </div>
       ) : (
         <div className="space-y-3">
-          {models.map((model) => {
+          {shownModels.map((model) => {
             const price = prices[model.id];
             return (
             <div
@@ -164,7 +186,7 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
               >
                 <div className="flex-shrink-0">
                   {!model.enabled ? (
-                    <AlertCircle size={20} className="text-slate-500" />
+                    <AlertCircle size={20} className="text-slate-400" />
                   ) : isHealthy(model) ? (
                     <CheckCircle size={20} className="text-green-400" />
                   ) : (
@@ -177,7 +199,7 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                     {model.endpoint} • {model.category}
                     {model.gpu_memory > 0 && ` • ${(model.gpu_memory / 1024).toFixed(1)}GB VRAM`}
                   </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
+                  <div className="text-xs text-slate-400 mt-0.5">
                     {model.state_string} • {model.health_string}
                   </div>
                   <HealthStrip samples={healthLog?.[model.id] ?? []} />
@@ -193,6 +215,7 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
 
               <div className="flex flex-shrink-0 items-center gap-1 sm:gap-2">
                 <button
+                  type="button"
                   onClick={() => handleHealthCheck(model.id)}
                   disabled={actionLoading === `health-${model.id}` || !model.enabled}
                   className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-600 rounded transition-colors disabled:opacity-50"
@@ -205,12 +228,13 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                   />
                 </button>
                 <button
+                  type="button"
                   onClick={() => handleToggle(model)}
                   disabled={actionLoading === model.id}
                   className={`p-2 rounded transition-colors ${
                     model.enabled
                       ? 'text-green-400 hover:text-green-300 hover:bg-green-900/30'
-                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-600'
+                      : 'text-slate-400 hover:text-slate-300 hover:bg-slate-600'
                   } disabled:opacity-50`}
                   title={model.enabled ? 'Disable model' : 'Enable model'}
                   aria-label={`${model.enabled ? 'Disable' : 'Enable'} ${model.id}`}
@@ -222,6 +246,18 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
             );
           })}
         </div>
+      )}
+
+      {compact && models.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((value) => !value)}
+          className="mt-4 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950/40 px-3 text-sm text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          aria-expanded={showAll}
+        >
+          {showAll ? <ChevronUp aria-hidden="true" size={16} /> : <ChevronDown aria-hidden="true" size={16} />}
+          {showAll ? 'Hide healthy models' : `Show all ${models.length} models`}
+        </button>
       )}
     </div>
   );

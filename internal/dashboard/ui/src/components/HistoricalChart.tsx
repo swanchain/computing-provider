@@ -35,6 +35,7 @@ export function HistoricalChart() {
 
   const {
     data: historyData,
+    error,
     loading,
     refetch,
   } = usePolling(
@@ -66,13 +67,24 @@ export function HistoricalChart() {
     p99Latency: point.p99_latency_ms,
     tokensPerSec: point.tokens_per_second,
   }));
+  const latest = chartData[chartData.length - 1];
+  const latencyValues = chartData.flatMap((point) => [point.avgLatency, point.p99Latency]);
+  const latencyMin = latencyValues.length > 0 ? Math.min(...latencyValues) : 0;
+  const latencyMax = latencyValues.length > 0 ? Math.max(...latencyValues) : 0;
+  const successMin = chartData.length > 0 ? Math.min(...chartData.map((point) => point.successRate)) : 0;
+  const successMax = chartData.length > 0 ? Math.max(...chartData.map((point) => point.successRate)) : 0;
+  const throughputMin = chartData.length > 0 ? Math.min(...chartData.map((point) => point.tokensPerSec)) : 0;
+  const throughputMax = chartData.length > 0 ? Math.max(...chartData.map((point) => point.tokensPerSec)) : 0;
 
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Calendar size={20} className="text-purple-400" />
-          <h3 className="text-lg font-semibold text-slate-200">Historical Trends</h3>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-100">Performance trends</h3>
+            <p className="mt-0.5 text-xs text-slate-400">Persisted service signals across one shared time range</p>
+          </div>
         </div>
         <div className="flex min-w-0 items-center gap-2">
           <div className="flex min-w-0 flex-1 overflow-x-auto rounded-lg bg-slate-800 p-0.5 sm:flex-none">
@@ -80,7 +92,7 @@ export function HistoricalChart() {
               <button
                 key={range}
                 onClick={() => setTimeRange(range)}
-                  className={`min-h-8 flex-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors sm:flex-none sm:px-3 ${
+                    className={`min-h-10 flex-1 whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors sm:flex-none sm:px-3 ${
                   timeRange === range
                     ? 'bg-blue-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
@@ -91,21 +103,30 @@ export function HistoricalChart() {
             ))}
           </div>
           <button
+            type="button"
             onClick={refetch}
-            className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700 rounded transition-colors"
+            className="inline-flex min-h-10 min-w-10 items-center justify-center rounded text-slate-300 transition-colors hover:bg-slate-700 hover:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             title="Refresh"
+            aria-label="Refresh performance trends"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
+      {error && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-800/70 bg-amber-950/30 px-3 py-2 text-sm text-amber-100">
+          <span>{historyData ? 'Showing the last loaded trends; refresh failed.' : `Performance trends are unavailable: ${error.message}`}</span>
+          <button type="button" onClick={refetch} className="min-h-10 rounded-lg border border-amber-700/70 px-3 text-sm hover:bg-amber-900/30">Try again</button>
+        </div>
+      )}
+
       {loading && chartData.length === 0 ? (
         <div className="h-64 flex items-center justify-center">
           <div className="animate-spin w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full"></div>
         </div>
       ) : chartData.length < 2 ? (
-        <div className="h-64 flex items-center justify-center text-slate-500">
+        <div className="h-64 flex items-center justify-center text-slate-400">
           <div className="text-center">
             <Calendar size={32} className="mx-auto mb-2 opacity-50" />
             <p>Not enough historical data yet</p>
@@ -113,13 +134,13 @@ export function HistoricalChart() {
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="grid gap-6 lg:grid-cols-3">
           {/* Latency Chart */}
-          <div>
-            <h4 className="text-sm font-medium text-slate-400 mb-2">Latency (ms)</h4>
-            <div className="h-40">
+          <div role="img" aria-label={`Latency ranged from ${latencyMin.toFixed(0)} to ${latencyMax.toFixed(0)} milliseconds. Latest average ${latest?.avgLatency.toFixed(0)} milliseconds and P99 ${latest?.p99Latency.toFixed(0)} milliseconds.`}>
+            <h4 className="mb-2 text-sm font-medium text-slate-300">Latency (ms)</h4>
+            <div className="h-40" aria-hidden="true">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
+                <LineChart data={chartData} accessibilityLayer={false}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis
                     dataKey="time"
@@ -165,11 +186,11 @@ export function HistoricalChart() {
           </div>
 
           {/* Success Rate Chart */}
-          <div>
-            <h4 className="text-sm font-medium text-slate-400 mb-2">Success Rate (%)</h4>
-            <div className="h-32">
+          <div role="img" aria-label={`Success rate ranged from ${successMin.toFixed(1)} to ${successMax.toFixed(1)} percent. Latest ${latest?.successRate.toFixed(1)} percent.`}>
+            <h4 className="mb-2 text-sm font-medium text-slate-300">Success rate (%)</h4>
+            <div className="h-40" aria-hidden="true">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
+                <LineChart data={chartData} accessibilityLayer={false}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis
                     dataKey="time"
@@ -203,11 +224,11 @@ export function HistoricalChart() {
           </div>
 
           {/* Throughput Chart */}
-          <div>
-            <h4 className="text-sm font-medium text-slate-400 mb-2">Throughput (tokens/sec)</h4>
-            <div className="h-32">
+          <div role="img" aria-label={`Throughput ranged from ${throughputMin.toFixed(1)} to ${throughputMax.toFixed(1)} tokens per second. Latest ${latest?.tokensPerSec.toFixed(1)} tokens per second.`}>
+            <h4 className="mb-2 text-sm font-medium text-slate-300">Throughput (tokens/sec)</h4>
+            <div className="h-40" aria-hidden="true">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
+                <LineChart data={chartData} accessibilityLayer={false}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis
                     dataKey="time"
@@ -242,7 +263,7 @@ export function HistoricalChart() {
         </div>
       )}
 
-      <div className="mt-4 text-xs text-slate-500 text-center">
+      <div className="mt-4 text-center text-xs text-slate-400">
         Showing {config.label} of data ({config.resolution} resolution)
       </div>
     </div>
