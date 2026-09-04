@@ -499,8 +499,11 @@ func runDaemon(cctx *cli.Context) error {
 		// finest resolution: the deltas have to be computed before any
 		// down-sampling, or a restart inside a bucket swallows the traffic that
 		// preceded it.
+		// Anything past a day is bucketed by day. An hourly bucket over a week
+		// is 168 bars in the width of 24, too thin to hover and too fine to
+		// read a trend from, and it labels a multi-day window with times.
 		bucket := time.Hour
-		if duration > 7*24*time.Hour {
+		if duration > 24*time.Hour {
 			bucket = 24 * time.Hour
 		}
 		points, err := inferenceService.GetMetricsHistory(duration, time.Minute)

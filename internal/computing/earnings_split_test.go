@@ -138,3 +138,32 @@ func TestEarningsHistoryIgnoresPreexistingTotalOfANewlySeenModel(t *testing.T) {
 		t.Errorf("model b was seen for the first time; its pre-existing total must not be credited: %+v", last.Models)
 	}
 }
+
+// The series states the interval each point spans, so the UI labels a point by
+// what it aggregated rather than re-deriving the rule from the requested
+// window and drifting from it.
+func TestEarningsHistoryReportsItsBucket(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	metrics := metricsFor(map[string]ModelTokenCounts{"a": {In: 10}})
+	snaps := []HistoricalDataPoint{
+		snap(t0, 0, 0, nil),
+		snap(t0.Add(30*time.Minute), 100, 0, nil),
+		snap(t0.Add(90*time.Minute), 200, 0, nil),
+	}
+
+	hourly := CalculateEarningsHistory(context.Background(), snaps, metrics, nil, "24h", time.Hour)
+	if hourly.BucketSeconds != 3600 {
+		t.Errorf("hourly bucket = %d seconds, want 3600", hourly.BucketSeconds)
+	}
+	if len(hourly.Points) != 2 {
+		t.Errorf("hourly gave %d points, want 2 (samples fall in two different hours)", len(hourly.Points))
+	}
+
+	daily := CalculateEarningsHistory(context.Background(), snaps, metrics, nil, "7d", 24*time.Hour)
+	if daily.BucketSeconds != 86400 {
+		t.Errorf("daily bucket = %d seconds, want 86400", daily.BucketSeconds)
+	}
+	if len(daily.Points) != 1 {
+		t.Errorf("daily gave %d points, want 1 — all three samples are the same day", len(daily.Points))
+	}
+}

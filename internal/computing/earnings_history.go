@@ -41,6 +41,10 @@ type EarningsSeries struct {
 	// days of a database that holds 7 should not silently look like a month of
 	// near-zero earnings.
 	Covers string `json:"covers,omitempty"`
+	// BucketSeconds is the interval each point spans. Sent so the UI can label
+	// and describe points from what was actually aggregated, rather than
+	// re-deriving the rule from the requested duration and drifting from it.
+	BucketSeconds int `json:"bucket_seconds,omitempty"`
 }
 
 // blendedRate is the average provider payout per million tokens, weighted by
@@ -86,7 +90,10 @@ func blendedRate(metrics *InferenceMetricsData, rates map[string]ModelPrice) (in
 // served between a bucket's start and its last restart, which on a node that
 // restarts a dozen times a week is most of it.
 func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration) *EarningsSeries {
-	out := &EarningsSeries{Points: []EarningsPoint{}, Currency: "USD", Duration: duration}
+	out := &EarningsSeries{
+		Points: []EarningsPoint{}, Currency: "USD", Duration: duration,
+		BucketSeconds: int(bucket / time.Second),
+	}
 	if len(snapshots) == 0 || metrics == nil {
 		return out
 	}

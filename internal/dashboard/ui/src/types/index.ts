@@ -262,6 +262,8 @@ export interface EarningsSeries {
   restarts: number;
   /** How far back the stored history actually reaches. */
   covers?: string;
+  /** Seconds each point spans, so labels match what was aggregated. */
+  bucket_seconds?: number;
 }
 
 export interface RequestLog {

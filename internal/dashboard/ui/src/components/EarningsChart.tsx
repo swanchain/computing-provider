@@ -27,6 +27,26 @@ const WINDOWS = [
   { id: '30d', label: '30 days' },
 ] as const;
 
+/**
+ * Label a point by the span it covers, not by the window that was asked for.
+ * A daily bucket labelled with a time reads as an instant, and "Sep 4, 14:00"
+ * on a bar holding a whole day is simply wrong.
+ */
+function formatBucket(timestamp: string, bucketSeconds: number | undefined, long = false) {
+  const date = new Date(timestamp);
+  const daily = (bucketSeconds ?? 3600) >= 86_400;
+  if (daily) {
+    return date.toLocaleDateString(undefined, {
+      year: long ? 'numeric' : undefined,
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+  return long
+    ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 function formatTokens(v: number) {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
@@ -117,6 +137,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
 
   const colours = useMemo(() => buildModelColours(models), [models]);
   const points = useMemo(() => data?.points ?? [], [data?.points]);
+  const bucketSeconds = data?.bucket_seconds;
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
   const activeIndex = hovered ?? (points.length > 0 ? points.length - 1 : null);
   const active = activeIndex !== null ? points[activeIndex] : null;
@@ -192,7 +213,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
               <div className="text-xs">
                 <div className="flex items-baseline gap-2">
                   <span className="font-mono text-sm text-white">{formatUSD(active.usd)}</span>
-                  <span className="text-slate-400">{new Date(active.timestamp).toLocaleString()}</span>
+                  <span className="text-slate-400">{formatBucket(active.timestamp, bucketSeconds, true)}</span>
                   {hovered === null && <span className="ml-auto text-slate-400">Latest interval</span>}
                 </div>
                 {activeSegments.length > 0 ? (
@@ -250,7 +271,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
                   onMouseEnter={() => setHovered(i)}
                   onFocus={() => setHovered(i)}
                   onBlur={() => setHovered(null)}
-                  aria-label={`${new Date(p.timestamp).toLocaleString()}: ${formatUSD(p.usd)} — ${describe}`}
+                  aria-label={`${formatBucket(p.timestamp, bucketSeconds, true)}: ${formatUSD(p.usd)} — ${describe}`}
                   className={`flex h-full flex-1 flex-col justify-end rounded-t focus:outline-none focus:ring-1 focus:ring-blue-400 ${
                     on ? 'ring-1 ring-white/40' : ''
                   }`}
@@ -289,8 +310,8 @@ export function EarningsChart({ models }: EarningsChartProps) {
           </div>
 
           <div className="mt-2 flex justify-between text-xs text-slate-400">
-            <span>{points[0] && new Date(points[0].timestamp).toLocaleString()}</span>
-            <span>{points[points.length - 1] && new Date(points[points.length - 1].timestamp).toLocaleString()}</span>
+            <span>{points[0] && formatBucket(points[0].timestamp, bucketSeconds, true)}</span>
+            <span>{points[points.length - 1] && formatBucket(points[points.length - 1].timestamp, bucketSeconds, true)}</span>
           </div>
 
           {legend.length > 0 && (
