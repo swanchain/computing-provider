@@ -11,7 +11,7 @@ var DefaultInferenceWSURL = "wss://inference-ws.swanchain.io"
 var DefaultInferenceAPIURL = "https://api.swanchain.io/api/v1"
 var DefaultInferenceDashboardURL = "https://inference.swanchain.io"
 
-const BuildVersion = "0.5.3"
+const BuildVersion = "0.5.4"
 
 const UBITaskImageIntelCpu = "swanhub/ubi-worker-cpu-intel:latest"
 const UBITaskImageIntelGpu = "swanhub/ubi-worker-gpu-intel:latest"
@@ -25,4 +25,3 @@ const ResourceExporterVersion = "v13.0.0"
 func UserVersion() string {
 	return BuildVersion + "+" + NetWorkTag + CurrentCommit
 }
-
