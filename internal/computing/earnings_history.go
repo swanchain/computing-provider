@@ -18,6 +18,12 @@ type EarningsPoint struct {
 	Models map[string]ModelEarningsPoint `json:"models,omitempty"`
 	// Unattributed is the part of USD this bucket cannot assign to any model.
 	Unattributed float64 `json:"unattributed,omitempty"`
+	// Authoritative marks a bucket whose total came from differencing the
+	// platform's own lifetime figure rather than from local token counts
+	// priced at published rates. The two are not interchangeable: only the
+	// platform's ledger accounts for how it actually settles, so the UI must
+	// be able to say which one a bar is.
+	Authoritative bool `json:"authoritative,omitempty"`
 }
 
 // ModelEarningsPoint is one model's contribution to a bucket.
@@ -41,6 +47,9 @@ type EarningsSeries struct {
 	// days of a database that holds 7 should not silently look like a month of
 	// near-zero earnings.
 	Covers string `json:"covers,omitempty"`
+	// AuthoritativePoints is how many points were priced from the platform's
+	// own figure. Zero means the whole series is this node's estimate.
+	AuthoritativePoints int `json:"authoritative_points"`
 	// BucketSeconds is the interval each point spans. Sent so the UI can label
 	// and describe points from what was actually aggregated, rather than
 	// re-deriving the rule from the requested duration and drifting from it.
@@ -111,6 +120,7 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 	inRate, outRate := blendedRate(metrics, rates)
 
 	var prevIn, prevOut int64
+	var prevPlatform *float64
 	prevModels := map[string]ModelTokenCounts{}
 	first := true
 	for _, s := range snapshots {
@@ -132,7 +142,28 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 		prevIn, prevOut = s.TotalTokensIn, s.TotalTokensOut
 
 		// Rates are per million tokens, and the deltas are raw token counts.
+		// This is the fallback: it cannot know how the platform settles, so it
+		// is only used where the platform's own figure is unavailable.
 		usd := float64(dIn)/tokensPerPriceUnit*inRate + float64(dOut)/tokensPerPriceUnit*outRate
+
+		// Prefer the ledger. The platform's lifetime total is cumulative and
+		// never resets, so differencing consecutive samples gives what it says
+		// was earned in between — no local rate arithmetic involved.
+		authoritative := false
+		if s.PlatformEarningsUSD != nil {
+			if prevPlatform != nil {
+				delta := *s.PlatformEarningsUSD - *prevPlatform
+				// A decrease is a correction or a payout on the platform side,
+				// not negative earnings; it contributes nothing rather than
+				// subtracting from the window.
+				if delta < 0 {
+					delta = 0
+				}
+				usd = delta
+				authoritative = true
+			}
+			prevPlatform = s.PlatformEarningsUSD
+		}
 		out.TotalUSD += usd
 
 		// Split the same delta by model where the sample carries one. Each
@@ -142,9 +173,25 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 		if s.ModelTokens != nil {
 			prevModels = s.ModelTokens
 		}
+		// When the bucket's total came from the platform, the per-model figures
+		// did not: the platform reports no per-model breakdown, so the split is
+		// this node's own share of served tokens. Rescale it onto the
+		// authoritative total so the segments sum to the bar they are drawn in.
+		//
+		// The consequence is worth being explicit about: the bar's height is
+		// the platform's number, the division of it is this node's estimate.
+		if authoritative && attributed > 0 {
+			scale := usd / attributed
+			for id, m := range perModel {
+				m.USD *= scale
+				perModel[id] = m
+			}
+			attributed = usd
+		}
+
 		// Only what the split could not account for is unattributed. Comparing
-		// against the bucket's own priced total keeps the segments summing to
-		// the bar rather than to a separately-rounded figure.
+		// against the bucket's own total keeps the segments summing to the bar
+		// rather than to a separately-rounded figure.
 		unattributed := usd - attributed
 		if unattributed < 0 {
 			unattributed = 0
@@ -160,15 +207,23 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 			p.TokensOut += dOut
 			p.USD += usd
 			p.Unattributed += unattributed
+			// A bucket is only authoritative if every sample in it was.
+			p.Authoritative = p.Authoritative && authoritative
 			mergeModelPoints(p, perModel)
 			continue
 		}
 		point := EarningsPoint{
 			Timestamp: key, TokensIn: dIn, TokensOut: dOut, USD: usd,
-			Unattributed: unattributed,
+			Unattributed: unattributed, Authoritative: authoritative,
 		}
 		mergeModelPoints(&point, perModel)
 		out.Points = append(out.Points, point)
+	}
+
+	for _, p := range out.Points {
+		if p.Authoritative {
+			out.AuthoritativePoints++
+		}
 	}
 
 	if n := len(snapshots); n > 0 {

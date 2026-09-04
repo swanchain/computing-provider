@@ -114,6 +114,20 @@ func runDaemon(cctx *cli.Context) error {
 	providerStats := computing.NewProviderStatsClient(
 		conf.GetConfig().Inference.ServiceURL, conf.GetConfig().Inference.ApiKey)
 
+	// Record the platform's lifetime earnings with every metrics snapshot, so
+	// the earnings series can be differenced from the ledger that governs
+	// rather than recomputed from token counts at published rates. The client
+	// caches, so this costs one upstream call every couple of minutes at most.
+	inferenceService.SetPlatformEarningsProvider(func() (float64, bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		stats, err := providerStats.Stats(ctx)
+		if err != nil || stats == nil {
+			return 0, false
+		}
+		return stats.TotalEarningsUSDC, true
+	})
+
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	configureEncodedPathParameters(r)

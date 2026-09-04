@@ -251,6 +251,11 @@ export interface EarningsPoint {
   models?: Record<string, ModelEarningsPoint>;
   /** The part of `usd` that could not be assigned to any model. */
   unattributed?: number;
+  /**
+   * True when this bucket's total came from differencing the platform's own
+   * lifetime figure, rather than from local token counts at published rates.
+   */
+  authoritative?: boolean;
 }
 
 export interface EarningsSeries {
@@ -264,6 +269,8 @@ export interface EarningsSeries {
   covers?: string;
   /** Seconds each point spans, so labels match what was aggregated. */
   bucket_seconds?: number;
+  /** How many points came from the platform's ledger rather than local pricing. */
+  authoritative_points?: number;
 }
 
 export interface RequestLog {

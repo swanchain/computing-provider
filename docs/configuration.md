@@ -298,6 +298,29 @@ overloaded GPU. Both can also be changed at runtime, globally or per model,
 through the REST API — see the endpoint table in the
 [main README](../README.md#rest-api).
 
+### Earnings history
+
+`GET /inference/earnings/history` prefers **Swan Inference's own earnings
+figure**. The platform's lifetime total is recorded with each metrics snapshot,
+and consecutive samples are differenced to give what the platform says was
+earned in each interval — no local rate arithmetic is involved, so it accounts
+for however the platform actually settles.
+
+Where no platform figure was recorded — intervals stored before this existed, or
+samples taken while the API was unreachable — the interval falls back to pricing
+this node's own token counts at current published rates. Each point reports
+which it is, and the dashboard says so rather than presenting the two as the
+same number.
+
+Two consequences worth knowing:
+
+- **The split by model stays local.** The platform reports no per-model
+  breakdown, so the division of a bar is this node's share of served tokens
+  rescaled onto the authoritative total. The bar's height is the platform's
+  number; how it is divided is an estimate.
+- **A decrease contributes zero.** The lifetime total going down is a
+  correction or a payout on the platform side, not negative earnings.
+
 ### Request history
 
 ```toml

@@ -167,3 +167,120 @@ func TestEarningsHistoryReportsItsBucket(t *testing.T) {
 		t.Errorf("daily gave %d points, want 1 — all three samples are the same day", len(daily.Points))
 	}
 }
+
+func usd(v float64) *float64 { return &v }
+
+func snapPlatform(t time.Time, in, out int64, models map[string]ModelTokenCounts, platform *float64) HistoricalDataPoint {
+	p := snap(t, in, out, models)
+	p.PlatformEarningsUSD = platform
+	return p
+}
+
+// The platform's lifetime figure is the number that governs. Differencing it
+// gives what it says was earned in an interval, with no local rate arithmetic.
+func TestEarningsHistoryPrefersThePlatformLedger(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	models := map[string]ModelTokenCounts{"a": {In: 1_000_000}}
+	// A local rate that would give a wildly different answer, to prove it is
+	// not the one being used.
+	prices := fixedPrices{"a": {ProviderInputPrice: 999, ProviderOutputPrice: 999}}
+
+	series := CalculateEarningsHistory(context.Background(),
+		[]HistoricalDataPoint{
+			snapPlatform(t0, 0, 0, map[string]ModelTokenCounts{"a": {}}, usd(10)),
+			snapPlatform(t0.Add(time.Minute), 1_000_000, 0, models, usd(12.5)),
+		},
+		metricsFor(models), prices, "24h", 0)
+
+	last := series.Points[len(series.Points)-1]
+	if !last.Authoritative {
+		t.Error("bucket should be marked authoritative when it came from the ledger")
+	}
+	if last.USD < 2.49 || last.USD > 2.51 {
+		t.Errorf("bucket = %.4f, want the ledger delta 2.50 — not the local rate", last.USD)
+	}
+	if series.AuthoritativePoints != 1 {
+		t.Errorf("authoritative points = %d, want 1", series.AuthoritativePoints)
+	}
+}
+
+// Samples with no platform figure keep the local estimate, and say so.
+func TestEarningsHistoryFallsBackWhenLedgerAbsent(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	models := map[string]ModelTokenCounts{"a": {In: 1_000_000}}
+	prices := fixedPrices{"a": {ProviderInputPrice: 2, ProviderOutputPrice: 0}}
+
+	series := CalculateEarningsHistory(context.Background(),
+		[]HistoricalDataPoint{
+			snap(t0, 0, 0, map[string]ModelTokenCounts{"a": {}}),
+			snap(t0.Add(time.Minute), 1_000_000, 0, models),
+		},
+		metricsFor(models), prices, "24h", 0)
+
+	last := series.Points[len(series.Points)-1]
+	if last.Authoritative {
+		t.Error("a bucket with no platform figure must not claim to be authoritative")
+	}
+	if last.USD < 1.99 || last.USD > 2.01 {
+		t.Errorf("fallback = %.4f, want the locally priced 2.00", last.USD)
+	}
+	if series.AuthoritativePoints != 0 {
+		t.Errorf("authoritative points = %d, want 0", series.AuthoritativePoints)
+	}
+}
+
+// The platform reports no per-model split, so the local share is rescaled onto
+// the authoritative total. The bar's height is the platform's; its division is
+// this node's estimate — but the segments must still sum to the bar.
+func TestEarningsHistoryRescalesModelSplitOntoLedgerTotal(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	models := map[string]ModelTokenCounts{"a": {In: 3_000_000}, "b": {In: 1_000_000}}
+	prices := fixedPrices{
+		"a": {ProviderInputPrice: 1},
+		"b": {ProviderInputPrice: 1},
+	}
+
+	series := CalculateEarningsHistory(context.Background(),
+		[]HistoricalDataPoint{
+			snapPlatform(t0, 0, 0, map[string]ModelTokenCounts{"a": {}, "b": {}}, usd(0)),
+			snapPlatform(t0.Add(time.Minute), 4_000_000, 0, models, usd(8)),
+		},
+		metricsFor(models), prices, "24h", 0)
+
+	last := series.Points[len(series.Points)-1]
+	if last.USD < 7.99 || last.USD > 8.01 {
+		t.Fatalf("bucket = %.4f, want the ledger's 8.00", last.USD)
+	}
+	sum := 0.0
+	for _, m := range last.Models {
+		sum += m.USD
+	}
+	if sum < 7.99 || sum > 8.01 {
+		t.Errorf("model segments sum to %.4f, want them to fill the 8.00 bar", sum)
+	}
+	// Local rates gave a:b = 3:1, so the rescaled split must keep that ratio.
+	if got := last.Models["a"].USD; got < 5.99 || got > 6.01 {
+		t.Errorf("model a = %.4f, want 6.00 (3:1 of the ledger total)", got)
+	}
+	if last.Unattributed > 0.01 {
+		t.Errorf("unattributed = %.4f, want ~0 once the split fills the bar", last.Unattributed)
+	}
+}
+
+// A lifetime total that goes down is a correction or a payout on the platform
+// side, not negative earnings.
+func TestEarningsHistoryTreatsLedgerDecreaseAsZero(t *testing.T) {
+	t0 := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	models := map[string]ModelTokenCounts{"a": {In: 10}}
+	series := CalculateEarningsHistory(context.Background(),
+		[]HistoricalDataPoint{
+			snapPlatform(t0, 0, 0, nil, usd(50)),
+			snapPlatform(t0.Add(time.Minute), 10, 0, nil, usd(40)),
+		},
+		metricsFor(models), nil, "24h", 0)
+
+	last := series.Points[len(series.Points)-1]
+	if last.USD != 0 {
+		t.Errorf("bucket = %.4f, want 0 — a decrease must not subtract from the window", last.USD)
+	}
+}

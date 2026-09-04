@@ -138,6 +138,11 @@ export function EarningsChart({ models }: EarningsChartProps) {
   const colours = useMemo(() => buildModelColours(models), [models]);
   const points = useMemo(() => data?.points ?? [], [data?.points]);
   const bucketSeconds = data?.bucket_seconds;
+  // How much of this window came from the platform's ledger. The provenance
+  // has to be stated: a bar priced locally and a bar read off the ledger are
+  // different claims, and only the second reconciles with what is paid.
+  const authoritativePoints = data?.authoritative_points ?? 0;
+  const allAuthoritative = points.length > 0 && authoritativePoints === points.length;
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
   const activeIndex = hovered ?? (points.length > 0 ? points.length - 1 : null);
   const active = activeIndex !== null ? points[activeIndex] : null;
@@ -334,10 +339,15 @@ export function EarningsChart({ models }: EarningsChartProps) {
       <p className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <span>
-          This node’s own estimate, priced from its stored history at current rates — not the
-          platform’s ledger.
-          {(data?.restarts ?? 0) > 0 &&
-            ` The counters reset ${data?.restarts} time(s) in this window, so the total is a floor.`}
+          {allAuthoritative
+            ? 'From Swan Inference’s own earnings figure, sampled and differenced per interval.'
+            : authoritativePoints > 0
+              ? `${authoritativePoints} of ${points.length} intervals come from Swan Inference’s own figure; the rest are this node’s estimate, priced from stored history at current rates.`
+              : 'This node’s own estimate, priced from its stored history at current rates — not the platform’s ledger.'}
+          {authoritativePoints > 0 &&
+            ' The split by model is still this node’s share of served tokens: the platform reports no per-model breakdown.'}
+          {(data?.restarts ?? 0) > 0 && authoritativePoints < points.length &&
+            ` The counters reset ${data?.restarts} time(s) in this window, so estimated intervals are a floor.`}
           {data?.covers && ` History reaches back ${data.covers}.`}
         </span>
       </p>

@@ -36,6 +36,16 @@ type MetricsHistoryEntity struct {
 	// column existed have it empty, and those intervals stay unattributed —
 	// history cannot be split after the fact.
 	ModelTokens string `gorm:"type:text" json:"model_tokens,omitempty"`
+	// PlatformEarningsUSD is the platform's own lifetime earnings figure at
+	// this instant. Stored so a bucket's earnings can be read off the ledger
+	// that governs, by differencing consecutive samples, instead of being
+	// recomputed locally from token counts and published rates — which cannot
+	// account for how the platform actually settles.
+	//
+	// A pointer because absent and zero are different: rows written before this
+	// column existed have no figure, and a provider that has genuinely earned
+	// nothing has zero.
+	PlatformEarningsUSD *float64 `json:"platform_earnings_usd,omitempty"`
 }
 
 // ModelTokenCounts is one model's cumulative token counters. Like the node-wide
@@ -66,6 +76,9 @@ type HistoricalDataPoint struct {
 	// ModelTokens is the same cumulative split, per model. Empty for samples
 	// recorded before the column existed.
 	ModelTokens map[string]ModelTokenCounts `json:"model_tokens,omitempty"`
+	// PlatformEarningsUSD is the platform's lifetime figure at this sample, or
+	// nil when none was recorded.
+	PlatformEarningsUSD *float64 `json:"platform_earnings_usd,omitempty"`
 }
 
 // MetricsHistory manages historical metrics storage and retrieval
@@ -75,6 +88,19 @@ type MetricsHistory struct {
 	retentionDays  int
 	stopChan       chan struct{}
 	running        bool
+	// platformEarnings reports the platform's lifetime earnings, and whether a
+	// figure was available. Set separately from Start because the stats client
+	// is built after the service starts; snapshots taken before it is set
+	// simply carry no platform figure.
+	platformEarnings func() (float64, bool)
+}
+
+// SetPlatformEarningsProvider installs the source of the platform's lifetime
+// earnings figure, recorded with each snapshot.
+func (h *MetricsHistory) SetPlatformEarningsProvider(fn func() (float64, bool)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.platformEarnings = fn
 }
 
 // NewMetricsHistory creates a new MetricsHistory instance
@@ -184,6 +210,15 @@ func (h *MetricsHistory) recordSnapshot(metricsProvider func() *InferenceMetrics
 		TotalTokensIn:     snapshot.TotalTokensIn,
 		TotalTokensOut:    snapshot.TotalTokensOut,
 		ModelTokens:       encodeModelTokens(snapshot.ModelMetrics),
+	}
+
+	h.mu.RLock()
+	platform := h.platformEarnings
+	h.mu.RUnlock()
+	if platform != nil {
+		if usd, ok := platform(); ok {
+			entry.PlatformEarningsUSD = &usd
+		}
 	}
 
 	if err := database.Create(&entry).Error; err != nil {
@@ -300,16 +335,17 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 		result := make([]HistoricalDataPoint, len(entries))
 		for i, e := range entries {
 			result[i] = HistoricalDataPoint{
-				Timestamp:         e.Timestamp,
-				TotalRequests:     e.TotalRequests,
-				SuccessRate:       e.SuccessRate,
-				AvgLatencyMs:      e.AvgLatencyMs,
-				P99LatencyMs:      e.P99LatencyMs,
-				TokensPerSecond:   e.TokensPerSecond,
-				RequestsPerMinute: e.RequestsPerMinute,
-				TotalTokensIn:     e.TotalTokensIn,
-				TotalTokensOut:    e.TotalTokensOut,
-				ModelTokens:       decodeModelTokens(e.ModelTokens),
+				Timestamp:           e.Timestamp,
+				TotalRequests:       e.TotalRequests,
+				SuccessRate:         e.SuccessRate,
+				AvgLatencyMs:        e.AvgLatencyMs,
+				P99LatencyMs:        e.P99LatencyMs,
+				TokensPerSecond:     e.TokensPerSecond,
+				RequestsPerMinute:   e.RequestsPerMinute,
+				TotalTokensIn:       e.TotalTokensIn,
+				TotalTokensOut:      e.TotalTokensOut,
+				ModelTokens:         decodeModelTokens(e.ModelTokens),
+				PlatformEarningsUSD: e.PlatformEarningsUSD,
 			}
 		}
 		return result
@@ -358,16 +394,17 @@ func (h *MetricsHistory) aggregateByResolution(entries []MetricsHistoryEntity, r
 		// exists, which would make every later difference wrong.
 		last := bucket[len(bucket)-1]
 		result = append(result, HistoricalDataPoint{
-			Timestamp:         time.Unix(key, 0),
-			TotalRequests:     maxTotalReqs,
-			SuccessRate:       sumSuccessRate / count,
-			AvgLatencyMs:      sumAvgLatency / count,
-			P99LatencyMs:      sumP99Latency / count,
-			TokensPerSecond:   sumTokensPerSec / count,
-			RequestsPerMinute: sumReqPerMin / count,
-			TotalTokensIn:     last.TotalTokensIn,
-			TotalTokensOut:    last.TotalTokensOut,
-			ModelTokens:       decodeModelTokens(last.ModelTokens),
+			Timestamp:           time.Unix(key, 0),
+			TotalRequests:       maxTotalReqs,
+			SuccessRate:         sumSuccessRate / count,
+			AvgLatencyMs:        sumAvgLatency / count,
+			P99LatencyMs:        sumP99Latency / count,
+			TokensPerSecond:     sumTokensPerSec / count,
+			RequestsPerMinute:   sumReqPerMin / count,
+			TotalTokensIn:       last.TotalTokensIn,
+			TotalTokensOut:      last.TotalTokensOut,
+			ModelTokens:         decodeModelTokens(last.ModelTokens),
+			PlatformEarningsUSD: last.PlatformEarningsUSD,
 		})
 	}
 

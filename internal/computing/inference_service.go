@@ -1294,6 +1294,15 @@ func (s *InferenceService) GetRequestHistory(limit int, modelFilter string) []Re
 	return s.client.metrics.GetRequestHistory(limit, modelFilter)
 }
 
+// SetPlatformEarningsProvider installs the source of the platform's lifetime
+// earnings figure, so each stored snapshot carries it and the earnings series
+// can be differenced from the ledger rather than priced locally.
+func (s *InferenceService) SetPlatformEarningsProvider(fn func() (float64, bool)) {
+	if s.metricsHistory != nil {
+		s.metricsHistory.SetPlatformEarningsProvider(fn)
+	}
+}
+
 // QueryRequestHistory returns one page of request history along with the total
 // matching the filters.
 //
