@@ -298,6 +298,27 @@ overloaded GPU. Both can also be changed at runtime, globally or per model,
 through the REST API — see the endpoint table in the
 [main README](../README.md#rest-api).
 
+### Request history
+
+```toml
+[RequestLog]
+RetentionDays = 7        # how far back the Transactions view reaches (default 7)
+MaxRows = 200000         # hard cap on stored rows (default 200000)
+```
+
+Every served request is stored, so the Transactions view — and its model and
+source filters — survive a restart. Before this existed the list lived only in
+a 1000-entry in-memory ring, so each restart emptied it, and a node that
+restarts often kept almost no history at all.
+
+Two limits rather than one: `RetentionDays` is how far back the data stays
+useful, and `MaxRows` stops a traffic burst filling the disk before the age
+limit ever applies. Whichever binds first wins, and pruning runs hourly.
+
+Writes are batched and happen off the request path, so recording never delays
+serving; under a burst large enough to fill the queue, records are dropped and
+the count is logged rather than blocking inference.
+
 ### models.json field reference
 
 Each key in `models.json` is the marketplace model ID (must match a value in `Models` above).

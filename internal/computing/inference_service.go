@@ -70,6 +70,7 @@ type InferenceService struct {
 	retryPolicy        *RetryPolicy
 	gpuCollector       *GPUMetricsCollector
 	metricsHistory     *MetricsHistory
+	requestStore       *RequestStore
 	alertMonitor       *alertMonitor
 	selfCheck          *selfCheckRunner
 	noticeLimiter      *noticeLimiter
@@ -116,6 +117,17 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	// Create metrics history for persistence
 	metricsHistory := NewMetricsHistory()
 
+	// Per-request history, so the Transactions view survives a restart.
+	// GetConfig is nil until InitConfig has run, which is not guaranteed for
+	// callers that construct the service directly; the store's own defaults
+	// cover that.
+	var retentionDays int
+	var maxRows int64
+	if cfg := conf.GetConfig(); cfg != nil {
+		retentionDays, maxRows = cfg.RequestLog.RetentionDays, cfg.RequestLog.MaxRows
+	}
+	requestStore := NewRequestStore(retentionDays, maxRows)
+
 	s := &InferenceService{
 		nodeID:             nodeID,
 		cpPath:             cpPath,
@@ -127,6 +139,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		retryPolicy:        retryPolicy,
 		gpuCollector:       gpuCollector,
 		metricsHistory:     metricsHistory,
+		requestStore:       requestStore,
 	}
 
 	// Set up registry callbacks to update modelMappings for backward compatibility
@@ -345,6 +358,15 @@ func (s *InferenceService) Start() error {
 	s.alertMonitor.Start()
 	s.selfCheck.Start()
 
+	// Start persistent request history, and feed it from the metrics recorder.
+	if s.requestStore != nil {
+		if err := s.requestStore.Start(); err != nil {
+			logs.GetLogger().Warnf("Failed to start request history store: %v", err)
+		} else if s.client != nil && s.client.metrics != nil {
+			s.client.metrics.SetRequestSink(s.requestStore.Record)
+		}
+	}
+
 	// Start metrics history recorder
 	if s.metricsHistory != nil {
 		if err := s.metricsHistory.Start(func() *InferenceMetricsData {
@@ -383,6 +405,9 @@ func (s *InferenceService) Stop() {
 	}
 	if s.metricsHistory != nil {
 		s.metricsHistory.Stop()
+	}
+	if s.requestStore != nil {
+		s.requestStore.Stop()
 	}
 	if s.alertMonitor != nil {
 		s.alertMonitor.Stop()
@@ -1271,7 +1296,18 @@ func (s *InferenceService) GetRequestHistory(limit int, modelFilter string) []Re
 
 // QueryRequestHistory returns one page of request history along with the total
 // matching the filters.
+//
+// Served from the persistent store when there is one, so the list reaches back
+// past the last restart. The in-memory ring is the fallback: it is all that
+// exists before the store has started, or if the database is unavailable.
 func (s *InferenceService) QueryRequestHistory(q RequestHistoryQuery) RequestHistoryPage {
+	if s.requestStore != nil {
+		if page, err := s.requestStore.Query(q); err == nil {
+			return page
+		} else {
+			logs.GetLogger().Warnf("Request history query failed, falling back to memory: %v", err)
+		}
+	}
 	if s.client == nil {
 		return RequestHistoryPage{Requests: []RequestMetric{}, Limit: q.Limit, Offset: q.Offset}
 	}

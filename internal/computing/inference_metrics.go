@@ -57,6 +57,8 @@ type InferenceMetrics struct {
 
 	// Request history (circular buffer)
 	requestHistory []RequestMetric
+	// requestSink persists each request, when a store is attached.
+	requestSink    func(RequestMetric)
 	historyMu      sync.RWMutex
 	maxHistorySize int
 }
@@ -407,10 +409,24 @@ func (m *InferenceMetrics) GetPrometheusMetrics() string {
 	return sb.String()
 }
 
+// SetRequestSink installs a persistent store fed alongside the in-memory ring.
+// The ring stays: it answers without touching the database, and it is what the
+// model detail view reads.
+func (m *InferenceMetrics) SetRequestSink(sink func(RequestMetric)) {
+	m.historyMu.Lock()
+	defer m.historyMu.Unlock()
+	m.requestSink = sink
+}
+
 // RecordRequest adds a request to the history circular buffer
 func (m *InferenceMetrics) RecordRequest(req RequestMetric) {
 	m.historyMu.Lock()
 	defer m.historyMu.Unlock()
+
+	if m.requestSink != nil {
+		// Never blocks — the sink queues and returns.
+		m.requestSink(req)
+	}
 
 	if len(m.requestHistory) >= m.maxHistorySize {
 		// Remove oldest entry (circular buffer)

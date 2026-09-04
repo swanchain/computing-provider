@@ -86,6 +86,16 @@ type ComputeNode struct {
 	HealthCheck   HealthCheck   `toml:"HealthCheck,omitempty"`
 	RequestLimits RequestLimits `toml:"RequestLimits,omitempty"`
 	Dashboard     Dashboard     `toml:"Dashboard,omitempty"`
+	RequestLog    RequestLog    `toml:"RequestLog,omitempty"`
+}
+
+// RequestLog controls how long the per-request history kept for the
+// Transactions view is retained. It is one row per served request, so both
+// limits exist: age for how far back it is useful, and a row cap so a burst
+// cannot fill the disk before the age limit bites.
+type RequestLog struct {
+	RetentionDays int   `toml:"RetentionDays"` // Default: 7
+	MaxRows       int64 `toml:"MaxRows"`       // Default: 200000
 }
 
 // Dashboard configures the web UI served by `computing-provider dashboard`.

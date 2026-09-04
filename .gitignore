@@ -28,3 +28,12 @@ logs/
 
 # Dashboard UI
 internal/dashboard/ui/node_modules/cp.log
+
+# SQLite data. The provider's database normally lives in $CP_PATH, outside the
+# repo — but CP_PATH can be pointed here during development, and the WAL and
+# shared-memory sidecars appear beside it.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
