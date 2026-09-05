@@ -108,6 +108,14 @@ Back up `private_key` somewhere safe. It is 32 bytes and irreplaceable.
 
 `computing-provider inference status` prints the window and source per model, and the provider logs a warning once per model when nothing is reported.
 
+The source travels with the value to Swan Inference as `context_source`, because
+the two paths are not equally trustworthy and the number alone does not say
+which produced it. A **detected** window is self-verifying — vLLM and SGLang
+refuse to start when it exceeds what the KV cache can hold, so it is backed by
+memory that demonstrably exists. An **override** is an assertion nothing on this
+side can check. An absent `context_source` means unknown, so an agent that does
+not send one reads exactly as it did before.
+
 ### Self-check and auto-heal
 
 The provider audits itself on a timer and, when a backend cannot serve, takes the model out of routing until it can again.

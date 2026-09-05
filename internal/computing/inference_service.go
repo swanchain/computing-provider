@@ -826,16 +826,19 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
 }
 
-// resolveModelContexts returns each configured model's real context window in
-// tokens: a manual context_length from models.json wins; otherwise the value
-// the health checker detected from the backend's /v1/models (max_model_len).
-// Models with no known window are omitted — the server falls back to the
-// catalog value for those (#61).
-func (s *InferenceService) resolveModelContexts() map[string]int {
-	contexts := make(map[string]int)
+// resolveModelContexts returns each configured model's real context window and
+// how it was determined: a manual context_length from models.json wins;
+// otherwise the value the health checker detected from the backend's
+// /v1/models (max_model_len). Models with no known window are omitted — the
+// server falls back to the catalog value for those (#61).
+//
+// The provenance travels with the value because the two paths are not equally
+// trustworthy, and the number alone does not say which one produced it.
+func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
+	contexts := make(map[string]ModelContextInfo)
 	for modelID := range s.modelMappings {
 		if info := s.ModelContext(modelID); info.Length > 0 {
-			contexts[modelID] = info.Length
+			contexts[modelID] = info
 		} else if info.Source == ContextSourceUnknown {
 			s.warnUnknownContext(modelID)
 		}
