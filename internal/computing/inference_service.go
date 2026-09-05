@@ -979,14 +979,31 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		headers.Set("Authorization", "Bearer "+apiKey)
 	}
 	httpClient := NewHttpClient(endpoint, headers)
-	var response json.RawMessage
-	if err := httpClient.PostJSON("/v1/chat/completions", warmupRequest, &response); err != nil {
+	sendWarmup := func(maxTokens int) (json.RawMessage, error) {
+		warmupRequest["max_tokens"] = maxTokens
+		var response json.RawMessage
+		err := httpClient.PostJSON("/v1/chat/completions", warmupRequest, &response)
+		return response, err
+	}
+
+	response, err := sendWarmup(warmupMaxTokens)
+	if err != nil {
 		return nil, fmt.Errorf("warmup request failed: %w", err)
 	}
-	if warning, err := validateWarmupResponse(response); err != nil {
-		return nil, fmt.Errorf("warmup validation failed: %w", err)
-	} else if warning != "" {
-		logs.GetLogger().Warnf("Model %s warmup warning: %s", payload.ModelID, warning)
+	validationErr := validateWarmupResponse(response)
+	if errors.Is(validationErr, errWarmupTokenLimit) {
+		logs.GetLogger().Warnf("Model %s warmup reached %d tokens; retrying with a %d-token budget", payload.ModelID, warmupMaxTokens, warmupRetryMaxTokens)
+		response, err = sendWarmup(warmupRetryMaxTokens)
+		if err != nil {
+			return nil, fmt.Errorf("warmup retry failed: %w", err)
+		}
+		validationErr = validateWarmupResponse(response)
+		if errors.Is(validationErr, errWarmupTokenLimit) {
+			return nil, fmt.Errorf("warmup validation failed: model did not finish within %d tokens; check the backend chat template and stop tokens", warmupRetryMaxTokens)
+		}
+	}
+	if validationErr != nil {
+		return nil, fmt.Errorf("warmup validation failed: %w", validationErr)
 	}
 
 	logs.GetLogger().Infof("Model %s warmed up successfully", payload.ModelID)

@@ -2,22 +2,28 @@ package computing
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 )
 
-const warmupMaxTokens = 64
+const (
+	warmupMaxTokens      = 64
+	warmupRetryMaxTokens = 512
+)
+
+var errWarmupTokenLimit = errors.New("warmup completion reached the token limit")
 
 var warmupRoleBoundary = regexp.MustCompile(`(?im)^\s*(?:user|assistant|system)\s*:`)
 
 // validateWarmupResponse checks the synthetic greeting only. Consumer prompts
 // and completions may legitimately contain these strings and are not inspected.
-// A reasoning model can spend the entire budget on hidden reasoning, so that
-// specific case is reported as a warning instead of rejecting the model.
-func validateWarmupResponse(response json.RawMessage) (string, error) {
+// A clean completion that reaches its token limit is reported separately so
+// the caller can retry it with a larger budget before rejecting the model.
+func validateWarmupResponse(response json.RawMessage) error {
 	if err := checkForOpenAIError(response); err != nil {
-		return "", err
+		return err
 	}
 
 	var completion struct {
@@ -33,16 +39,16 @@ func validateWarmupResponse(response json.RawMessage) (string, error) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(response, &completion); err != nil {
-		return "", fmt.Errorf("invalid warmup completion: %w", err)
+		return fmt.Errorf("invalid warmup completion: %w", err)
 	}
 	if len(completion.Choices) == 0 {
-		return "", fmt.Errorf("warmup returned no completion choices")
+		return fmt.Errorf("warmup returned no completion choices")
 	}
 
-	warning := ""
+	reachedTokenLimit := false
 	for _, choice := range completion.Choices {
 		if choice.Message.Role != "" && choice.Message.Role != "assistant" {
-			return "", fmt.Errorf("warmup returned a non-assistant role; check the backend chat template")
+			return fmt.Errorf("warmup returned a non-assistant role; check the backend chat template")
 		}
 
 		content := choice.Message.Content
@@ -52,24 +58,24 @@ func validateWarmupResponse(response json.RawMessage) (string, error) {
 			"[INST]", "[/INST]",
 		} {
 			if strings.Contains(content, marker) {
-				return "", fmt.Errorf("warmup leaked a chat delimiter; check the backend chat template and stop tokens")
+				return fmt.Errorf("warmup leaked a chat delimiter; check the backend chat template and stop tokens")
 			}
 		}
 		if warmupRoleBoundary.MatchString(content) {
-			return "", fmt.Errorf("warmup generated a conversation role boundary; check the backend chat template and stop tokens")
+			return fmt.Errorf("warmup generated a conversation role boundary; check the backend chat template and stop tokens")
 		}
 
 		reasoning := choice.Message.Reasoning + choice.Message.ReasoningContent
 		if choice.FinishReason == "length" {
-			if strings.TrimSpace(content+choice.Message.Refusal) != "" || strings.TrimSpace(reasoning) == "" {
-				return "", fmt.Errorf("warmup exhausted the %d-token budget; check the backend chat template and stop tokens", warmupMaxTokens)
-			}
-			warning = fmt.Sprintf("greeting exhausted the %d-token warmup budget in hidden reasoning", warmupMaxTokens)
+			reachedTokenLimit = true
 			continue
 		}
 		if strings.TrimSpace(content+reasoning+choice.Message.Refusal) == "" {
-			return "", fmt.Errorf("warmup returned an empty completion")
+			return fmt.Errorf("warmup returned an empty completion")
 		}
 	}
-	return warning, nil
+	if reachedTokenLimit {
+		return errWarmupTokenLimit
+	}
+	return nil
 }
