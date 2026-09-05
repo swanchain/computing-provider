@@ -44,6 +44,29 @@ var streamingHttpClient = &http.Client{
 	},
 }
 
+// mappingFor mirrors a registered model into the legacy mapping table.
+//
+// Every field the registry holds has to be copied. These callbacks fire after
+// models.json is first read and again on every hot reload, so anything omitted
+// here is not merely missing — it silently overwrites a value that was loaded
+// correctly moments earlier. context_length was dropped this way: an operator
+// setting it in models.json saw it read at startup and then erased, so the
+// window went out as undetermined and the marketplace fell back to the catalog
+// value for a backend that publishes no max_model_len of its own.
+func mappingFor(model *RegisteredModel) ModelMapping {
+	return ModelMapping{
+		Container:     model.Container,
+		Endpoint:      model.Endpoint,
+		GPUMemory:     model.GPUMemory,
+		Category:      model.Category,
+		LocalModel:    model.LocalModel,
+		Format:        model.Format,
+		Quantization:  model.Quantization,
+		APIKey:        model.APIKey,
+		ContextLength: model.ContextLength,
+	}
+}
+
 // ModelMapping represents a model-to-endpoint mapping from models.json
 type ModelMapping struct {
 	Container     string `json:"container"`
@@ -146,15 +169,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	registry.SetCallbacks(
 		func(model *RegisteredModel) {
 			// On model added
-			s.modelMappings[model.ID] = ModelMapping{
-				Container:    model.Container,
-				Endpoint:     model.Endpoint,
-				GPUMemory:    model.GPUMemory,
-				Category:     model.Category,
-				Format:       model.Format,
-				Quantization: model.Quantization,
-				APIKey:       model.APIKey,
-			}
+			s.modelMappings[model.ID] = mappingFor(model)
 			s.updateClientModels()
 		},
 		func(modelID string) {
@@ -164,15 +179,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		},
 		func(model *RegisteredModel) {
 			// On model updated
-			s.modelMappings[model.ID] = ModelMapping{
-				Container:    model.Container,
-				Endpoint:     model.Endpoint,
-				GPUMemory:    model.GPUMemory,
-				Category:     model.Category,
-				Format:       model.Format,
-				Quantization: model.Quantization,
-				APIKey:       model.APIKey,
-			}
+			s.modelMappings[model.ID] = mappingFor(model)
 		},
 	)
 
