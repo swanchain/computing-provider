@@ -65,8 +65,11 @@ func TestResolveOmitsUnknownContext(t *testing.T) {
 	s.healthChecker.recordDetectedContext("org/unknown", nil)
 
 	got := s.resolveModelContexts()
-	if len(got) != 1 || got["org/known"] != 8192 {
+	if len(got) != 1 || got["org/known"].Length != 8192 {
 		t.Fatalf("got %v, want only org/known=8192", got)
+	}
+	if got["org/known"].Source != ContextSourceDetected {
+		t.Errorf("source = %q, want %q", got["org/known"].Source, ContextSourceDetected)
 	}
 }
 

@@ -83,8 +83,10 @@ func TestRecordDetectedContextLocalNameMatch(t *testing.T) {
 
 func TestBuildModelMetadataHeartbeatShape(t *testing.T) {
 	c := &InferenceClient{models: []string{"model-a", "model-b", "model-c"}}
-	c.SetModelContextsProvider(func() map[string]int {
-		return map[string]int{"model-a": 32768}
+	c.SetModelContextsProvider(func() map[string]ModelContextInfo {
+		return map[string]ModelContextInfo{
+			"model-a": {Length: 32768, Source: ContextSourceDetected},
+		}
 	})
 	c.SetModelMappingsProvider(func() map[string]ModelMapping {
 		return map[string]ModelMapping{
@@ -126,11 +128,11 @@ func TestResolveModelContextsPrecedence(t *testing.T) {
 	}
 
 	contexts := s.resolveModelContexts()
-	if contexts["model-a"] != 32768 {
-		t.Errorf("expected detected 32768 for model-a, got %d", contexts["model-a"])
+	if contexts["model-a"].Length != 32768 || contexts["model-a"].Source != ContextSourceDetected {
+		t.Errorf("expected detected 32768 for model-a, got %+v", contexts["model-a"])
 	}
-	if contexts["model-b"] != 16384 {
-		t.Errorf("expected manual override 16384 for model-b, got %d", contexts["model-b"])
+	if contexts["model-b"].Length != 16384 || contexts["model-b"].Source != ContextSourceOverride {
+		t.Errorf("expected override 16384 for model-b, got %+v", contexts["model-b"])
 	}
 	if _, ok := contexts["model-c"]; ok {
 		t.Error("model with unknown context should be omitted")

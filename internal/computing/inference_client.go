@@ -71,6 +71,17 @@ type ModelInfo struct {
 	Format        string `json:"format,omitempty"`         // Weight format: "fp16", "fp8", "awq", "gptq", "gguf"
 	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 	ContextLength int    `json:"context_length,omitempty"` // Backend's real context window in tokens (#61); 0 = unknown, server assumes catalog value
+	// ContextSource says how ContextLength was arrived at: "detected" read
+	// from the backend's own max_model_len, or "override" asserted in
+	// models.json. Absent means unknown, so an agent that does not send it
+	// reads exactly as it did before — no coordinated rollout required.
+	//
+	// The two are not equally trustworthy and a receiver cannot tell them
+	// apart from the number alone. A detection is self-verifying: vLLM and
+	// SGLang refuse to start when the window exceeds what the KV cache can
+	// hold, so the value is backed by memory that demonstrably exists. An
+	// override is an assertion nothing on this side can check.
+	ContextSource string `json:"context_source,omitempty"`
 }
 
 // VerifyResponsePayload is returned after processing a verification challenge
@@ -297,9 +308,9 @@ type InferenceClient struct {
 	streamingInferenceHandler StreamingInferenceHandler
 	warmupHandler             WarmupHandler
 	noticeHandler             NoticeHandler
-	modelHealthProvider       func() map[string]string       // Returns current model health for heartbeat
-	modelMappingsProvider     func() map[string]ModelMapping // Returns current model mappings for format/quantization
-	modelContextsProvider     func() map[string]int          // Returns per-model real context windows for register/heartbeat (#61)
+	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
+	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
+	modelContextsProvider     func() map[string]ModelContextInfo // Per-model real context window and how it was determined (#61)
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -416,7 +427,7 @@ func (c *InferenceClient) SetModelMappingsProvider(provider func() map[string]Mo
 
 // SetModelContextsProvider sets the function that returns each model's real
 // context window (manual override or backend-detected) for register/heartbeat
-func (c *InferenceClient) SetModelContextsProvider(provider func() map[string]int) {
+func (c *InferenceClient) SetModelContextsProvider(provider func() map[string]ModelContextInfo) {
 	c.modelContextsProvider = provider
 }
 
@@ -2093,11 +2104,30 @@ func (c *InferenceClient) sendBenchmarkResponse(requestID, benchmarkID string, r
 	}
 }
 
+// declaredContextSource is the provenance to put on the wire for a context
+// window, or "" to leave the field off.
+//
+// Only a window that was actually determined carries one: with no length there
+// is nothing whose provenance could matter, and "unknown" and "pending" are
+// what an absent field already means. Sending them explicitly would add a value
+// every receiver has to special-case for no gain.
+func declaredContextSource(info ModelContextInfo) string {
+	if info.Length <= 0 {
+		return ""
+	}
+	switch info.Source {
+	case ContextSourceOverride, ContextSourceDetected:
+		return info.Source
+	default:
+		return ""
+	}
+}
+
 // buildModelMetadata builds the lightweight per-model metadata list for
 // heartbeats: context window (manual or backend-detected), format, and
 // quantization — without touching hash manifests on disk (#61).
 func (c *InferenceClient) buildModelMetadata() []ModelInfo {
-	var contexts map[string]int
+	var contexts map[string]ModelContextInfo
 	if c.modelContextsProvider != nil {
 		contexts = c.modelContextsProvider()
 	}
@@ -2110,7 +2140,8 @@ func (c *InferenceClient) buildModelMetadata() []ModelInfo {
 	for _, modelID := range c.models {
 		info := ModelInfo{
 			ModelID:       modelID,
-			ContextLength: contexts[modelID],
+			ContextLength: contexts[modelID].Length,
+			ContextSource: declaredContextSource(contexts[modelID]),
 		}
 		if mapping, ok := mappings[modelID]; ok {
 			info.Format = mapping.Format
@@ -2134,7 +2165,7 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 	}
 
 	// Get real per-model context windows (manual override or backend-detected)
-	var contexts map[string]int
+	var contexts map[string]ModelContextInfo
 	if c.modelContextsProvider != nil {
 		contexts = c.modelContextsProvider()
 	}
@@ -2149,7 +2180,8 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 			info.Format = mapping.Format
 			info.Quantization = mapping.Quantization
 		}
-		info.ContextLength = contexts[modelID]
+		info.ContextLength = contexts[modelID].Length
+		info.ContextSource = declaredContextSource(contexts[modelID])
 
 		modelDir := c.getModelDir(modelID)
 		manifest, err := models.LoadHashManifest(modelDir)
@@ -2392,8 +2424,11 @@ type DeclaredCapacity struct {
 }
 
 type ModelDeclaration struct {
-	SchemaVersion    string             `json:"schema_version"`
-	ModelID          string             `json:"model_id"`
+	SchemaVersion string `json:"schema_version"`
+	ModelID       string `json:"model_id"`
+	// ContextSource is the provenance of max_context_length below: "detected"
+	// or "override". Absent means unknown.
+	ContextSource    string             `json:"context_source,omitempty"`
 	WeightHash       string             `json:"weight_hash,omitempty"`
 	HashAlgo         string             `json:"hash_algo,omitempty"`
 	Quantization     string             `json:"quantization,omitempty"`
@@ -2487,7 +2522,7 @@ func declaredModalitiesFor(category string, contextLen int) ([]DeclaredModality,
 // declared. Over-claiming is what the verification programme is designed to
 // catch, and there is nothing to gain by it.
 func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
-	var contexts map[string]int
+	var contexts map[string]ModelContextInfo
 	if c.modelContextsProvider != nil {
 		contexts = c.modelContextsProvider()
 	}
@@ -2499,11 +2534,12 @@ func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
 	decls := make([]ModelDeclaration, 0, len(c.models))
 	for _, modelID := range c.models {
 		mapping := mappings[modelID]
-		in, out := declaredModalitiesFor(mapping.Category, contexts[modelID])
+		in, out := declaredModalitiesFor(mapping.Category, contexts[modelID].Length)
 
 		d := ModelDeclaration{
 			SchemaVersion:    ModelDeclarationSchemaVersion,
 			ModelID:          modelID,
+			ContextSource:    declaredContextSource(contexts[modelID]),
 			Quantization:     normalizeQuantization(mapping.Format, mapping.Quantization),
 			Engine:           detectEngineName(mapping),
 			InputModalities:  in,
