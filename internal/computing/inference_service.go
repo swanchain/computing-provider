@@ -966,7 +966,8 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		"messages": []map[string]string{
 			{"role": "user", "content": "Hi"},
 		},
-		"max_tokens": 1, // Minimal response to save resources
+		"max_tokens": warmupMaxTokens,
+		"stream":     false,
 	}
 
 	// Pass the map directly to PostJSON which handles marshaling.
@@ -981,6 +982,11 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 	var response json.RawMessage
 	if err := httpClient.PostJSON("/v1/chat/completions", warmupRequest, &response); err != nil {
 		return nil, fmt.Errorf("warmup request failed: %w", err)
+	}
+	if warning, err := validateWarmupResponse(response); err != nil {
+		return nil, fmt.Errorf("warmup validation failed: %w", err)
+	} else if warning != "" {
+		logs.GetLogger().Warnf("Model %s warmup warning: %s", payload.ModelID, warning)
 	}
 
 	logs.GetLogger().Infof("Model %s warmed up successfully", payload.ModelID)
