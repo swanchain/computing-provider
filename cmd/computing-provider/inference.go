@@ -53,6 +53,68 @@ type ProviderStatusResponse struct {
 	EarningsEnabled bool     `json:"earnings_enabled"`
 }
 
+// ProviderAddresses are the wallet addresses the platform holds for this
+// provider, from GET /api/v1/provider/me.
+//
+// Separate from ProviderStatusResponse because they come from a different
+// endpoint: status reports connectivity and onboarding, this reports what the
+// platform will pay and who controls the account.
+type ProviderAddresses struct {
+	OwnerAddress       string `json:"owner_address"`
+	WorkerAddress      string `json:"worker_address"`
+	BeneficiaryAddress string `json:"beneficiary_address"`
+}
+
+// fetchProviderAddresses reads the wallet addresses the platform holds.
+func fetchProviderAddresses(serviceURL, apiKey string) (*ProviderAddresses, error) {
+	req, err := http.NewRequest("GET", serviceURL+"/api/v1/provider/me", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var addresses ProviderAddresses
+	if err := json.Unmarshal(body, &addresses); err != nil {
+		return nil, err
+	}
+	return &addresses, nil
+}
+
+// printProviderAddresses writes the wallet addresses.
+//
+// Addresses are printed in full rather than abbreviated: the reason to read
+// them back is to confirm the value is the one you intended, and a truncated
+// form hides the middle where a transposed character would sit.
+func printProviderAddresses(addr *ProviderAddresses) {
+	show := func(label, value string) {
+		if value == "" {
+			fmt.Printf("%-13s %s\n", label, color.HiBlackString("not set"))
+			return
+		}
+		fmt.Printf("%-13s %s\n", label, value)
+	}
+	show("Owner:", addr.OwnerAddress)
+	show("Beneficiary:", addr.BeneficiaryAddress)
+	if addr.WorkerAddress != "" {
+		show("Worker:", addr.WorkerAddress)
+	}
+}
+
 // ProviderSignupResponse mirrors the backend signup response
 type ProviderSignupResponse struct {
 	ProviderID string   `json:"provider_id"`
@@ -551,8 +613,23 @@ var inferenceStatusCmd = &cli.Command{
 			return fmt.Errorf("failed to parse response: %v\nBody: %s", err, string(body))
 		}
 
+		// Addresses come from a different endpoint, and are advisory here: a
+		// status report must not fail because one extra lookup did.
+		addresses, addrErr := fetchProviderAddresses(serviceURL, apiKey)
+
 		if cctx.Bool("json") {
-			output, _ := json.MarshalIndent(status, "", "  ")
+			// Embedded, not nested: the existing keys stay exactly where they
+			// were, so anything already parsing this output keeps working and
+			// the addresses are simply additional fields.
+			var output []byte
+			if addrErr == nil {
+				output, _ = json.MarshalIndent(struct {
+					ProviderStatusResponse
+					*ProviderAddresses
+				}{status, addresses}, "", "  ")
+			} else {
+				output, _ = json.MarshalIndent(status, "", "  ")
+			}
 			fmt.Println(string(output))
 			return nil
 		}
@@ -573,6 +650,9 @@ var inferenceStatusCmd = &cli.Command{
 		}
 		if status.Name != "" {
 			fmt.Printf("Provider Name: %s\n", status.Name)
+		}
+		if addrErr == nil {
+			printProviderAddresses(addresses)
 		}
 
 		fmt.Printf("Status: ")
@@ -957,7 +1037,21 @@ var inferenceSetBeneficiaryCmd = &cli.Command{
 
 		fmt.Println()
 		color.Green("Beneficiary address updated!")
-		fmt.Printf("Rewards will be sent to: %s\n", address)
+
+		// Read it back from the platform rather than echoing the argument.
+		// Repeating what was typed confirms nothing: the point of showing it
+		// is to see the value the platform now holds, on the same terminal,
+		// without opening a browser.
+		if addresses, err := fetchProviderAddresses(serviceURL, apiKey); err != nil {
+			fmt.Printf("Rewards will be sent to: %s\n", address)
+			fmt.Printf("%s\n", color.HiBlackString("Could not read the stored value back: %v", err))
+		} else {
+			printProviderAddresses(addresses)
+			if !strings.EqualFold(addresses.BeneficiaryAddress, address) {
+				color.Yellow("Stored beneficiary %s does not match the address just sent (%s).",
+					addresses.BeneficiaryAddress, address)
+			}
+		}
 		fmt.Println()
 
 		return nil
