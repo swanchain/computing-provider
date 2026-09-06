@@ -98,17 +98,25 @@ and settings need the token at `$CP_PATH/dashboard.token`, entered through
 ### `inference`
 
 ```bash
-computing-provider inference status                 # stage, models, earnings, context windows
+computing-provider inference status                 # stage, models, earnings, context windows, wallet addresses
 computing-provider inference status --json
 computing-provider inference config                 # current config, API key masked
 computing-provider inference deposit                # collateral instructions
 computing-provider inference deposit --check        # current collateral status
-computing-provider inference set-beneficiary 0x...  # wallet that payouts go to
+computing-provider inference set-beneficiary 0x...  # set the payout wallet, then read it back
 computing-provider inference recommend-models       # rank catalog models by demand
 computing-provider inference recommend-models --vram 24 --top 10 --category llm
 computing-provider inference keygen                 # generate a provider API key
 computing-provider inference request-approval       # request approval to start earning
 ```
+
+`status` also prints the wallet addresses the platform holds — owner and
+beneficiary, and worker when set — so they can be read on a headless box
+without opening the dashboard. They are shown in full rather than abbreviated,
+because the reason to read them back is to confirm the value is the one you
+intended and a truncated form hides the middle. `set-beneficiary` reads the
+stored value back after updating rather than echoing the argument, and warns if
+what the platform holds differs from what was sent.
 
 ### `models`
 
