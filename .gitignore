@@ -37,3 +37,7 @@ internal/dashboard/ui/node_modules/cp.log
 *.db-shm
 *.sqlite
 *.sqlite3
+
+# Local Claude Code configuration: slash commands, skills and settings are the
+# operator's own tooling, not part of the provider client.
+.claude/
