@@ -259,10 +259,9 @@ export function EarningsChart({ models }: EarningsChartProps) {
                   {!active && points.length > 0 && (
                     <span className="text-slate-500">· hover a bar for one interval</span>
                   )}
-                  {hovered === null && <span className="ml-auto text-slate-400">Latest interval</span>}
                 </div>
                 {activeSegments.length > 0 ? (
-                  <ul className="mt-1 space-y-0.5">
+                  <ul className="mt-1 space-y-0.5 text-[11px]">
                     {activeSegments.map((s) => (
                       <li key={s.key} className="flex items-center gap-2">
                         <span
@@ -273,7 +272,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
                         <span className="min-w-0 flex-1 truncate text-slate-300">{s.label}</span>
                         <span className="font-mono text-slate-400">{formatUSD(s.usd)}</span>
                         {s.key !== '__unattributed' && (
-                          <span className="w-28 shrink-0 text-right font-mono text-slate-400">
+                          <span className="w-36 shrink-0 whitespace-nowrap text-right font-mono text-slate-400">
                             {formatTokens(s.tokensIn)} in / {formatTokens(s.tokensOut)} out
                           </span>
                         )}
