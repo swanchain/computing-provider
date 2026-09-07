@@ -150,3 +150,40 @@ func TestBucketSizeDoesNotChangeTheTotal(t *testing.T) {
 		t.Errorf("restarts = %d aggregated vs %d fine", daily.Restarts, fine.Restarts)
 	}
 }
+
+// A bucket's segments must never sum to more than the bar they are drawn in.
+//
+// The aggregate counter and the per-model counters are differenced separately,
+// so they can disagree. Here the aggregate advances by 1M tokens while the
+// per-model split advances by 3M — the shape a model removed and re-added
+// mid-interval produces. Clamping Unattributed at zero hid the excess but left
+// the inflated split in place, so the segments summed above the bucket total.
+func TestHistorySplitNeverExceedsBucketTotal(t *testing.T) {
+	withModels := func(min int, in, out int64, split map[string]ModelTokenCounts) HistoricalDataPoint {
+		p := pt(min, in, out)
+		p.ModelTokens = split
+		return p
+	}
+
+	s := CalculateEarningsHistory(context.Background(),
+		[]HistoricalDataPoint{
+			withModels(0, 1_000_000, 0, map[string]ModelTokenCounts{"org/a": {In: 1_000_000}}),
+			// Aggregate +1M, but the split claims +3M.
+			withModels(60, 2_000_000, 0, map[string]ModelTokenCounts{"org/a": {In: 4_000_000}}),
+		},
+		oneModel(2_000_000, 0),
+		fakePrices{rates: map[string]ModelPrice{"org/a": {ProviderInputPrice: 1.0}}},
+		"24h", 0)
+
+	for _, p := range s.Points {
+		var attributed float64
+		for _, m := range p.Models {
+			attributed += m.USD
+		}
+		// Float arithmetic, so allow a tolerance rather than compare exactly.
+		if attributed+p.Unattributed > p.USD+1e-9 {
+			t.Errorf("bucket %s: models %.6f + unattributed %.6f exceeds the bucket total %.6f",
+				p.Timestamp.Format(time.RFC3339), attributed, p.Unattributed, p.USD)
+		}
+	}
+}
