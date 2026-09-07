@@ -32,6 +32,7 @@ var inferenceCmd = &cli.Command{
 		inferenceRequestApprovalCmd,
 		inferenceDepositCmd,
 		inferenceSetBeneficiaryCmd,
+		inferenceSetOwnerCmd,
 		inferenceRecommendModelsCmd,
 		inferenceSelectModelCmd,
 	},
@@ -969,6 +970,147 @@ type modelDemandEntry struct {
 	EstDailyEarnings float64 `json:"est_daily_earnings"`
 }
 
+// validateEthAddress checks the shape of an address before it is sent anywhere.
+//
+// Shared by set-owner and set-beneficiary so the two reject the same inputs for
+// the same reasons — a caller who learns the rule from one command should not
+// find the other applies a different one.
+func validateEthAddress(address string) error {
+	if !strings.HasPrefix(address, "0x") || len(address) != 42 {
+		return fmt.Errorf("invalid Ethereum address: must be 42 characters starting with 0x")
+	}
+	for _, c := range address[2:] {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return fmt.Errorf("invalid Ethereum address: %q is not a hex character", c)
+		}
+	}
+	return nil
+}
+
+var inferenceSetOwnerCmd = &cli.Command{
+	Name:      "set-owner",
+	Usage:     "Set the owner (identity) wallet address, once",
+	ArgsUsage: "<0x-address>",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "yes",
+			Usage: "skip the confirmation prompt",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		address := cctx.Args().First()
+		if address == "" {
+			return fmt.Errorf("wallet address is required, e.g. computing-provider inference set-owner 0x...")
+		}
+		if err := validateEthAddress(address); err != nil {
+			return err
+		}
+
+		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
+		if err != nil {
+			return fmt.Errorf("failed to expand repo path: %v", err)
+		}
+		if err := conf.InitConfig(cpRepoPath, true); err != nil {
+			return fmt.Errorf("failed to load config: %v", err)
+		}
+
+		cfg := conf.GetConfig()
+		serviceURL := getServiceURL(cfg)
+		apiKey := getAPIKey(cfg)
+		if apiKey == "" {
+			return fmt.Errorf("no API key configured. Run 'computing-provider inference keygen' first")
+		}
+
+		// Read the current value first. The platform accepts an owner address
+		// only while it is empty, so a second call is refused server-side —
+		// checking here turns that into an explanation instead of a rejection
+		// the operator has to interpret, and costs one GET.
+		existing, err := fetchProviderAddresses(serviceURL, apiKey)
+		if err != nil {
+			return fmt.Errorf("could not read the current addresses: %v", err)
+		}
+		if existing.OwnerAddress != "" {
+			if strings.EqualFold(existing.OwnerAddress, address) {
+				fmt.Println()
+				color.Green("Owner address is already set to this address; nothing to do.")
+				printProviderAddresses(existing)
+				fmt.Println()
+				return nil
+			}
+			return fmt.Errorf("owner address is already set to %s and cannot be changed to %s.\n"+
+				"The address is fixed once written and there is no self-service path to change it — "+
+				"contact Swan support with the provider ID from 'computing-provider inference status'",
+				existing.OwnerAddress, address)
+		}
+
+		// The write cannot be undone, so make the operator look at the address
+		// once more. set-beneficiary needs no such prompt: it can be corrected
+		// by running it again, and this cannot.
+		if !cctx.Bool("yes") {
+			fmt.Println()
+			color.Yellow("The owner address can be set only once and cannot be changed afterwards.")
+			fmt.Printf("Setting owner to: %s\n", address)
+			ok, err := setup.NewPrompter().AskYesNo("Is this address correct?", false)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				fmt.Println("Cancelled; nothing was changed.")
+				return nil
+			}
+		}
+
+		reqBody, _ := json.Marshal(map[string]string{"owner_address": address})
+		req, err := http.NewRequest("PUT", serviceURL+"/api/v1/provider/me", bytes.NewReader(reqBody))
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to connect to Swan Inference: %v", err)
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &errResp) == nil && errResp.Error.Message != "" {
+				return fmt.Errorf("failed to update: %s", errResp.Error.Message)
+			}
+			return fmt.Errorf("failed to update (HTTP %d): %s", resp.StatusCode, string(body))
+		}
+
+		fmt.Println()
+		color.Green("Owner address set!")
+
+		// Read back rather than echo the argument, for the same reason
+		// set-beneficiary does: the value worth seeing is the stored one.
+		if addresses, err := fetchProviderAddresses(serviceURL, apiKey); err != nil {
+			fmt.Printf("Owner address sent: %s\n", address)
+			fmt.Printf("%s\n", color.HiBlackString("Could not read the stored value back: %v", err))
+		} else {
+			printProviderAddresses(addresses)
+			if !strings.EqualFold(addresses.OwnerAddress, address) {
+				color.Yellow("Stored owner %s does not match the address just sent (%s).",
+					addresses.OwnerAddress, address)
+			}
+		}
+		fmt.Println()
+		return nil
+	},
+}
+
 var inferenceSetBeneficiaryCmd = &cli.Command{
 	Name:      "set-beneficiary",
 	Usage:     "Set the wallet address for receiving rewards",
@@ -979,8 +1121,8 @@ var inferenceSetBeneficiaryCmd = &cli.Command{
 			return fmt.Errorf("wallet address is required, e.g. computing-provider inference set-beneficiary 0x...")
 		}
 
-		if !strings.HasPrefix(address, "0x") || len(address) != 42 {
-			return fmt.Errorf("invalid Ethereum address: must be 42 characters starting with 0x")
+		if err := validateEthAddress(address); err != nil {
+			return err
 		}
 
 		cpRepoPath, err := homedir.Expand(cctx.String(FlagRepo.Name))
