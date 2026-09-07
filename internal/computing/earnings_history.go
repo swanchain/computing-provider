@@ -180,7 +180,16 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 		//
 		// The consequence is worth being explicit about: the bar's height is
 		// the platform's number, the division of it is this node's estimate.
-		if authoritative && attributed > 0 {
+		//
+		// A local bucket needs the same treatment whenever its split outruns
+		// its own total. `usd` differences the aggregate counter while the
+		// split differences each model's counter, and the two can disagree —
+		// a restart, or a model removed mid-interval, leaves per-model deltas
+		// summing above the aggregate one. Clamping `unattributed` at zero
+		// hid that but left the inflated split in place, so the segments
+		// summed to more than the bar: on this node one daily bucket showed
+		// $2.30 of models inside a $1.64 bar.
+		if attributed > 0 && (authoritative || attributed > usd) {
 			scale := usd / attributed
 			for id, m := range perModel {
 				m.USD *= scale

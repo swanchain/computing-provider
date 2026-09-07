@@ -10,7 +10,7 @@ import {
   buildModelColours,
   colourFor,
 } from '../lib/modelPalette';
-import type { EarningsPoint, ModelEarnings } from '../types';
+import type { EarningsPoint, ModelEarnings, ModelEarningsPoint } from '../types';
 
 interface EarningsChartProps {
   /**
@@ -144,9 +144,46 @@ export function EarningsChart({ models }: EarningsChartProps) {
   const authoritativePoints = data?.authoritative_points ?? 0;
   const allAuthoritative = points.length > 0 && authoritativePoints === points.length;
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
-  const activeIndex = hovered ?? (points.length > 0 ? points.length - 1 : null);
+  const activeIndex = hovered;
   const active = activeIndex !== null ? points[activeIndex] : null;
-  const activeSegments = active ? segmentsFor(active, colours) : [];
+
+  /**
+   * Sum every interval in the window into one pseudo-point.
+   *
+   * This is what the panel shows when nothing is hovered. It previously fell
+   * back to the newest bucket, so a 24-hour window described its most recent
+   * hour: on a node serving six models over the day but two in the last hour,
+   * four models were missing from a panel that appeared to describe the day.
+   * The heading already says "in this window", and the figures underneath it
+   * have to agree with that.
+   */
+  const windowTotals = useMemo(() => {
+    const models: Record<string, ModelEarningsPoint> = {};
+    let usd = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
+    let unattributed = 0;
+    for (const p of points) {
+      usd += p.usd;
+      tokensIn += p.tokens_in;
+      tokensOut += p.tokens_out;
+      unattributed += p.unattributed ?? 0;
+      for (const [model, m] of Object.entries(p.models ?? {})) {
+        const acc = (models[model] ??= { tokens_in: 0, tokens_out: 0, usd: 0 });
+        acc.tokens_in += m.tokens_in;
+        acc.tokens_out += m.tokens_out;
+        acc.usd += m.usd;
+      }
+    }
+    return { timestamp: '', usd, tokens_in: tokensIn, tokens_out: tokensOut, models, unattributed };
+  }, [points]);
+
+  // Hovering a bar describes that interval; otherwise the whole window.
+  const summary: EarningsPoint | null = active ?? (points.length > 0 ? windowTotals : null);
+  const summaryLabel = active
+    ? formatBucket(active.timestamp, bucketSeconds, true)
+    : (WINDOWS.find((w) => w.id === window_)?.label ?? window_);
+  const activeSegments = summary ? segmentsFor(summary, colours) : [];
 
   // Which models actually appear anywhere in this window — the legend should
   // name what is on screen, not every model the node has ever served.
@@ -214,11 +251,14 @@ export function EarningsChart({ models }: EarningsChartProps) {
               latest interval is selected initially so this space is useful
               before the operator interacts with the chart. */}
           <div className="mb-2 h-36" aria-live="polite">
-            {active ? (
+            {summary ? (
               <div className="text-xs">
                 <div className="flex items-baseline gap-2">
-                  <span className="font-mono text-sm text-white">{formatUSD(active.usd)}</span>
-                  <span className="text-slate-400">{formatBucket(active.timestamp, bucketSeconds, true)}</span>
+                  <span className="font-mono text-sm text-white">{formatUSD(summary.usd)}</span>
+                  <span className="text-slate-400">{summaryLabel}</span>
+                  {!active && points.length > 0 && (
+                    <span className="text-slate-500">· hover a bar for one interval</span>
+                  )}
                   {hovered === null && <span className="ml-auto text-slate-400">Latest interval</span>}
                 </div>
                 {activeSegments.length > 0 ? (
@@ -242,15 +282,13 @@ export function EarningsChart({ models }: EarningsChartProps) {
                   </ul>
                 ) : (
                   <div className="mt-1 text-slate-400">
-                    {formatTokens(active.tokens_in)} in / {formatTokens(active.tokens_out)} out
+                    {formatTokens(summary.tokens_in)} in / {formatTokens(summary.tokens_out)} out
                     <span className="ml-2 text-slate-400">— recorded before the per-model split</span>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="text-xs text-slate-400">
-                Hover a bar for its models and usage. {points.length} intervals shown.
-              </div>
+              <div className="text-xs text-slate-400">No earnings recorded in this window.</div>
             )}
           </div>
 
