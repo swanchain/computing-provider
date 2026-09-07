@@ -104,6 +104,7 @@ computing-provider inference config                 # current config, API key ma
 computing-provider inference deposit                # collateral instructions
 computing-provider inference deposit --check        # current collateral status
 computing-provider inference set-beneficiary 0x...  # set the payout wallet, then read it back
+computing-provider inference set-owner 0x...        # set the owner wallet — once, cannot be changed
 computing-provider inference recommend-models       # rank catalog models by demand
 computing-provider inference recommend-models --vram 24 --top 10 --category llm
 computing-provider inference keygen                 # generate a provider API key
@@ -117,6 +118,15 @@ because the reason to read them back is to confirm the value is the one you
 intended and a truncated form hides the middle. `set-beneficiary` reads the
 stored value back after updating rather than echoing the argument, and warns if
 what the platform holds differs from what was sent.
+
+`set-owner` writes the identity address that collateral is looked up against.
+The platform accepts it only while it is empty — **it cannot be changed once
+set**, and there is no self-service path to correct it afterwards. The command
+therefore reads the current value first and, if an owner is already stored, says
+so and stops rather than sending a call the platform will refuse. Because the
+write cannot be undone it confirms before sending; pass `--yes` to skip the
+prompt in a script. `set-beneficiary` needs no such confirmation, since running
+it again corrects a mistake.
 
 ### `models`
 
