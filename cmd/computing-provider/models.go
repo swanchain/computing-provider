@@ -18,13 +18,16 @@ import (
 
 var modelsCmd = &cli.Command{
 	Name:  "models",
-	Usage: "Manage model weights from the Swan Model Repository",
+	Usage: "Manage model weights and the servers that run them",
 	Subcommands: []*cli.Command{
 		modelsCatalogCmd,
 		modelsDownloadCmd,
 		modelsVerifyCmd,
 		modelsListCmd,
 		modelsRmCmd,
+		modelsServeCmd,
+		modelsStopCmd,
+		modelsPsCmd,
 	},
 }
 
@@ -409,4 +412,3 @@ func humanSizeCP(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
-

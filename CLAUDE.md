@@ -240,6 +240,76 @@ upstream rather than a local GPU.
 
 **Other packages:** `internal/setup/` (setup wizard: auth, prerequisites, model discovery), `internal/models/` (HuggingFace catalog/download/verify helpers), `internal/db/` (SQLite), `conf/` (config parsing), `util/` (shutdown, HTTP serve).
 
+### Model runtime: `internal/runtime/`
+
+`models serve` / `models stop` / `models ps` start and stop the model servers a
+node serves from. Until these existed the provider could fetch weights and read
+a models.json somebody else had filled in, but could not bring a model up:
+`setup` printed a docker command for the operator to run by hand.
+
+Servers run as **Docker containers**, which is how they already run on provider
+hardware — llama.cpp and vLLM both ship server images. The container is also
+what gives an instance an identity that outlives the computing-provider process.
+A pid does not: pids are recycled, so a state file naming one can come back
+after a reboot pointing at an unrelated process.
+
+**Ownership is decided by container labels and nothing else:**
+
+```
+io.swanchain.cp.managed  = true
+io.swanchain.cp.model-id = <the Swan Inference model ID, verbatim>
+io.swanchain.cp.backend  = llamacpp | vllm | sglang
+```
+
+`ps` lists only labelled containers and `stop` will only touch one, so a backend
+the operator started themselves is invisible here and cannot be killed by this
+tool. The container *name* (`swan-cp-<slug>`) is a lossy slug and is never
+parsed back into a model ID — the label holds the ID verbatim.
+
+Three refusals protect an operator's existing setup, and all three happen before
+a container is created:
+
+- a managed container already serving the model (`--replace` to restart it);
+- a models.json entry for the model with no managed container behind it —
+  something else is serving it, and repointing models.json would strand it;
+- a name collision with a container this tool did not create.
+
+Backends contribute only their image, entrypoint and argument list; the
+container plumbing is shared. Each must serve the model under the Swan
+Inference model ID — `--alias` for llama.cpp, `--served-model-name` for vLLM and
+SGLang — or the hub routes requests the backend then rejects as unknown.
+
+Other behaviours worth keeping:
+
+- **Published on `127.0.0.1` only.** Model servers have no authentication of
+  their own; `0.0.0.0` would put an unauthenticated GPU on every interface.
+- **Readiness means the model is *listed*, not that the port answers.** Both
+  llama.cpp and vLLM bind their port before the weights finish loading.
+- **A failed load leaves the container in place.** Its logs are the only record
+  of why, and the error points at `docker logs`.
+- **models.json is merged, never rewritten from a struct.** It is
+  operator-authored and has gained fields before; entries are kept as raw JSON
+  so an `api_key` or a hand-set override survives a restart, and the write is
+  atomic because the daemon watches the file with fsnotify.
+- `--gpus none` omits `--gpus` entirely, for CPU-only models and hosts with no
+  NVIDIA runtime.
+
+Flags come before the model ID; anything after it is passed through to the
+server, the way `docker run [options] IMAGE [command]` works:
+
+```bash
+computing-provider models serve --backend llamacpp \
+  --weights /models/Qwen3.8-27B-UD-Q4_K_S.gguf --gpus 2,3 \
+  --context-length 65536 --port 30001 \
+  Qwen/Qwen3.8-27B --parallel 2 -fa on -ctk q8_0
+
+computing-provider models ps
+computing-provider models stop --rm Qwen/Qwen3.8-27B
+```
+
+`--dry-run` prints the docker command without running it, which is the fastest
+way to compare against a command the operator runs by hand.
+
 ### Database: `internal/db/`
 
 SQLite with GORM, WAL mode, max 1 open connection (avoids lock contention). The only table is `metrics_history`, auto-migrated by `MetricsHistory.migrate()` on first use.
@@ -418,6 +488,7 @@ Commands are defined in `cmd/computing-provider/`:
 - `setup.go` — `setup` wizard (recommended for new providers), subcommands: `discover`, `login`, `signup`
 - `inference.go` — `inference` subcommands: `status`, `config`, `deposit`, `set-beneficiary`, `keygen`, `request-approval`, `recommend-models`, `select-model`
 - `models.go` — `models` subcommands: `catalog`, `download`, `verify`, `list`, `rm`
+- `models_serve.go` — `models` subcommands: `serve`, `stop`, `ps` (see Model runtime below)
 - `research.go` — `research` subcommands: `hardware`, `gpu-info`, `gpu-benchmark`
 - `dashboard.go` — web UI (port 3060)
 - `auth.go` — shared auth/login helpers used by setup and inference commands
