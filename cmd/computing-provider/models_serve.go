@@ -6,10 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/mitchellh/go-homedir"
 	"github.com/olekukonko/tablewriter"
+	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/alerts"
+	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/runtime"
 	"github.com/urfave/cli/v2"
 )
@@ -18,6 +22,27 @@ import (
 func repoPath(cctx *cli.Context) (string, error) {
 	return homedir.Expand(cctx.String(FlagRepo.Name))
 }
+
+// switchNotifier builds the announcer that mails the operator when the set of
+// served models changes.
+//
+// Built from the same [Alerts] configuration every other alert uses, so an
+// operator who has already set up mail or a webhook gets these without
+// configuring anything further, and one who has not gets silence rather than
+// an error.
+func switchNotifier(cpRepoPath string) *runtime.AlertAnnouncer {
+	if err := conf.InitConfig(cpRepoPath, true); err != nil {
+		return nil
+	}
+	cfg := conf.GetConfig()
+	return runtime.NewAlertAnnouncer(
+		alerts.New(cfg.Alerts, computing.GetNodeId(cpRepoPath), cfg.API.NodeName))
+}
+
+// switchAlertFlushTimeout bounds how long a command waits for its alert to go
+// out. Long enough for an SMTP handshake on a slow link, short enough that a
+// wedged mail server does not hold the operator's terminal.
+const switchAlertFlushTimeout = 20 * time.Second
 
 // checkMisplacedFlags rejects arguments that name one of the command's own
 // flags but appear after the model ID.
@@ -129,6 +154,10 @@ Examples:
 			Name:  "dry-run",
 			Usage: "Print the docker command that would run and exit",
 		},
+		&cli.StringFlag{
+			Name:  "reason",
+			Usage: "Why this model is being started; recorded in the alert sent to the operator",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		modelID := cctx.Args().First()
@@ -177,11 +206,17 @@ Examples:
 		}
 
 		mgr := runtime.NewManager(cpRepoPath)
+		announcer := switchNotifier(cpRepoPath)
+		mgr.Announcer = announcer
+		defer announcer.Flush(switchAlertFlushTimeout)
+
 		inst, err := mgr.Serve(ctx, spec, runtime.ServeOptions{
 			Replace:      cctx.Bool("replace"),
 			SkipRegister: cctx.Bool("no-register"),
 			WaitReady:    !cctx.Bool("no-wait"),
 			Progress:     func(msg string) { fmt.Println(msg) },
+			Reason:       cctx.String("reason"),
+			Decider:      runtime.DeciderOperator,
 		})
 		if err != nil {
 			return err
@@ -235,6 +270,10 @@ Examples:
 			Name:  "rm",
 			Usage: "Remove the container as well as stopping it",
 		},
+		&cli.StringFlag{
+			Name:  "reason",
+			Usage: "Why this model is being stopped; recorded in the alert sent to the operator",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		modelID := cctx.Args().First()
@@ -253,7 +292,15 @@ Examples:
 		}
 
 		mgr := runtime.NewManager(cpRepoPath)
-		inst, err := mgr.Stop(ctx, modelID, cctx.Bool("rm"))
+		announcer := switchNotifier(cpRepoPath)
+		mgr.Announcer = announcer
+		defer announcer.Flush(switchAlertFlushTimeout)
+
+		inst, err := mgr.Stop(ctx, modelID, runtime.StopOptions{
+			Remove:  cctx.Bool("rm"),
+			Reason:  cctx.String("reason"),
+			Decider: runtime.DeciderOperator,
+		})
 		if err != nil {
 			return err
 		}

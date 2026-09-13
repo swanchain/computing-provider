@@ -36,6 +36,7 @@ var inferenceCmd = &cli.Command{
 		inferenceSetOwnerCmd,
 		inferenceRecommendModelsCmd,
 		inferenceSelectModelCmd,
+		inferencePlanCmd,
 	},
 }
 
@@ -927,35 +928,6 @@ var inferenceConfigCmd = &cli.Command{
 // --- recommend-models / select-model types ---
 
 // modelDemandResponse is the response from GET /api/v1/stats/model-demand
-type modelDemandResponse struct {
-	Code int    `json:"code"`
-	Msg  string `json:"msg"`
-	Data struct {
-		Models []modelDemandAPIEntry `json:"models"`
-	} `json:"data"`
-}
-
-type modelDemandAPIEntry struct {
-	ModelID          string  `json:"model_id"`
-	ModelName        string  `json:"model_name"`
-	Category         string  `json:"category"`
-	InputPrice       float64 `json:"input_price"`
-	OutputPrice      float64 `json:"output_price"`
-	OnlineProviders  int     `json:"online_providers"`
-	Requests24h      int     `json:"requests_24h"`
-	Tokens24h        int64   `json:"tokens_24h"`
-	Revenue24h       float64 `json:"revenue_24h"`
-	AvgLatencyMs     float64 `json:"avg_latency_ms"`
-	DemandTrend      string  `json:"demand_trend"` // "up", "down", "stable"
-	DemandChangePct  float64 `json:"demand_change_pct"`
-	EstDailyEarnings float64 `json:"est_daily_earnings"`
-	MinVRAMGB        int     `json:"min_vram_gb"`
-	// VRAMKnown says whether min_vram_gb is a measured requirement or a
-	// placeholder. The server sends false for a model whose requirement has
-	// never been established, and it sends min_vram_gb as 0 alongside.
-	VRAMKnown bool `json:"vram_known"`
-}
-
 // modelDemandEntry is the display/output struct for recommend-models and select-model
 type modelDemandEntry struct {
 	ModelID         string  `json:"model_id"`
@@ -1443,36 +1415,21 @@ Examples:
 	},
 }
 
-// fetchModelDemand fetches model demand data from the API and returns filtered entries.
+// fetchModelDemand fetches model demand data and returns display entries.
+//
+// The HTTP call and the response shape live in internal/market because the
+// auto-switch planner reads the same table; two fetchers for one endpoint
+// would eventually disagree about a model, and the disagreement would show up
+// in the unattended path.
 func fetchModelDemand(serviceURL, categoryFilter string, vramPerGPU, totalVRAM int, compatibleOnly bool) ([]modelDemandEntry, error) {
-	reqURL := serviceURL + "/api/v1/stats/model-demand"
-	if categoryFilter != "" {
-		reqURL += "?category=" + categoryFilter
-	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(reqURL)
+	models, err := market.FetchDemand(serviceURL, categoryFilter)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch model demand data: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("model-demand API returned HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result modelDemandResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse model demand response: %v", err)
+		return nil, err
 	}
 
 	var entries []modelDemandEntry
-	for _, m := range result.Data.Models {
-		fit := market.VRAMFit(m.MinVRAMGB, m.VRAMKnown, totalVRAM)
+	for _, m := range models {
+		fit := m.Fit(totalVRAM)
 
 		// --compatible-only hides what is known not to fit. It does not hide
 		// the unknowns: with no model currently publishing a requirement,

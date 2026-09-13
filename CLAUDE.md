@@ -310,6 +310,90 @@ computing-provider models stop --rm Qwen/Qwen3.8-27B
 `--dry-run` prints the docker command without running it, which is the fastest
 way to compare against a command the operator runs by hand.
 
+### Auto-switch planning: `internal/autoswitch/`
+
+`inference plan` runs one cycle of the auto-switch decision and prints what
+would happen. It changes nothing — no server is started or stopped and
+models.json is untouched. The scheduler that would act on it is not built yet
+(#143 step 3).
+
+The package is split down one line and it matters: the **planner** is a language
+model and holds the fuzzy judgement — a rising trend against a crowded model, a
+subscription-heavy standard-tier model against a thinner premium one. The
+**guardrails** are ordinary code and hold the operator's money. The planner
+proposes; code decides whether the proposal is allowed.
+
+The planner is a model the node already serves, so asking it costs nothing
+marginal. It is called with `json_schema` constrained decoding, because the
+reply is parsed by code that acts on it and a model drifting into prose would
+otherwise become a refused cycle.
+
+**Guardrails refuse a whole plan, never half of one.** Executing the half that
+passed leaves the node in a state the planner never proposed, so any violation
+yields `keep`:
+
+| rule | why |
+|---|---|
+| `unparseable_decision` | a reply that cannot be read is a fault, not agreement |
+| `unknown_action` | anything but keep/switch |
+| `model_not_in_market` | a planner can invent a plausible model ID |
+| `vram_not_known_to_fit` | see below — this is the one that fires today |
+| `exceeds_vram_budget` | each model fits, the set does not |
+| `model_on_deny_list` / `stops_a_pinned_model` | the operator's own limits |
+| `stops_a_model_not_served` / `stops_an_unmanaged_model` | not executable |
+| `gain_below_margin` | not worth the minutes of zero revenue |
+| `current_earnings_unknown` | see below |
+
+Two of those carry a distinction worth keeping:
+
+- **`vram_not_known_to_fit`.** Fit is three states — fits, too-large, unknown —
+  and the rule lives in `internal/market` because `recommend-models` and the
+  guardrails must agree on it. `vram_known: false` currently applies to every
+  model the endpoint publishes, so *nothing* is known to fit and every proposed
+  switch is refused. That is the correct answer, not a bug: the previous rule
+  read a missing requirement as "fits" and passed 600B models onto 10 GB cards.
+- **`current_earnings_unknown`.** The margin is measured against what the node
+  actually earned in the last 24 hours, read from the daemon's own earnings
+  *history* rather than its lifetime counters, which reset on restart and cover
+  an unbounded window. When that figure is unavailable the switch is refused
+  outright, because substituting zero makes every proposal look profitable. A
+  measured zero is a different answer and still allows a profitable switch.
+
+The planner is always pinned, whatever the config says — a switch that unloads
+the model making the decision leaves no planner for the next cycle.
+
+`--decision '<json>'` evaluates a decision you supply against the live snapshot
+instead of asking the planner, which is how to test a policy without waiting for
+the planner to propose something interesting.
+
+**Anything the planner is shown must be observed, never inferred.** `Healthy` is
+a `*bool` and stays nil when the daemon cannot be reached: a planner shown
+"healthy: false" for every model reasons about an outage that is not happening,
+and says so in its decision.
+
+### Switch notifications
+
+Whenever the set of served models changes — `models serve`, `models stop`, or
+the scheduler once it exists — the operator is mailed through the `[Alerts]`
+transports they already configured, as `model_serving_started` /
+`model_serving_stopped`. Each carries **who decided** (`operator` or
+`auto-switch`) and **why**: whatever was passed to `--reason`, or the planner's
+own stated reason carried through unchanged.
+
+Two things this depends on:
+
+- **Announce after the model is actually serving and declared**, not when the
+  container is created. Mailing about a model that then failed to load sends the
+  operator looking for something that is not there.
+- **`Notifier.Flush` before a command exits.** `Fire` is asynchronous so
+  alerting can never block inference, which makes a short-lived CLI command a
+  hazard: it can raise an alert and exit before the delivery worker runs,
+  sending nothing. The daemon never needs this; every CLI path does.
+
+Severity is `info` — a switch that worked is not a fault — which means these
+bypass the failure cooldown. `MaxSwitchesDay`, not the alerting, is what stops a
+flapping planner filling an inbox.
+
 ### Database: `internal/db/`
 
 SQLite with GORM, WAL mode, max 1 open connection (avoids lock contention). The only table is `metrics_history`, auto-migrated by `MetricsHistory.migrate()` on first use.

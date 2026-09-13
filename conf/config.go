@@ -287,11 +287,81 @@ func (l Log) MaxAge() int {
 
 // Inference is the Swan Inference marketplace configuration (default mode)
 type Inference struct {
-	Enable       bool     `toml:"Enable"`
-	ServiceURL   string   `toml:"ServiceURL"`   // HTTP API URL (e.g., http://localhost:8080)
-	WebSocketURL string   `toml:"WebSocketURL"` // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
-	ApiKey       string   `toml:"ApiKey"`       // Provider API key for authentication (sk-prov-*)
-	Models       []string `toml:"Models"`       // Models this provider serves
+	Enable       bool       `toml:"Enable"`
+	ServiceURL   string     `toml:"ServiceURL"`   // HTTP API URL (e.g., http://localhost:8080)
+	WebSocketURL string     `toml:"WebSocketURL"` // WebSocket URL (e.g., wss://inference-ws.swanchain.io)
+	ApiKey       string     `toml:"ApiKey"`       // Provider API key for authentication (sk-prov-*)
+	Models       []string   `toml:"Models"`       // Models this provider serves
+	AutoSwitch   AutoSwitch `toml:"AutoSwitch,omitempty"`
+}
+
+// AutoSwitch configures re-planning which models this node serves.
+//
+// Every value here exists to stop the node acting on a bad plan, so the
+// defaults are the cautious ones: disabled, and with the planner pinned so a
+// switch cannot unload the model that decides the next switch.
+type AutoSwitch struct {
+	// Enable turns on the scheduler. Off by default; `inference plan` runs a
+	// single cycle regardless and changes nothing.
+	Enable bool `toml:"Enable"`
+
+	// IntervalMin is how often the scheduler re-plans.
+	IntervalMin int `toml:"IntervalMin"`
+
+	// Planner is the model that makes the decision. It is served by this
+	// node, so asking it costs the operator nothing marginal.
+	Planner string `toml:"Planner"`
+
+	// PlannerEndpoint overrides where the planner is reached. Empty means
+	// the endpoint models.json already gives for Planner.
+	PlannerEndpoint string `toml:"PlannerEndpoint"`
+
+	// MinDwellMin is the minimum time after a switch before another is
+	// allowed. A switch costs minutes of zero revenue for a resident model
+	// and much longer for a download; without a dwell floor a node flaps
+	// between two models a few cents apart.
+	MinDwellMin int `toml:"MinDwellMin"`
+
+	// MinMarginUSD is how much better a plan must be, in projected daily
+	// earnings, before it is worth the switch.
+	MinMarginUSD float64 `toml:"MinMarginUSD"`
+
+	// ConfirmCycles is how many consecutive cycles must agree before acting.
+	ConfirmCycles int `toml:"ConfirmCycles"`
+
+	// MaxSwitchesDay caps switches per rolling day.
+	MaxSwitchesDay int `toml:"MaxSwitchesDay"`
+
+	// Pin lists models that may never be stopped. The planner is added to
+	// this automatically.
+	Pin []string `toml:"Pin"`
+
+	// Deny lists models that may never be served.
+	Deny []string `toml:"Deny"`
+}
+
+// AutoSwitchDefaults are the values used for anything left unset.
+//
+// Stated as a function rather than applied at parse time so `inference plan`
+// and the scheduler cannot end up disagreeing about what an omitted value
+// means.
+func (a AutoSwitch) WithDefaults() AutoSwitch {
+	if a.IntervalMin <= 0 {
+		a.IntervalMin = 30
+	}
+	if a.MinDwellMin <= 0 {
+		a.MinDwellMin = 120
+	}
+	if a.MinMarginUSD <= 0 {
+		a.MinMarginUSD = 0.50
+	}
+	if a.ConfirmCycles <= 0 {
+		a.ConfirmCycles = 2
+	}
+	if a.MaxSwitchesDay <= 0 {
+		a.MaxSwitchesDay = 4
+	}
+	return a
 }
 
 type API struct {

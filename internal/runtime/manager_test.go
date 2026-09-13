@@ -323,7 +323,7 @@ func TestStopRefusesAModelItDoesNotManage(t *testing.T) {
 	docker := &fakeDocker{containers: []container{foreign("other")}}
 	m := newTestManager(t, docker, t.TempDir())
 
-	_, err := m.Stop(context.Background(), "a/Model", false)
+	_, err := m.Stop(context.Background(), "a/Model", StopOptions{})
 	if err == nil {
 		t.Fatal("expected Stop to refuse")
 	}
@@ -344,7 +344,7 @@ func TestStopDeregistersTheModel(t *testing.T) {
 	}}
 	m := newTestManager(t, docker, repo)
 
-	inst, err := m.Stop(context.Background(), "a/Model", false)
+	inst, err := m.Stop(context.Background(), "a/Model", StopOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestStopRemovesTheContainerOnRequest(t *testing.T) {
 	}}
 	m := newTestManager(t, docker, t.TempDir())
 
-	if _, err := m.Stop(context.Background(), "a/Model", true); err != nil {
+	if _, err := m.Stop(context.Background(), "a/Model", StopOptions{Remove: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !docker.called("rm") {
@@ -384,7 +384,7 @@ func TestStopSkipsDockerStopForAnExitedContainer(t *testing.T) {
 	}}
 	m := newTestManager(t, docker, t.TempDir())
 
-	if _, err := m.Stop(context.Background(), "a/Model", false); err != nil {
+	if _, err := m.Stop(context.Background(), "a/Model", StopOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if docker.called("stop") {

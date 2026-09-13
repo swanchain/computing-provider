@@ -37,6 +37,11 @@ type Manager struct {
 	// httpClient probes the server's readiness.
 	httpClient *http.Client
 
+	// Announcer, when set, is told whenever a model starts or stops being
+	// served. Nil means no announcements, which is the case for a node with
+	// no [Alerts] transports configured.
+	Announcer Announcer
+
 	// now and portFree exist so tests can drive the polling loop and the
 	// port search without binding real sockets.
 	now      func() time.Time
@@ -202,6 +207,14 @@ type ServeOptions struct {
 
 	// Progress, when set, receives one-line status updates.
 	Progress func(string)
+
+	// Reason is why this model is being started, carried into the
+	// announcement so the operator's mail records the argument rather than
+	// just the outcome.
+	Reason string
+
+	// Decider is who asked: DeciderOperator or DeciderAutoSwitch.
+	Decider string
 }
 
 func (o *ServeOptions) progress(format string, args ...interface{}) {
@@ -320,11 +333,35 @@ func (m *Manager) Serve(ctx context.Context, spec *ServeSpec, opts ServeOptions)
 		opts.progress("Registered %s in models.json", spec.ModelID)
 	}
 
+	// Announced last, once the model is genuinely being served and declared.
+	// Announcing at the point the container was created would mail the
+	// operator about a model that then failed to load.
+	m.announce(SwitchEvent{
+		Action:   SwitchStarted,
+		ModelID:  spec.ModelID,
+		Backend:  backend.Name(),
+		Endpoint: inst.Endpoint,
+		Decider:  opts.Decider,
+		Reason:   opts.Reason,
+	})
+
 	return inst, nil
 }
 
+// StopOptions modify a Stop call.
+type StopOptions struct {
+	// Remove deletes the container as well as stopping it.
+	Remove bool
+
+	// Reason is why the model is being stopped.
+	Reason string
+
+	// Decider is who asked: DeciderOperator or DeciderAutoSwitch.
+	Decider string
+}
+
 // Stop takes a model server down and stops declaring the model.
-func (m *Manager) Stop(ctx context.Context, modelID string, remove bool) (*Instance, error) {
+func (m *Manager) Stop(ctx context.Context, modelID string, opts StopOptions) (*Instance, error) {
 	found, err := m.find(ctx, modelID)
 	if err != nil {
 		return nil, err
@@ -343,7 +380,7 @@ func (m *Manager) Stop(ctx context.Context, modelID string, remove bool) (*Insta
 			return &inst, err
 		}
 	}
-	if remove {
+	if opts.Remove {
 		if err := m.remove(ctx, found.ID); err != nil {
 			return &inst, err
 		}
@@ -358,6 +395,16 @@ func (m *Manager) Stop(ctx context.Context, modelID string, remove bool) (*Insta
 
 	inst.Status = "stopped"
 	inst.Ready = false
+
+	m.announce(SwitchEvent{
+		Action:   SwitchStopped,
+		ModelID:  modelID,
+		Backend:  inst.Backend,
+		Endpoint: inst.Endpoint,
+		Decider:  opts.Decider,
+		Reason:   opts.Reason,
+	})
+
 	return &inst, nil
 }
 

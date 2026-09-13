@@ -39,6 +39,12 @@ const (
 	EventReconnected     = "reconnected"
 	EventModelErrorRate  = "model_error_rate"
 	EventErrorRateNormal = "model_error_rate_normal"
+
+	// Serving changes. These fire whenever the set of models this node
+	// serves changes, whether an operator ran the command or the
+	// auto-switch scheduler decided it. Both carry the reason.
+	EventModelServingStarted = "model_serving_started"
+	EventModelServingStopped = "model_serving_stopped"
 )
 
 // Event is the JSON payload POSTed to the webhook.
@@ -103,6 +109,12 @@ type Notifier struct {
 	// incident that is already closed.
 	queue     chan Event
 	startOnce sync.Once
+
+	// pending counts events accepted but not yet delivered, so a caller that
+	// is about to exit can wait for them. The daemon never needs this; a CLI
+	// command does, because the delivery worker dies with the process and an
+	// alert raised a millisecond before exit would simply never be sent.
+	pending sync.WaitGroup
 }
 
 // queueSize bounds memory if the webhook endpoint is slow or wedged. Alerts are
@@ -179,10 +191,34 @@ func (n *Notifier) FireRows(event, message string, severity Severity, checks []C
 
 func (n *Notifier) enqueue(e Event) {
 	n.startOnce.Do(func() { go n.run() })
+	n.pending.Add(1)
 	select {
 	case n.queue <- e:
 	default:
+		n.pending.Done()
 		logs.GetLogger().Warnf("alerts: queue full, dropped %s%s", e.Event, modelSuffix(e.ModelID))
+	}
+}
+
+// Flush waits for accepted events to be delivered, giving up after timeout.
+//
+// For a short-lived command this is the difference between an alert being sent
+// and being silently discarded: Fire is asynchronous by design so that
+// alerting can never block inference, which means the process has to be told
+// to wait when it is about to end.
+func (n *Notifier) Flush(timeout time.Duration) {
+	if n == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		n.pending.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		logs.GetLogger().Warnf("alerts: gave up waiting for delivery after %s", timeout)
 	}
 }
 
@@ -190,6 +226,7 @@ func (n *Notifier) enqueue(e Event) {
 func (n *Notifier) run() {
 	for e := range n.queue {
 		n.deliver(e)
+		n.pending.Done()
 	}
 }
 

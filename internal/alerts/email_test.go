@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,4 +249,54 @@ func TestSenderFallsBackToUsername(t *testing.T) {
 	if got := (conf.Email{Username: "u@example.com", From: "f@example.com"}).Sender(); got != "f@example.com" {
 		t.Errorf("Sender() = %q, want From to win", got)
 	}
+}
+
+// Fire is asynchronous so that alerting can never block inference. That makes
+// a short-lived command a hazard: it can raise an alert and exit before the
+// delivery worker runs, sending nothing at all. Flush is what closes that.
+func TestFlushWaitsForDelivery(t *testing.T) {
+	var delivered int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Slow enough that an unflushed caller would certainly have exited.
+		time.Sleep(150 * time.Millisecond)
+		atomic.AddInt32(&delivered, 1)
+	}))
+	defer srv.Close()
+
+	n := New(conf.Alerts{WebhookURL: srv.URL}, "node", "cp")
+	n.Fire("model_serving_started", "a/Model", "started", SeverityInfo, nil)
+
+	n.Flush(5 * time.Second)
+
+	if atomic.LoadInt32(&delivered) != 1 {
+		t.Error("Flush returned before the alert was delivered")
+	}
+}
+
+// Flush must not hang a terminal on a wedged mail server.
+func TestFlushGivesUp(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	n := New(conf.Alerts{WebhookURL: srv.URL}, "node", "cp")
+	n.Fire("model_serving_started", "a/Model", "started", SeverityInfo, nil)
+
+	start := time.Now()
+	n.Flush(200 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("Flush blocked for %s despite its timeout", elapsed)
+	}
+}
+
+// Flushing a Notifier that was never fired, or a nil one, must be instant and
+// safe: most commands never raise an alert at all.
+func TestFlushIsSafeWhenNothingWasFired(t *testing.T) {
+	New(conf.Alerts{}, "node", "cp").Flush(time.Second)
+
+	var nilNotifier *Notifier
+	nilNotifier.Flush(time.Second)
 }
