@@ -18,6 +18,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
+	"github.com/swanchain/computing-provider-v2/internal/market"
 	"github.com/swanchain/computing-provider-v2/internal/setup"
 	"github.com/urfave/cli/v2"
 )
@@ -949,24 +950,33 @@ type modelDemandAPIEntry struct {
 	DemandChangePct  float64 `json:"demand_change_pct"`
 	EstDailyEarnings float64 `json:"est_daily_earnings"`
 	MinVRAMGB        int     `json:"min_vram_gb"`
+	// VRAMKnown says whether min_vram_gb is a measured requirement or a
+	// placeholder. The server sends false for a model whose requirement has
+	// never been established, and it sends min_vram_gb as 0 alongside.
+	VRAMKnown bool `json:"vram_known"`
 }
 
 // modelDemandEntry is the display/output struct for recommend-models and select-model
 type modelDemandEntry struct {
-	ModelID          string  `json:"model_id"`
-	Name             string  `json:"name"`
-	Category         string  `json:"category"`
-	InputPrice       float64 `json:"input_price"`
-	OutputPrice      float64 `json:"output_price"`
-	OnlineProviders  int     `json:"online_providers"`
-	Requests24h      int     `json:"requests_24h"`
-	Tokens24h        int64   `json:"tokens_24h"`
-	Revenue24h       float64 `json:"revenue_24h"`
-	AvgLatencyMs     float64 `json:"avg_latency_ms"`
-	DemandTrend      string  `json:"demand_trend"`
-	DemandChangePct  float64 `json:"demand_change_pct"`
-	MinVRAMGB        int     `json:"min_vram_gb"`
-	Compatible       bool    `json:"compatible"`
+	ModelID         string  `json:"model_id"`
+	Name            string  `json:"name"`
+	Category        string  `json:"category"`
+	InputPrice      float64 `json:"input_price"`
+	OutputPrice     float64 `json:"output_price"`
+	OnlineProviders int     `json:"online_providers"`
+	Requests24h     int     `json:"requests_24h"`
+	Tokens24h       int64   `json:"tokens_24h"`
+	Revenue24h      float64 `json:"revenue_24h"`
+	AvgLatencyMs    float64 `json:"avg_latency_ms"`
+	DemandTrend     string  `json:"demand_trend"`
+	DemandChangePct float64 `json:"demand_change_pct"`
+	MinVRAMGB       int     `json:"min_vram_gb"`
+	// Compatible means *known* to fit. A model whose requirement is unknown
+	// is not compatible, because nothing has established that it fits.
+	Compatible bool `json:"compatible"`
+	// VRAMFit carries the distinction Compatible cannot: fitFits,
+	// fitTooLarge or fitUnknown.
+	VRAMFit          string  `json:"vram_fit"`
 	EstDailyEarnings float64 `json:"est_daily_earnings"`
 }
 
@@ -1362,12 +1372,18 @@ Examples:
 		table.SetNoWhiteSpace(true)
 
 		for _, e := range entries {
-			fit := "\u2713"
-			if !e.Compatible {
-				fit = "\u2717"
+			// A glyph as well as a colour: colour means nothing to a
+			// colour-blind reader and nothing at all when piped to a file.
+			fit := "?"
+			fitColor := tablewriter.FgYellowColor
+			switch e.VRAMFit {
+			case market.FitFits:
+				fit, fitColor = "\u2713", tablewriter.FgGreenColor
+			case market.FitTooLarge:
+				fit, fitColor = "\u2717", tablewriter.FgRedColor
 			}
 
-			vramStr := "-"
+			vramStr := "unknown"
 			if e.MinVRAMGB > 0 {
 				vramStr = fmt.Sprintf("%d GB", e.MinVRAMGB)
 			}
@@ -1389,12 +1405,7 @@ Examples:
 				modelDisplay = modelDisplay[:37] + "..."
 			}
 
-			colors := []tablewriter.Colors{}
-			if e.Compatible {
-				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {}, {tablewriter.FgGreenColor}}
-			} else {
-				colors = []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {}, {tablewriter.FgRedColor}}
-			}
+			colors := []tablewriter.Colors{{}, {}, {}, {}, {}, {}, {}, {fitColor}}
 
 			table.Rich([]string{modelDisplay, vramStr, priceStr, reqStr, provStr, trendStr, earningStr, fit}, colors)
 		}
@@ -1408,8 +1419,22 @@ Examples:
 		}
 		fmt.Printf("Showing %d of %d models (sorted by %s)\n", len(entries), totalModels, sortLabel)
 
+		// Say plainly how many requirements are unmeasured. Without this the
+		// "?" column reads as a rendering quirk rather than the reason a
+		// model will not be picked automatically.
+		unknown := 0
+		for _, e := range entries {
+			if e.VRAMFit == market.FitUnknown {
+				unknown++
+			}
+		}
+		if unknown > 0 {
+			fmt.Printf("FIT: \u2713 fits  \u2717 too large  ? requirement not published (%d of %d)\n", unknown, len(entries))
+			fmt.Println("     A model with no published requirement is never selected automatically.")
+		}
+
 		if !cctx.Bool("compatible-only") && vramPerGPU > 0 {
-			fmt.Println("Tip: Use --compatible-only to show only models that fit your hardware")
+			fmt.Println("Tip: Use --compatible-only to hide models known not to fit your hardware")
 		}
 		fmt.Println("Tip: Use 'inference select-model' to interactively pick and configure a model")
 		fmt.Println()
@@ -1447,8 +1472,13 @@ func fetchModelDemand(serviceURL, categoryFilter string, vramPerGPU, totalVRAM i
 
 	var entries []modelDemandEntry
 	for _, m := range result.Data.Models {
-		compatible := vramPerGPU == 0 || m.MinVRAMGB == 0 || m.MinVRAMGB <= totalVRAM
-		if compatibleOnly && !compatible {
+		fit := market.VRAMFit(m.MinVRAMGB, m.VRAMKnown, totalVRAM)
+
+		// --compatible-only hides what is known not to fit. It does not hide
+		// the unknowns: with no model currently publishing a requirement,
+		// that would hide everything and leave the operator with an empty
+		// table and no way to tell why.
+		if compatibleOnly && fit == market.FitTooLarge {
 			continue
 		}
 
@@ -1466,7 +1496,8 @@ func fetchModelDemand(serviceURL, categoryFilter string, vramPerGPU, totalVRAM i
 			DemandTrend:      m.DemandTrend,
 			DemandChangePct:  m.DemandChangePct,
 			MinVRAMGB:        m.MinVRAMGB,
-			Compatible:       compatible,
+			Compatible:       fit == market.FitFits,
+			VRAMFit:          fit,
 			EstDailyEarnings: m.EstDailyEarnings,
 		})
 	}
@@ -1594,7 +1625,9 @@ Examples:
 		}
 		fmt.Println()
 
-		// Fetch model demand data (compatible only when VRAM is known)
+		// Hide only what is known not to fit. Models whose requirement is
+		// unpublished are still offered, but labelled, because this is an
+		// interactive pick: the operator can judge a model this tool cannot.
 		compatibleOnly := vramPerGPU > 0
 		entries, err := fetchModelDemand(serviceURL, cctx.String("category"), vramPerGPU, totalVRAM, compatibleOnly)
 		if err != nil {
@@ -1602,7 +1635,7 @@ Examples:
 		}
 
 		if len(entries) == 0 {
-			color.Yellow("No compatible models found.")
+			color.Yellow("No models found that fit this hardware.")
 			if compatibleOnly {
 				fmt.Println("Try using --vram with a higher value, or remove it to see all models.")
 			}
@@ -1617,7 +1650,7 @@ Examples:
 		// Build selection options
 		options := make([]setup.SelectionOption, len(entries))
 		for i, e := range entries {
-			vramStr := "?"
+			vramStr := "unknown"
 			if e.MinVRAMGB > 0 {
 				vramStr = fmt.Sprintf("%dGB", e.MinVRAMGB)
 			}
@@ -1635,7 +1668,7 @@ Examples:
 
 		prompter := setup.NewPrompter()
 
-		fmt.Printf("Found %d compatible models:\n\n", len(entries))
+		fmt.Printf("Found %d models (VRAM \"unknown\" means the requirement is not published; check it fits before selecting):\n\n", len(entries))
 		idx, err := prompter.AskSelection("Select a model to serve:", options)
 		if err != nil {
 			return fmt.Errorf("selection failed: %v", err)
