@@ -64,6 +64,70 @@ type EarningsSeries struct {
 // by the tokens each model has actually served is the closest available
 // approximation, and it is why this series is explicitly the node's own
 // estimate rather than a statement of earnings.
+// historyBlendedRate prices unattributed history from the history itself.
+//
+// Buckets recorded before the per-model column existed carry token counts but
+// no split, so they can only be valued at some average rate. That average used
+// to come from the live in-memory metrics — counters that reset on every
+// restart. The result was that a finished day was re-priced whenever the
+// process bounced or the model mix changed: one day holding a fixed 12,604,819
+// tokens was reported at $7.83, $21.74 and $4.07 within a single hour, because
+// only the multiplier had moved.
+//
+// Deriving the blend from the per-model splits stored *in the window* makes it
+// a function of persisted data instead. It is still an estimate — the card says
+// so — but it is a reproducible one: the same window prices the same way twice
+// running, across restarts.
+func historyBlendedRate(snapshots []HistoricalDataPoint, rates map[string]ModelPrice) (in, out float64) {
+	totals := map[string]ModelTokenCounts{}
+	prev := map[string]ModelTokenCounts{}
+	for _, s := range snapshots {
+		if s.ModelTokens == nil {
+			continue
+		}
+		for id, c := range s.ModelTokens {
+			p, seen := prev[id]
+			var dIn, dOut int64
+			switch {
+			case !seen:
+				// First sighting sets the baseline, exactly as the main loop
+				// does — counting the cumulative value here would weight the
+				// blend by traffic served before the window.
+			case c.In < p.In || c.Out < p.Out:
+				dIn, dOut = c.In, c.Out // restart
+			default:
+				dIn, dOut = c.In-p.In, c.Out-p.Out
+			}
+			t := totals[id]
+			t.In += dIn
+			t.Out += dOut
+			totals[id] = t
+		}
+		for id, c := range s.ModelTokens {
+			prev[id] = c
+		}
+	}
+
+	var tin, tout int64
+	for id, t := range totals {
+		r, ok := rates[id]
+		if !ok {
+			continue
+		}
+		in += float64(t.In) * r.ProviderInputPrice
+		out += float64(t.Out) * r.ProviderOutputPrice
+		tin += t.In
+		tout += t.Out
+	}
+	if tin > 0 {
+		in /= float64(tin)
+	}
+	if tout > 0 {
+		out /= float64(tout)
+	}
+	return in, out
+}
+
 func blendedRate(metrics *InferenceMetricsData, rates map[string]ModelPrice) (in, out float64) {
 	var tin, tout int64
 	for id, m := range metrics.ModelMetrics {
@@ -117,7 +181,12 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 			rates = p
 		}
 	}
-	inRate, outRate := blendedRate(metrics, rates)
+	inRate, outRate := historyBlendedRate(snapshots, rates)
+	if inRate == 0 && outRate == 0 {
+		// No sample in the window carries a per-model split — every bucket
+		// predates the column. Fall back to the live mix, which is all there is.
+		inRate, outRate = blendedRate(metrics, rates)
+	}
 
 	var prevIn, prevOut int64
 	var prevPlatform *float64

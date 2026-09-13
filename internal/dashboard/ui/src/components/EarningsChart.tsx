@@ -135,7 +135,46 @@ export function EarningsChart({ models }: EarningsChartProps) {
     60_000,
   );
 
-  const colours = useMemo(() => buildModelColours(models), [models]);
+  /**
+   * Colour assignment has to survive a restart.
+   *
+   * `models` is the provider's lifetime per-model earnings, read from
+   * in-memory counters that reset when the process bounces. Straight after a
+   * restart it lists only the models that have served since — so every other
+   * model in the window lost its colour and folded into "Other", even though
+   * the history holds full per-model figures for all of them.
+   *
+   * The stored history is the durable source, so it is merged in: a model is
+   * ranked on whichever total is larger. Lifetime still dominates once the
+   * counters have rebuilt, which keeps colours stable across window changes in
+   * the ordinary case.
+   */
+  const colours = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const m of models ?? []) totals.set(m.model, m.total_usd);
+    // Sum each model across the window, then rank it on whichever figure is
+    // larger — the lifetime counter or what the stored history shows.
+    const windowTotals = new Map<string, number>();
+    for (const p of data?.points ?? []) {
+      for (const [id, m] of Object.entries(p.models ?? {})) {
+        windowTotals.set(id, (windowTotals.get(id) ?? 0) + m.usd);
+      }
+    }
+    for (const [id, usd] of windowTotals) {
+      totals.set(id, Math.max(totals.get(id) ?? 0, usd));
+    }
+    return buildModelColours(
+      [...totals].map(([model, total_usd]) => ({
+        model,
+        total_usd,
+        tokens_in: 0,
+        tokens_out: 0,
+        input_usd: 0,
+        output_usd: 0,
+        priced: true,
+      })),
+    );
+  }, [models, data?.points]);
   const points = useMemo(() => data?.points ?? [], [data?.points]);
   const bucketSeconds = data?.bucket_seconds;
   // How much of this window came from the platform's ledger. The provenance

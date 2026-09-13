@@ -187,3 +187,45 @@ func TestHistorySplitNeverExceedsBucketTotal(t *testing.T) {
 		}
 	}
 }
+
+// A finished bucket must not change value because the live counters moved.
+//
+// Buckets with no per-model split are priced at an average rate. That average
+// used to come from the in-memory metrics, which reset on restart, so the same
+// historical day was re-priced whenever the process bounced: one real day of
+// 12.6M tokens read $7.83, $21.74 and $4.07 within an hour.
+func TestHistoryPricingDoesNotDependOnLiveCounters(t *testing.T) {
+	withModels := func(min int, in, out int64, split map[string]ModelTokenCounts) HistoricalDataPoint {
+		p := pt(min, in, out)
+		p.ModelTokens = split
+		return p
+	}
+	// Two early samples carry no split (the pre-column history), two later ones
+	// do — the same shape as a real window.
+	snapshots := []HistoricalDataPoint{
+		pt(0, 1_000_000, 0),
+		pt(60, 3_000_000, 0),
+		withModels(120, 5_000_000, 0, map[string]ModelTokenCounts{"org/a": {In: 1_000_000}}),
+		withModels(180, 7_000_000, 0, map[string]ModelTokenCounts{"org/a": {In: 3_000_000}}),
+	}
+	rates := fakePrices{rates: map[string]ModelPrice{
+		"org/a": {ProviderInputPrice: 1.0},
+		"org/b": {ProviderInputPrice: 50.0},
+	}}
+
+	// The same window, priced against two very different live mixes. Before the
+	// fix the expensive mix inflated every unattributed bucket.
+	cheap := CalculateEarningsHistory(context.Background(), snapshots,
+		&InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+			"org/a": {TotalTokensIn: 1_000_000},
+		}}, rates, "30d", 0)
+	expensive := CalculateEarningsHistory(context.Background(), snapshots,
+		&InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+			"org/b": {TotalTokensIn: 9_000_000},
+		}}, rates, "30d", 0)
+
+	if cheap.TotalUSD != expensive.TotalUSD {
+		t.Errorf("the same window priced differently depending on the live model mix: %.6f vs %.6f",
+			cheap.TotalUSD, expensive.TotalUSD)
+	}
+}
