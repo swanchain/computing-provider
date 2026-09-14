@@ -414,6 +414,59 @@ derived figures carry a 10% margin. The asymmetry is the design: an
 over-estimate declines a model that would have fitted; an under-estimate is an
 OOM partway through a load on a node that was serving traffic.
 
+### Model memory and `cp.md`: `internal/modelmem/`
+
+What the node has actually run, and what it actually cost. Published metadata
+says what a model *should* need; this says what it *did* need, here, with these
+settings — and where the weights came from.
+
+The two disagree often enough to matter. `TheDrummer/Cydonia-24B-v4.3` derives
+to 30.7 GiB from its published bf16 parameters and runs on the reference node in
+**18.7 GiB**, because it is served as a 4-bit AWQ build that nothing in the base
+repository mentions. Without this memory, a model the operator has already made
+work would be refused every cycle, forever.
+
+**Measured beats derived beats published.** `vram.Measured` is the top tier and
+carries no safety margin, because it is not a prediction.
+
+Two files, one source of truth:
+
+- `$CP_PATH/model-memory.json` — the records. Machine-written, machine-read.
+- `$CP_PATH/cp.md` — **operating context for an agent**, regenerated from the
+  store on every write and never parsed back, so the two cannot drift. It states
+  the node's hardware and limits, the rules that are enforced in code, every
+  model known to work with its measured cost, and — the part that matters most —
+  **the exact `models serve` command that produced each record**. An agent
+  re-serving a known-good model should run what worked rather than reconstruct
+  it from fields and get one flag wrong.
+
+Measurement is **per process, not per device**: `nvidia-smi
+--query-compute-apps` gives usage by PID and `docker top` says which PIDs belong
+to the container. A GPU shared between two models reports one total for both,
+and charging all of it to whichever was measured last would make the memory
+actively misleading. Measurement waits ~15s after the model answers, because
+llama.cpp fills its KV cache lazily and vLLM's profiling run settles after the
+server starts responding — measuring too early records a figure below what the
+model will hold.
+
+Rules the store enforces, each guarding against a way a memory becomes worse
+than none:
+
+- **A record is merged, never replaced.** A start that did not measure must not
+  erase last week's measurement; one that did not know the quantisation must not
+  blank a field set by hand.
+- **A failure never erases a working record.** One failed start is most often
+  transient, and discarding a configuration that took an afternoon to find over
+  an upstream 502 is not acceptable. Only a model that has *never* worked here is
+  marked failed.
+- **`--pin` means the operator's record wins.** Automatic runs count the success
+  and change nothing else.
+- **A measurement does not transfer.** It is tied to the hardware, context
+  length and concurrency it was taken at. Reuse is asymmetric: a record taken at
+  32k answers a question about 8k, never the reverse.
+- **A corrupt store is an error, not a reset.** This is the record of
+  configurations that took real effort to find.
+
 ### The scheduler
 
 `[Inference.AutoSwitch] Enable = true` starts a loop that re-plans every

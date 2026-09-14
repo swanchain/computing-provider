@@ -17,6 +17,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/autoswitch"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/market"
+	"github.com/swanchain/computing-provider-v2/internal/modelmem"
 	"github.com/swanchain/computing-provider-v2/internal/runtime"
 	"github.com/swanchain/computing-provider-v2/internal/vram"
 	"github.com/urfave/cli/v2"
@@ -210,7 +211,18 @@ func buildPlanSnapshot(ctx context.Context, cpRepoPath string, cfg *conf.Compute
 	// VRAM requirement for any model, so without this every model is
 	// "unknown" and every proposed switch is refused — a correct scheduler
 	// that can never act.
-	estimates := deriveMissingVRAM(ctx, demand, plannerContext(policy), float64(node.TotalVRAMGB), policy.MinPrecision, &notes)
+	memory, memErr := modelmem.Load(cpRepoPath)
+	if memErr != nil {
+		notes = append(notes, fmt.Sprintf("the node's model memory could not be read (%v), so measured figures are unavailable", memErr))
+		memory = nil
+	}
+	hw := modelmem.Hardware{
+		GPUModel:     node.GPUModel,
+		GPUCount:     node.GPUCount,
+		VRAMPerGPUGB: node.VRAMPerGPUGB,
+	}
+
+	estimates := deriveMissingVRAM(ctx, demand, plannerContext(policy), float64(node.TotalVRAMGB), policy.MinPrecision, memory, hw, &notes)
 
 	models := make([]autoswitch.MarketModel, 0, len(demand))
 	for _, m := range demand {
@@ -243,7 +255,10 @@ func buildPlanSnapshot(ctx context.Context, cpRepoPath string, cfg *conf.Compute
 		case estimates[m.ModelID] != nil && estimates[m.ModelID].Known():
 			fit := estimates[m.ModelID]
 			entry.EstimatedVRAMGiB = fit.TotalGiB
-			entry.VRAMSource = "derived"
+			// The estimate says how it was arrived at. Hardcoding "derived"
+			// here labelled a figure the node measured itself as a guess,
+			// which inverts the whole point of keeping the measurement.
+			entry.VRAMSource = string(fit.Source)
 			entry.VRAMPrecision = fit.Precision
 			if fit.Fits {
 				entry.VRAMFit = market.FitFits
@@ -621,7 +636,7 @@ const vramEstimateConcurrency = 6
 // Failures are counted rather than raised. A model whose requirement cannot be
 // derived stays unknown and is refused by the guardrails, which is the correct
 // outcome and not an error worth stopping the cycle for.
-func deriveMissingVRAM(ctx context.Context, demand []market.DemandEntry, contextLength int, budgetGiB float64, minPrecision string, notes *[]planNote) map[string]*vram.FitResult {
+func deriveMissingVRAM(ctx context.Context, demand []market.DemandEntry, contextLength int, budgetGiB float64, minPrecision string, memory *modelmem.Store, hw modelmem.Hardware, notes *[]planNote) map[string]*vram.FitResult {
 	out := make(map[string]*vram.FitResult, len(demand))
 
 	var pending []market.DemandEntry
@@ -638,6 +653,30 @@ func deriveMissingVRAM(ctx context.Context, demand []market.DemandEntry, context
 	hub := &vram.Hub{Token: os.Getenv("HF_TOKEN")}
 	plan := vram.Plan{ContextLength: contextLength}
 
+	// What the node has actually run outranks anything computed from
+	// published metadata. Cydonia-24B derives to 30.7 GiB from its bf16
+	// parameters and runs here in 18.7, because it is served as a 4-bit AWQ
+	// build — a fact no amount of reading the base repository would reveal.
+	remembered := 0
+	if memory != nil {
+		for _, m := range pending {
+			record := memory.Get(m.ModelID)
+			if !record.AppliesTo(hw, contextLength, 1) {
+				continue
+			}
+			out[m.ModelID] = &vram.FitResult{
+				Estimate:  vram.Measured(m.ModelID, record.VRAMGiB(), "measured on this node: "+record.Describe()),
+				Precision: record.Weights.Quantisation,
+				Fits:      budgetGiB > 0 && record.VRAMGiB() <= budgetGiB,
+			}
+			remembered++
+		}
+	}
+	if remembered > 0 {
+		*notes = append(*notes, fmt.Sprintf(
+			"%d of them this node has run before, so their measured figures are used instead of an estimate", remembered))
+	}
+
 	var (
 		mu        sync.Mutex
 		wg        sync.WaitGroup
@@ -646,6 +685,9 @@ func deriveMissingVRAM(ctx context.Context, demand []market.DemandEntry, context
 		quantised int
 	)
 	for _, m := range pending {
+		if _, known := out[m.ModelID]; known {
+			continue // answered from memory
+		}
 		wg.Add(1)
 		go func(modelID string) {
 			defer wg.Done()

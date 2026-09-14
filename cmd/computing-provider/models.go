@@ -28,6 +28,7 @@ var modelsCmd = &cli.Command{
 		modelsServeCmd,
 		modelsStopCmd,
 		modelsPsCmd,
+		modelsMemoryCmd,
 	},
 }
 

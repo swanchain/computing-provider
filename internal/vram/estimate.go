@@ -241,3 +241,23 @@ func WeightsGiBAt(totalParams int64, bytesPerParam float64) (float64, error) {
 	}
 	return float64(totalParams) * bytesPerParam / GiB, nil
 }
+
+// Measured builds an estimate from a figure the node observed itself.
+//
+// The top tier, and the only one that needs no margin: it is not a prediction.
+// Kept in this package so that a caller comparing a remembered figure with a
+// derived one is comparing two Estimates rather than two different shapes.
+func Measured(modelID string, gib float64, note string) *Estimate {
+	if gib <= 0 {
+		return unknown(modelID, "no measurement recorded")
+	}
+	est := &Estimate{
+		ModelID:  modelID,
+		Source:   SourceMeasured,
+		TotalGiB: gib,
+	}
+	if note != "" {
+		est.Notes = append(est.Notes, note)
+	}
+	return est
+}

@@ -219,8 +219,17 @@ Examples:
 			Decider:      runtime.DeciderOperator,
 		})
 		if err != nil {
+			// Recorded so the same configuration is not retried blindly. The
+			// note is the error itself, because "OOM at 64k" and "no such
+			// image" call for very different next attempts.
+			rememberFailure(cpRepoPath, modelID, err.Error())
 			return err
 		}
+
+		// Measured only when the start waited for the model to load. Reading
+		// GPU use from a container that is still allocating records a figure
+		// below what it will hold, which is the direction that over-commits.
+		rememberServe(ctx, cpRepoPath, spec, inst, !cctx.Bool("no-wait"))
 
 		fmt.Println()
 		color.Green("%s is serving at %s", inst.ModelID, inst.Endpoint)
