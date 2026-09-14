@@ -64,6 +64,14 @@ Examples:
 			return fmt.Errorf("give the agent a goal, e.g. computing-provider agent \"what is this node earning?\"")
 		}
 
+		// A run that may change the node must show what it does. An agent
+		// that starts and stops models while printing only its conclusion
+		// gives the operator no way to stop it part way and no way to
+		// reconstruct afterwards what it did.
+		if cctx.Bool("quiet") && cctx.Bool("allow-actions") {
+			return fmt.Errorf("--quiet cannot be combined with --allow-actions: a run that may change the node must show every step")
+		}
+
 		cpRepoPath, err := repoPath(cctx)
 		if err != nil {
 			return err

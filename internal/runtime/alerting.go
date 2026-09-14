@@ -81,10 +81,14 @@ func (a *AlertAnnouncer) Flush(timeout time.Duration) {
 }
 
 func decider(d string) string {
-	if d == DeciderAutoSwitch {
+	switch d {
+	case DeciderAutoSwitch:
 		return "auto-switch"
+	case DeciderAgent:
+		return "agent"
+	default:
+		return "operator"
 	}
-	return "operator"
 }
 
 // reasonOrDefault keeps the reason field present even when nobody gave one, so
@@ -93,7 +97,7 @@ func reasonOrDefault(reason, decidedBy string) string {
 	if reason != "" {
 		return reason
 	}
-	if decidedBy == DeciderAutoSwitch {
+	if decidedBy == DeciderAutoSwitch || decidedBy == DeciderAgent {
 		return "no reason recorded by the planner"
 	}
 	return "no reason given (pass --reason to record one)"

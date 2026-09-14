@@ -28,6 +28,12 @@ const (
 	// DeciderAutoSwitch is the auto-switch scheduler acting on a planner
 	// decision that passed the guardrails.
 	DeciderAutoSwitch = "auto-switch"
+
+	// DeciderAgent is `computing-provider agent` acting on an operator's goal
+	// with --allow-actions. Distinct from both of the above: an operator
+	// asked for the outcome but a model chose the action, and the mail has
+	// to say which so a surprising change can be traced to the right cause.
+	DeciderAgent = "agent"
 )
 
 // SwitchEvent describes one change to the set of models this node serves.

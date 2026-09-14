@@ -311,7 +311,7 @@ func toolServeModel(cpRepoPath string, cfg *conf.ComputeNode) *agent.Tool {
 			inst, err := manager.Serve(ctx, spec, runtime.ServeOptions{
 				WaitReady: true,
 				Reason:    args.String("reason"),
-				Decider:   runtime.DeciderAutoSwitch,
+				Decider:   runtime.DeciderAgent,
 			})
 			if err != nil {
 				rememberFailure(cpRepoPath, modelID, err.Error())
@@ -333,13 +333,25 @@ func toolStopModel(cpRepoPath string, cfg *conf.ComputeNode) *agent.Tool {
 			{Name: "reason", Type: "string", Description: "Why. This is recorded and mailed to the operator.", Required: true},
 		},
 		Run: func(ctx context.Context, args agent.Args) (string, error) {
+			modelID := args.String("model_id")
+
+			// The pin list is enforced here as well as in the scheduler's
+			// guardrails. cp.md promises the planner is never stopped, and a
+			// promise enforced on one path but not the other is the kind an
+			// agent finds. Without this, a node whose planner was started
+			// with `models serve` could be talked into stopping its own
+			// brain.
+			if pinned := pinnedModels(cfg); pinned[strings.ToLower(modelID)] {
+				return "", fmt.Errorf("%s is pinned and may never be stopped; it is the planner or on the operator's Pin list", modelID)
+			}
+
 			manager := runtime.NewManager(cpRepoPath)
 			manager.Announcer = switchNotifier(cpRepoPath)
 
-			inst, err := manager.Stop(ctx, args.String("model_id"), runtime.StopOptions{
+			inst, err := manager.Stop(ctx, modelID, runtime.StopOptions{
 				Remove:  true,
 				Reason:  args.String("reason"),
-				Decider: runtime.DeciderAutoSwitch,
+				Decider: runtime.DeciderAgent,
 			})
 			if err != nil {
 				return "", err
@@ -351,3 +363,19 @@ func toolStopModel(cpRepoPath string, cfg *conf.ComputeNode) *agent.Tool {
 
 // agentTimeout bounds one model call in an agent run.
 const agentTimeout = 3 * time.Minute
+
+// pinnedModels is the set of models the agent must never stop: the planner and
+// whatever the operator listed under Pin, matched without regard to case.
+func pinnedModels(cfg *conf.ComputeNode) map[string]bool {
+	policy := cfg.Inference.AutoSwitch
+	out := map[string]bool{}
+	if p := strings.TrimSpace(policy.Planner); p != "" {
+		out[strings.ToLower(p)] = true
+	}
+	for _, p := range policy.Pin {
+		if p = strings.TrimSpace(p); p != "" {
+			out[strings.ToLower(p)] = true
+		}
+	}
+	return out
+}

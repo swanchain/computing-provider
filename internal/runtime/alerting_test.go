@@ -153,3 +153,18 @@ func TestReasonDefaultsExplainThemselves(t *testing.T) {
 		t.Errorf("a given reason was replaced: %q", got)
 	}
 }
+
+// The agent is neither the operator nor the scheduler, and the mail has to say
+// which of the three chose an action so a surprising change can be traced.
+func TestAgentDeciderIsNamedDistinctly(t *testing.T) {
+	if decider(DeciderAgent) != "agent" {
+		t.Errorf("agent actions labelled %q", decider(DeciderAgent))
+	}
+	if decider(DeciderAutoSwitch) != "auto-switch" || decider(DeciderOperator) != "operator" {
+		t.Error("the other deciders changed")
+	}
+	// The agent's reasons come from a planner too, so its default reads the same.
+	if got := reasonOrDefault("", DeciderAgent); strings.Contains(got, "--reason") {
+		t.Errorf("the agent has no flag to pass: %q", got)
+	}
+}
