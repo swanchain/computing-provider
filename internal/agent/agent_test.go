@@ -183,11 +183,78 @@ func TestARunThatNeverLooksProducesNoFigures(t *testing.T) {
 	if strings.Contains(result.Answer, "500") {
 		t.Fatalf("an invented figure survived to the operator: %q", result.Answer)
 	}
-	if !strings.Contains(result.Answer, "nothing here that came from the node") {
+	if !strings.Contains(result.Answer, "without running a single tool") {
 		t.Errorf("answer should say it learned nothing: %q", result.Answer)
 	}
 	if len(calls) != 0 {
 		t.Errorf("tools were called: %v", calls)
+	}
+	// Abandoned rather than spending every step on a model that will not use
+	// its tools.
+	if result.Steps >= 6 {
+		t.Errorf("the run used %d steps; it should give up after %d ungrounded attempts", result.Steps, maxUngroundedAttempts)
+	}
+}
+
+// The first version of the rebuke deadlocked: the model re-emitted a
+// byte-identical step twelve times, was told the same thing each time, and
+// burned the whole run. A refusal that repeats itself is a loop, not a
+// correction.
+func TestRepeatedUngroundedAnswersEscalateThenStop(t *testing.T) {
+	var calls []string
+	model := &scriptedModel{
+		fallback: Step{Thought: "same thought every time", Done: true, Answer: "$999/day"},
+	}
+	a := newAgent(t, model, testTools(&calls), false)
+	a.MaxSteps = 12
+
+	result, err := a.Run(context.Background(), "goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Steps != maxUngroundedAttempts {
+		t.Errorf("steps = %d, want it abandoned after %d", result.Steps, maxUngroundedAttempts)
+	}
+
+	// The rebukes must differ, or a deterministic model has no reason to
+	// change its reply.
+	var rebukes []string
+	for _, p := range model.prompts {
+		if strings.Contains(p, "not run a single tool") || strings.Contains(p, "tried twice") {
+			rebukes = append(rebukes, p)
+		}
+	}
+	if len(rebukes) < 2 {
+		t.Fatalf("expected escalating rebukes, got %d", len(rebukes))
+	}
+	if rebukes[0] == rebukes[1] {
+		t.Error("the second rebuke repeated the first, which is what deadlocked")
+	}
+	if !strings.Contains(rebukes[1], "last chance") {
+		t.Errorf("the second rebuke did not escalate: %q", rebukes[1])
+	}
+}
+
+// A model re-running a call it has already made is not making progress.
+func TestARepeatedToolCallIsInterrupted(t *testing.T) {
+	var calls []string
+	model := &scriptedModel{
+		steps: []Step{
+			{Thought: "look", Tool: "node_status", Args: Args{}},
+			{Thought: "look again", Tool: "node_status", Args: Args{}},
+			{Thought: "fine", Done: true, Answer: "done"},
+		},
+	}
+	a := newAgent(t, model, testTools(&calls), false)
+
+	if _, err := a.Run(context.Background(), "goal"); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 {
+		t.Errorf("the same call ran %d times: %v", len(calls), calls)
+	}
+	if !strings.Contains(strings.Join(model.prompts, "\n"), "already have its result") {
+		t.Error("the model was not told it was repeating itself")
 	}
 }
 

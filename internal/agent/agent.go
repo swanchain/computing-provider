@@ -152,6 +152,19 @@ func (a *Agent) Run(ctx context.Context, goal string) (*Result, error) {
 	// refused in code below.
 	observations := 0
 
+	// ungroundedAttempts counts consecutive tries to answer without evidence.
+	//
+	// Counted because the first version of the rebuke deadlocked: the model
+	// re-emitted a byte-identical step twelve times, was told the same thing
+	// each time, and burned the whole run without calling a tool. A refusal
+	// that repeats itself is not a correction, it is a loop. The pressure has
+	// to escalate, and then it has to stop.
+	ungroundedAttempts := 0
+
+	// lastStep detects a model repeating itself for any reason, not only this
+	// one.
+	lastStep := ""
+
 	for step := 1; step <= a.maxSteps(); step++ {
 		decision, err := a.ask(ctx, history)
 		if err != nil {
@@ -166,14 +179,29 @@ func (a *Agent) Run(ctx context.Context, goal string) (*Result, error) {
 		if decision.Done || decision.Tool == "" {
 			if observations == 0 {
 				// Nothing has been looked at, so anything stated here came
-				// from the model rather than from the node. Push back and
-				// keep going rather than returning it.
+				// from the model rather than from the node.
+				ungroundedAttempts++
 				if a.Observer != nil {
 					a.Observer.Ungrounded(step, decision.Answer)
 				}
+
+				if ungroundedAttempts >= maxUngroundedAttempts {
+					// It will not use its tools. Saying so plainly is the
+					// only honest outcome: the alternative is spending the
+					// remaining steps on a model that has made its position
+					// clear, and then returning nothing anyway.
+					result.Answer = fmt.Sprintf(
+						"The model tried to answer %d times without running a single tool, so nothing it produced came from this node. No answer.",
+						ungroundedAttempts)
+					if a.Observer != nil {
+						a.Observer.Finished(result.Answer)
+					}
+					return result, nil
+				}
+
 				history = append(history,
 					message{Role: "assistant", Content: mustJSON(decision)},
-					message{Role: "user", Content: ungroundedRebuke(a.Tools.Names())},
+					message{Role: "user", Content: ungroundedRebuke(a.Tools.Names(), ungroundedAttempts)},
 				)
 				continue
 			}
@@ -187,6 +215,20 @@ func (a *Agent) Run(ctx context.Context, goal string) (*Result, error) {
 			}
 			return result, nil
 		}
+
+		// A model repeating a call it has already made is not making
+		// progress, and the remaining steps are better spent telling it so
+		// than letting it run the same query until the budget is gone.
+		fingerprint := decision.Tool + "|" + mustJSON(decision.Args)
+		if fingerprint == lastStep {
+			history = append(history,
+				message{Role: "assistant", Content: mustJSON(decision)},
+				message{Role: "user", Content: "You just ran that exact call and already have its result above. " +
+					"Either use a different tool, change the arguments, or set done and answer from what you have."},
+			)
+			continue
+		}
+		lastStep = fingerprint
 
 		output, acted, err := a.invoke(ctx, step, decision)
 		if acted {
@@ -381,12 +423,37 @@ func mustJSON(v interface{}) string {
 	return string(data)
 }
 
+// maxUngroundedAttempts is how many times a model may try to answer without
+// evidence before the run is abandoned.
+//
+// Three: one to be corrected, one to be corrected more firmly, and then stop.
+// Beyond that the model is not going to use its tools, and continuing only
+// spends GPU time to arrive at the same refusal.
+const maxUngroundedAttempts = 3
+
 // ungroundedRebuke is sent when the model tries to answer without looking.
 //
-// Names the tools again, because the most common cause is a model that has
-// forgotten it has any.
-func ungroundedRebuke(tools []string) string {
-	return "You have not run a single tool, so you have not observed anything about this node. " +
-		"Do not answer from memory or from what is typical — every figure you give must come from a tool result. " +
-		"Run one of these first: " + strings.Join(tools, ", ") + "."
+// It escalates. The first version of this repeated one message and the model
+// repeated one reply, twelve times over — a refusal that says the same thing
+// each time gives a deterministic model no reason to do anything different.
+func ungroundedRebuke(tools []string, attempt int) string {
+	list := strings.Join(tools, ", ")
+
+	if attempt == 1 {
+		return "You have not run a single tool, so you have not observed anything about this node. " +
+			"Do not answer from memory, from cp.md, or from what is typical — every figure you give must come from a tool result in this conversation. " +
+			"Run one of these first: " + list + "."
+	}
+
+	// Second time: stop asking and give an instruction, naming a tool and the
+	// exact reply shape. A model that ignored the general form of the request
+	// may still follow a specific one.
+	first := ""
+	if len(tools) > 0 {
+		first = tools[0]
+	}
+	return "You have now tried twice to answer without checking anything, and both answers were discarded. " +
+		"This is your last chance before the run is abandoned with no answer. " +
+		"Do not set done. Reply with exactly this shape, choosing a tool from " + list + ":\n" +
+		`{"thought":"checking before I answer","tool":"` + first + `","args":{},"done":false,"answer":""}`
 }
