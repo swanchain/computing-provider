@@ -420,3 +420,120 @@ func TestAMeasuredZeroBaselineStillAllowsAProfitableSwitch(t *testing.T) {
 		t.Errorf("refused against a measured zero baseline: %+v", v.Violations)
 	}
 }
+
+// derived is a market model the marketplace published no requirement for, but
+// this node sized for itself. This is the shape of every model on the live
+// network today.
+func derived(id string, estimatedGiB float64, entrantUSD float64) MarketModel {
+	return MarketModel{
+		ModelID: id, MinVRAMGB: 0, VRAMKnown: false,
+		EstimatedVRAMGiB: estimatedGiB, VRAMSource: "derived",
+		VRAMFit: "fits", EstEntrantDailyUSD: entrantUSD,
+	}
+}
+
+// Without this the guardrails refuse every model on the network, because the
+// marketplace publishes no requirement for any of them.
+func TestADerivedEstimateCanSatisfyTheFitRule(t *testing.T) {
+	snapshot := node(nil, []MarketModel{derived("new/Model", 18.6, 20)})
+
+	v := Evaluate(&Decision{
+		Action: ActionSwitch, Serve: []string{"new/Model"}, ExpectedDailyUSD: 20,
+	}, snapshot, Policy{MinMarginUSD: 0.50})
+
+	if !v.Allowed {
+		t.Fatalf("a model this node sized at 18.6 GiB was refused on a 40 GiB node: %+v", v.Violations)
+	}
+}
+
+// A derived figure larger than the node is still a refusal — deriving a number
+// is not the same as liking it.
+func TestADerivedEstimateThatDoesNotFitIsRefused(t *testing.T) {
+	snapshot := node(nil, []MarketModel{derived("huge/Model", 709.8, 50)})
+
+	v := Evaluate(&Decision{
+		Action: ActionSwitch, Serve: []string{"huge/Model"}, ExpectedDailyUSD: 50,
+	}, snapshot, Policy{MinMarginUSD: 0.50})
+
+	if v.Allowed {
+		t.Fatal("a 709.8 GiB model was allowed on a 40 GiB node")
+	}
+	if !violated(v, RuleNotKnownToFit) {
+		t.Errorf("violations = %+v", v.Violations)
+	}
+}
+
+// A published requirement outranks a derived one: the derived figure exists
+// only because the marketplace publishes none.
+func TestAPublishedRequirementOutranksADerivedOne(t *testing.T) {
+	m := derived("new/Model", 8, 20)
+	m.MinVRAMGB = 200 // the marketplace says it needs 200 GB
+	m.VRAMKnown = true
+	m.VRAMSource = "published"
+
+	snapshot := node(nil, []MarketModel{m})
+	v := Evaluate(&Decision{
+		Action: ActionSwitch, Serve: []string{"new/Model"}, ExpectedDailyUSD: 20,
+	}, snapshot, Policy{MinMarginUSD: 0.50})
+
+	if v.Allowed {
+		t.Fatal("a derived 8 GiB estimate overrode a published 200 GB requirement")
+	}
+}
+
+// The budget check has to count derived requirements too, or a plan made
+// entirely of derived models looks free.
+func TestVRAMBudgetCountsDerivedRequirements(t *testing.T) {
+	snapshot := node(
+		[]ServingModel{served("resident/Model", true, false, 1)},
+		[]MarketModel{
+			derived("resident/Model", 30, 1),
+			derived("new/Model", 24, 50),
+		},
+	)
+
+	v := Evaluate(&Decision{
+		Action: ActionSwitch, Serve: []string{"new/Model"}, ExpectedDailyUSD: 50,
+	}, snapshot, Policy{MinMarginUSD: 0.50})
+
+	if v.Allowed {
+		t.Fatal("24 GiB alongside a 30 GiB resident was allowed on a 40 GiB node")
+	}
+	if !violated(v, RuleVRAMBudget) {
+		t.Errorf("violations = %+v", v.Violations)
+	}
+}
+
+// Rounding a derived requirement down is how a plan that does not fit gets
+// approved: two models at 20.6 GiB each are 41.2, not 40.
+func TestDerivedRequirementsRoundUpInTheBudget(t *testing.T) {
+	snapshot := node(
+		[]ServingModel{served("a/Model", true, false, 1)},
+		[]MarketModel{derived("a/Model", 20.6, 1), derived("b/Model", 20.6, 50)},
+	)
+
+	v := Evaluate(&Decision{
+		Action: ActionSwitch, Serve: []string{"b/Model"}, ExpectedDailyUSD: 50,
+	}, snapshot, Policy{MinMarginUSD: 0.50})
+
+	if v.Allowed {
+		t.Fatal("two 20.6 GiB models were allowed on a 40 GiB node by rounding each down to 20")
+	}
+}
+
+// An error message has to tell the three cases apart, because the operator's
+// next action differs: chase the platform, check the estimator, or neither.
+func TestDescribeRequirementDistinguishesTheThreeCases(t *testing.T) {
+	published := describeRequirement(MarketModel{MinVRAMGB: 24, VRAMKnown: true})
+	if !strings.Contains(published, "published") {
+		t.Errorf("published = %q", published)
+	}
+	est := describeRequirement(MarketModel{EstimatedVRAMGiB: 18.6})
+	if !strings.Contains(est, "estimated") {
+		t.Errorf("estimated = %q", est)
+	}
+	none := describeRequirement(MarketModel{})
+	if !strings.Contains(none, "not derivable") {
+		t.Errorf("neither = %q", none)
+	}
+}

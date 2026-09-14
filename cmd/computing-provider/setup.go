@@ -305,15 +305,15 @@ func initializeRepo(cpRepoPath string, prompter *setup.Prompter) (string, error)
 
 // discoveredModel represents a discovered model with its configuration
 type discoveredModel struct {
-	LocalModel  string           // Original local model name (e.g., "llama3.2:3b")
-	SwanModelID string           // Swan Inference model ID (e.g., "llama-3.2-3b")
-	SwanModelName string         // Human-readable name from Swan
-	Endpoint    string
-	ServerType  setup.ServerType
-	GPUMemory   int
-	Category    string
-	Matched     bool             // Whether this model matched a Swan model
-	Confidence  float64          // Match confidence
+	LocalModel    string // Original local model name (e.g., "llama3.2:3b")
+	SwanModelID   string // Swan Inference model ID (e.g., "llama-3.2-3b")
+	SwanModelName string // Human-readable name from Swan
+	Endpoint      string
+	ServerType    setup.ServerType
+	GPUMemory     int
+	Category      string
+	Matched       bool    // Whether this model matched a Swan model
+	Confidence    float64 // Match confidence
 }
 
 // discoverModels discovers running model servers and matches them to Swan Inference models

@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -17,6 +18,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/market"
 	"github.com/swanchain/computing-provider-v2/internal/runtime"
+	"github.com/swanchain/computing-provider-v2/internal/vram"
 	"github.com/urfave/cli/v2"
 )
 
@@ -204,9 +206,15 @@ func buildPlanSnapshot(ctx context.Context, cpRepoPath string, cfg *conf.Compute
 		return nil, notes, fmt.Errorf("could not read the market: %w", err)
 	}
 
+	// Work out what the marketplace did not publish. Today it publishes no
+	// VRAM requirement for any model, so without this every model is
+	// "unknown" and every proposed switch is refused — a correct scheduler
+	// that can never act.
+	estimates := deriveMissingVRAM(ctx, demand, plannerContext(policy), float64(node.TotalVRAMGB), policy.MinPrecision, &notes)
+
 	models := make([]autoswitch.MarketModel, 0, len(demand))
 	for _, m := range demand {
-		models = append(models, autoswitch.MarketModel{
+		entry := autoswitch.MarketModel{
 			ModelID:             m.ModelID,
 			Category:            m.Category,
 			ProviderInputPrice:  m.ProviderInputPrice,
@@ -225,7 +233,26 @@ func buildPlanSnapshot(ctx context.Context, cpRepoPath string, cfg *conf.Compute
 			SubscriptionShare:   m.SubscriptionShare,
 			ContextLength:       m.ContextLength,
 			PromptTokensP95:     m.PromptTokensP95,
-		})
+		}
+
+		switch {
+		case m.VRAMKnown && m.MinVRAMGB > 0:
+			// A published requirement outranks anything derived here.
+			entry.VRAMSource = "published"
+
+		case estimates[m.ModelID] != nil && estimates[m.ModelID].Known():
+			fit := estimates[m.ModelID]
+			entry.EstimatedVRAMGiB = fit.TotalGiB
+			entry.VRAMSource = "derived"
+			entry.VRAMPrecision = fit.Precision
+			if fit.Fits {
+				entry.VRAMFit = market.FitFits
+			} else {
+				entry.VRAMFit = market.FitTooLarge
+			}
+		}
+
+		models = append(models, entry)
 	}
 
 	serving, dailyUSD, servingNotes := buildServingList(ctx, cpRepoPath, cfg, policy, plannerModel)
@@ -567,4 +594,98 @@ func loadProposedDecision(arg string) (*autoswitch.Decision, *autoswitch.Raw, er
 		return nil, raw, err
 	}
 	return decision, raw, nil
+}
+
+// plannerContext is the context length a candidate model is sized against.
+//
+// Sizing every model at its own declared maximum would reject almost all of
+// them: a 262k-token window costs more cache than most nodes have. A node
+// chooses what to serve, so the estimate answers for what it would actually
+// serve rather than for the model's theoretical ceiling.
+func plannerContext(policy conf.AutoSwitch) int {
+	if policy.EstimateContextLength > 0 {
+		return policy.EstimateContextLength
+	}
+	return 32768
+}
+
+// vramEstimateConcurrency bounds how many candidates are sized at once. Each is
+// one or two HTTP calls and the demand table runs to dozens, so serially this
+// would make `plan` take a minute; unbounded it would open dozens of
+// connections to the model hub at once.
+const vramEstimateConcurrency = 6
+
+// deriveMissingVRAM computes a requirement for every model the marketplace did
+// not publish one for.
+//
+// Failures are counted rather than raised. A model whose requirement cannot be
+// derived stays unknown and is refused by the guardrails, which is the correct
+// outcome and not an error worth stopping the cycle for.
+func deriveMissingVRAM(ctx context.Context, demand []market.DemandEntry, contextLength int, budgetGiB float64, minPrecision string, notes *[]planNote) map[string]*vram.FitResult {
+	out := make(map[string]*vram.FitResult, len(demand))
+
+	var pending []market.DemandEntry
+	for _, m := range demand {
+		if m.VRAMKnown && m.MinVRAMGB > 0 {
+			continue
+		}
+		pending = append(pending, m)
+	}
+	if len(pending) == 0 {
+		return out
+	}
+
+	hub := &vram.Hub{Token: os.Getenv("HF_TOKEN")}
+	plan := vram.Plan{ContextLength: contextLength}
+
+	var (
+		mu        sync.Mutex
+		wg        sync.WaitGroup
+		sem       = make(chan struct{}, vramEstimateConcurrency)
+		fail      int
+		quantised int
+	)
+	for _, m := range pending {
+		wg.Add(1)
+		go func(modelID string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// FitWithin rather than Derive: a model is sized at the
+			// precision the node would actually serve it in, not at the
+			// bf16 the repository publishes. This node runs a 27B that is
+			// 60 GiB at bf16 in 17 GiB, because it serves a Q4 build.
+			// Sizing only the published precision would refuse models the
+			// node is demonstrably already running.
+			fit := vram.FitWithin(ctx, hub, modelID, plan, budgetGiB, minPrecision)
+
+			mu.Lock()
+			defer mu.Unlock()
+			out[modelID] = fit
+			if !fit.Known() {
+				fail++
+			} else if fit.RequiresQuantisation {
+				quantised++
+			}
+		}(m.ModelID)
+	}
+	wg.Wait()
+
+	derived := len(pending) - fail
+	*notes = append(*notes, fmt.Sprintf(
+		"the marketplace published no VRAM requirement for %d of %d models; this node derived %d of them at %d tokens of context",
+		len(pending), len(demand), derived, contextLength))
+	if fail > 0 {
+		*notes = append(*notes, fmt.Sprintf(
+			"%d could not be derived and stay unknown, so they cannot be selected (set HF_TOKEN to read gated repositories)", fail))
+	}
+	if quantised > 0 {
+		// Stated plainly because it is an assumption the node cannot check:
+		// a model that only fits quantised needs a quantised build to exist,
+		// and nothing here has verified that one does.
+		*notes = append(*notes, fmt.Sprintf(
+			"%d fit only below their published precision, which assumes a quantised build exists — unverified", quantised))
+	}
+	return out
 }

@@ -338,6 +338,18 @@ type AutoSwitch struct {
 
 	// Deny lists models that may never be served.
 	Deny []string `toml:"Deny"`
+
+	// MinPrecision is the lowest weight quality this node is willing to serve
+	// at when working out whether a model fits. Below four bits the quality
+	// loss starts to show, and a provider that ships degraded output to win a
+	// fit is trading reputation for VRAM. Defaults to q4_k_m.
+	MinPrecision string `toml:"MinPrecision"`
+
+	// EstimateContextLength is the context window candidate models are sized
+	// against when working out whether they fit. Sizing every model at its
+	// own declared maximum would reject almost all of them, since a 262k
+	// window costs more cache than most nodes have. Defaults to 32768.
+	EstimateContextLength int `toml:"EstimateContextLength"`
 }
 
 // AutoSwitchDefaults are the values used for anything left unset.

@@ -93,6 +93,25 @@ type MarketModel struct {
 	// planner that ignored this field must still not be able to act.
 	VRAMFit string `json:"vram_fit"`
 
+	// EstimatedVRAMGiB is what this node worked out the model needs, when the
+	// marketplace did not say. Zero means it could not be worked out.
+	//
+	// Carried separately from MinVRAMGB because the two have different
+	// standing: MinVRAMGB is the platform's published requirement, and this
+	// is the node's own arithmetic. Where both exist and disagree, the
+	// disagreement is worth seeing rather than averaging away.
+	EstimatedVRAMGiB float64 `json:"estimated_vram_gib,omitempty"`
+
+	// VRAMSource says where the fit verdict came from: "published" when the
+	// marketplace declared a requirement, "derived" when this node computed
+	// one, or empty when neither.
+	VRAMSource string `json:"vram_source,omitempty"`
+
+	// VRAMPrecision is the weight format the estimate assumes. Anything other
+	// than "published" means the model only fits quantised, and that a
+	// quantised build has to exist — which the node has not verified.
+	VRAMPrecision string `json:"vram_precision,omitempty"`
+
 	EstEntrantDailyUSD float64 `json:"est_entrant_daily_usd"`
 	EntrantBasis       string  `json:"entrant_basis,omitempty"`
 	PlanCovered        bool    `json:"plan_covered"`
@@ -135,6 +154,16 @@ func (s *Snapshot) marketByID() map[string]MarketModel {
 }
 
 // KnownFit reports whether a market model is known to fit this node.
+//
+// Two ways a model can be known to fit, and they are checked in order of
+// standing: a requirement the marketplace published, then one this node derived
+// for itself. A derived figure is only consulted because the marketplace
+// currently publishes none — it is a second source, not a preferred one.
 func (s *Snapshot) KnownFit(m MarketModel) bool {
-	return market.FitsKnown(m.MinVRAMGB, m.VRAMKnown, s.Node.TotalVRAMGB)
+	if market.FitsKnown(m.MinVRAMGB, m.VRAMKnown, s.Node.TotalVRAMGB) {
+		return true
+	}
+	return m.EstimatedVRAMGiB > 0 &&
+		s.Node.TotalVRAMGB > 0 &&
+		m.EstimatedVRAMGiB <= float64(s.Node.TotalVRAMGB)
 }

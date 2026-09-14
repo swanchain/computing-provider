@@ -2,6 +2,7 @@ package autoswitch
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -269,13 +270,20 @@ func Evaluate(decision *Decision, snapshot *Snapshot, policy Policy) Verdict {
 	return verdict
 }
 
-// describeRequirement renders a model's VRAM requirement for an error message,
-// distinguishing an unpublished requirement from a published one.
+// describeRequirement renders a model's VRAM requirement for an error message.
+//
+// It distinguishes three cases an operator needs to tell apart: the
+// marketplace published a requirement, this node derived one, or neither — and
+// the last is the only one that means "nobody knows".
 func describeRequirement(m MarketModel) string {
-	if !m.VRAMKnown || m.MinVRAMGB <= 0 {
-		return "not published"
+	switch {
+	case m.VRAMKnown && m.MinVRAMGB > 0:
+		return fmt.Sprintf("%d GB published", m.MinVRAMGB)
+	case m.EstimatedVRAMGiB > 0:
+		return fmt.Sprintf("%.1f GiB estimated by this node", m.EstimatedVRAMGiB)
+	default:
+		return "not published and not derivable"
 	}
-	return fmt.Sprintf("%d GB", m.MinVRAMGB)
 }
 
 type budget struct {
@@ -284,29 +292,45 @@ type budget struct {
 	exceeded bool
 }
 
+// requirementGB is a model's VRAM requirement, preferring the marketplace's
+// published figure and falling back to what this node derived.
+//
+// Rounds a derived figure up. The budget check is comparing against a hard
+// physical limit, and rounding 23.6 GiB down to 23 is how a plan that does not
+// fit is approved.
+func requirementGB(m MarketModel) int {
+	if m.VRAMKnown && m.MinVRAMGB > 0 {
+		return m.MinVRAMGB
+	}
+	if m.EstimatedVRAMGiB > 0 {
+		return int(math.Ceil(m.EstimatedVRAMGiB))
+	}
+	return 0
+}
+
 // vramBudget adds up what a plan needs against what it frees.
 //
-// A model with no published requirement contributes nothing to `needed`, which
-// would make an unmeasured model look free. That is safe only because such a
-// model is already rejected by RuleNotKnownToFit; this check exists for the
-// case where requirements are published and the arithmetic is the binding
-// constraint.
+// A model with neither a published nor a derived requirement contributes
+// nothing to `needed`, which would make it look free. That is safe only
+// because such a model is already rejected by RuleNotKnownToFit; this check
+// exists for the case where requirements are known and the arithmetic is the
+// binding constraint.
 func vramBudget(serve, stop []string, snapshot *Snapshot) budget {
 	catalogue := snapshot.marketByID()
 	serving := snapshot.servingIDs()
 
 	var b budget
 	for _, id := range serve {
-		if m, ok := catalogue[id]; ok && m.VRAMKnown && m.MinVRAMGB > 0 {
-			b.needed += m.MinVRAMGB
+		if m, ok := catalogue[id]; ok {
+			b.needed += requirementGB(m)
 		}
 	}
 	for _, id := range stop {
 		if _, isServing := serving[id]; !isServing {
 			continue
 		}
-		if m, ok := catalogue[id]; ok && m.VRAMKnown && m.MinVRAMGB > 0 {
-			b.freed += m.MinVRAMGB
+		if m, ok := catalogue[id]; ok {
+			b.freed += requirementGB(m)
 		}
 	}
 
@@ -316,8 +340,8 @@ func vramBudget(serve, stop []string, snapshot *Snapshot) budget {
 		if contains(stop, id) {
 			continue
 		}
-		if entry, ok := catalogue[m.ModelID]; ok && entry.VRAMKnown && entry.MinVRAMGB > 0 {
-			resident += entry.MinVRAMGB
+		if entry, ok := catalogue[m.ModelID]; ok {
+			resident += requirementGB(entry)
 		}
 	}
 
