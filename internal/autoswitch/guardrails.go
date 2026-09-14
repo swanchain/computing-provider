@@ -83,12 +83,98 @@ const (
 	RuleMarginUnknown  = "current_earnings_unknown"
 )
 
-// Deferred rule identifiers, for the checks that need scheduler state.
+// Deferred rule identifiers, for the checks a single cycle cannot make.
 const (
 	DeferredDwell    = "min_dwell (needs the time of the last switch)"
 	DeferredConfirm  = "confirm_cycles (needs consecutive agreeing cycles)"
 	DeferredDayLimit = "max_switches_day (needs today's switch count)"
 )
+
+// Rules that need the scheduler's own history.
+const (
+	RuleDwell       = "within_min_dwell"
+	RuleNotAgreed   = "not_enough_agreeing_cycles"
+	RuleDailyLimit  = "daily_switch_limit_reached"
+	RuleHistoryLost = "scheduler_history_unavailable"
+)
+
+// EvaluateWithHistory is Evaluate plus the three rules that need memory.
+//
+// Split from Evaluate rather than folded into it so that `inference plan` can
+// run the stateless half honestly, naming what it has not checked, while the
+// scheduler runs all of it. One function that silently skipped the stateful
+// rules when handed a nil history would make a dry run look like a green light.
+func EvaluateWithHistory(decision *Decision, snapshot *Snapshot, policy Policy, history *History, now time.Time) Verdict {
+	verdict := Evaluate(decision, snapshot, policy)
+
+	// A keep is always allowed and changes nothing, so none of these apply.
+	if verdict.Effective.Action == ActionKeep && verdict.Allowed {
+		verdict.Deferred = nil
+		return verdict
+	}
+	if !verdict.Allowed {
+		return verdict
+	}
+
+	// Every rule below is now actually checked, so nothing is deferred.
+	verdict.Deferred = nil
+
+	if history == nil {
+		// Without memory the node cannot tell how long ago it last acted.
+		// Refusing is the only safe reading: acting would honour no dwell
+		// time and no daily cap.
+		verdict.Allowed = false
+		verdict.Violations = append(verdict.Violations, Violation{
+			Rule:   RuleHistoryLost,
+			Detail: "the scheduler has no history, so dwell time and the daily cap cannot be honoured",
+		})
+		verdict.Effective = keep("guardrails refused the proposal")
+		return verdict
+	}
+
+	if policy.MinDwell > 0 {
+		if last := history.LastSwitch(); last != nil {
+			if elapsed := now.Sub(last.At); elapsed < policy.MinDwell {
+				verdict.Violations = append(verdict.Violations, Violation{
+					Rule: RuleDwell,
+					Detail: fmt.Sprintf("last switch was %s ago, inside the %s dwell time",
+						elapsed.Round(time.Minute), policy.MinDwell),
+				})
+			}
+		}
+	}
+
+	if policy.ConfirmCycles > 1 {
+		agreed := history.ConsecutiveAgreement(Fingerprint(decision))
+		if agreed < policy.ConfirmCycles {
+			verdict.Violations = append(verdict.Violations, Violation{
+				Rule: RuleNotAgreed,
+				Detail: fmt.Sprintf("%d of %d consecutive cycles have proposed this plan",
+					agreed, policy.ConfirmCycles),
+			})
+		}
+	}
+
+	if policy.MaxSwitchesDay > 0 {
+		since := now.Add(-24 * time.Hour)
+		if made := history.SwitchesSince(since); made >= policy.MaxSwitchesDay {
+			verdict.Violations = append(verdict.Violations, Violation{
+				Rule: RuleDailyLimit,
+				Detail: fmt.Sprintf("%d switches in the last 24 hours, at the limit of %d",
+					made, policy.MaxSwitchesDay),
+			})
+		}
+	}
+
+	if len(verdict.Violations) > 0 {
+		verdict.Allowed = false
+		verdict.Effective = keep("guardrails refused the proposal")
+		sort.SliceStable(verdict.Violations, func(i, j int) bool {
+			return verdict.Violations[i].Rule < verdict.Violations[j].Rule
+		})
+	}
+	return verdict
+}
 
 // keep is the decision used whenever a proposal is refused.
 func keep(reason string) Decision {

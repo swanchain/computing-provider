@@ -17,6 +17,7 @@ import (
 	cors "github.com/itsjamie/gin-cors"
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
+	"github.com/swanchain/computing-provider-v2/internal/alerts"
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/dashboard"
 	"github.com/swanchain/computing-provider-v2/internal/logging"
@@ -572,13 +573,35 @@ func runDaemon(cctx *cli.Context) error {
 	}
 	logs.GetLogger().Infof("Computing provider started successfully, listening on %s", listenAddress)
 
-	finishCh := util.MonitorShutdown(shutdownChan,
-		util.ShutdownHandler{Component: "cp-api", StopFunc: httpStopper},
-		util.ShutdownHandler{Component: "inference-service", StopFunc: func(ctx context.Context) error {
+	// Started last, so that a cycle firing immediately finds a node that is
+	// already serving and connected rather than one still coming up.
+	autoSwitch := startAutoSwitch(context.Background(), cpRepoPath,
+		conf.GetConfig(), alerts.New(conf.GetConfig().Alerts, nodeID, conf.GetConfig().API.NodeName))
+
+	handlers := []util.ShutdownHandler{
+		{Component: "cp-api", StopFunc: httpStopper},
+	}
+	if autoSwitch != nil {
+		// Stopped before the inference service: a cycle in flight is still
+		// starting and stopping containers, and it needs the node intact to
+		// finish and record what it did.
+		handlers = append(handlers, util.ShutdownHandler{
+			Component: "auto-switch",
+			StopFunc: func(ctx context.Context) error {
+				autoSwitch.Stop()
+				return nil
+			},
+		})
+	}
+	handlers = append(handlers, util.ShutdownHandler{
+		Component: "inference-service",
+		StopFunc: func(ctx context.Context) error {
 			inferenceService.Stop()
 			return nil
-		}},
-	)
+		},
+	})
+
+	finishCh := util.MonitorShutdown(shutdownChan, handlers...)
 	<-finishCh
 
 	return nil

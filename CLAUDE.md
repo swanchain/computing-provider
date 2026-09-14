@@ -348,9 +348,9 @@ Two of those carry a distinction worth keeping:
 
 - **`vram_not_known_to_fit`.** Fit is three states — fits, too-large, unknown —
   and the rule lives in `internal/market` because `recommend-models` and the
-  guardrails must agree on it. `vram_known: false` currently applies to every
-  model the endpoint publishes, so *nothing* is known to fit and every proposed
-  switch is refused. That is the correct answer, not a bug: the previous rule
+  guardrails must agree on it. The marketplace publishes `vram_known: false` for
+  every model, so the node derives the requirement itself (`internal/vram`,
+  below); a model it cannot size stays unknown and is refused. The previous rule
   read a missing requirement as "fits" and passed 600B models onto 10 GB cards.
 - **`current_earnings_unknown`.** The margin is measured against what the node
   actually earned in the last 24 hours, read from the daemon's own earnings
@@ -370,6 +370,93 @@ the planner to propose something interesting.
 a `*bool` and stays nil when the daemon cannot be reached: a planner shown
 "healthy: false" for every model reasons about an outage that is not happening,
 and says so in its decision.
+
+### Deriving VRAM requirements: `internal/vram/`
+
+The marketplace publishes no VRAM requirement for any model, so the node works
+one out. No hosted service does this — every calculator found is a web UI with
+no API — and `docs/model.md` records the research.
+
+Three tiers, descending trust: **measured** (it has run here), **derived**
+(computed from published metadata), **unknown** (refused). A lower tier's answer
+is never promoted to a higher tier's confidence.
+
+Validated, not asserted: against this node's Qwen3.8-27B at 65536 context with
+q8_0 cache, derived 17.43 GiB against 17.42 measured by `nvidia-smi`.
+
+That agreement rests entirely on corrections a generic formula does not make:
+
+- **Hybrid attention.** Qwen3.8-27B declares 48 `linear_attention` layers
+  against 16 `full_attention`; counting all 64 over-estimates the cache
+  four-fold.
+- **Multi-head latent attention.** DeepSeek V3 caches `kv_lora_rank +
+  qk_rope_head_dim` per token per layer, roughly 25x below the ordinary formula.
+- **Sliding windows, where enabled.** Qwen ships `sliding_window` alongside
+  `use_sliding_window: false`; honouring it there halves an estimate that should
+  not move.
+- **Measured quantisation sizes.** Q4_K_S is 0.5528 bytes/param on a real file,
+  not the 0.5 its name implies.
+
+Two traps found only by running against the live hub:
+
+- **Size at the precision the node would serve, not the published one.**
+  Qwen3.8-27B is 60.2 GiB at bf16 and this node serves it in 17.4 at Q4. Sizing
+  only the published precision reported 0 of 26 models as fitting while the node
+  was running two of them. `FitWithin` walks down from published and stops at the
+  first that fits, never below `q4_k_m`.
+- **The hub's `total` field is not reliable.** Cydonia-24B reports a breakdown of
+  23,572,403,200 parameters alongside a `total` of 414,720. Trusting it sized a
+  24B model at 0.0 GiB and called it a comfortable fit. Sum the per-dtype
+  breakdown instead.
+
+Every unresolved question resolves towards more memory or towards unknown, and
+derived figures carry a 10% margin. The asymmetry is the design: an
+over-estimate declines a model that would have fitted; an under-estimate is an
+OOM partway through a load on a node that was serving traffic.
+
+### The scheduler
+
+`[Inference.AutoSwitch] Enable = true` starts a loop that re-plans every
+`IntervalMin` and acts when the guardrails allow. Off by default, and it refuses
+to start rather than starting degraded: no planner, no endpoint for it, or an
+unreadable history each stop it with an error.
+
+Three rules need memory, persisted to `$CP_PATH/autoswitch-history.json`:
+
+| rule | what it stops |
+|---|---|
+| `within_min_dwell` | flapping between two models a few cents apart |
+| `not_enough_agreeing_cycles` | acting on one cycle's noise |
+| `daily_switch_limit_reached` | a planner bug costing a day of uptime |
+
+`EvaluateWithHistory` is deliberately separate from `Evaluate`: `inference plan`
+runs the stateless half and *names* what it has not checked, while the scheduler
+runs all of it. One function that silently skipped the stateful rules when given
+no history would make a dry run read as a green light it is not. A nil history is
+itself a refusal (`scheduler_history_unavailable`) — without it dwell and the
+daily cap cannot be honoured, so a crash loop would become a switch loop.
+
+Load-bearing details:
+
+- **A cycle records its proposal before the verdict**, so "two consecutive
+  cycles agree" counts the current one. Recording afterwards satisfies the rule
+  one cycle late — half an hour on the default interval, about an opportunity
+  the node had already decided on twice.
+- **Agreement is fingerprinted on the plan, not the prose.** The same switch
+  with a reworded reason is the same plan; fingerprinting the text would mean a
+  planner never agreed with itself.
+- **A failed cycle records a keep.** Two proposals either side of an outage did
+  not agree consecutively.
+- **A failed execution is not recorded as a switch.** It changed nothing, and
+  recording it would start a dwell period the node did not earn, blocking the
+  retry.
+- **Stops run before starts.** The models being stopped usually hold the VRAM
+  the new ones need.
+- **The scheduler never downloads.** Fetching 600 GB because a planner named a
+  model would saturate the operator's connection on a decision that took thirty
+  seconds. A model with no local weights is reported, not fetched.
+- **Stop waits for an in-flight cycle**, and shuts down before the inference
+  service — a cycle mid-switch needs the node intact to finish and record it.
 
 ### Switch notifications
 
