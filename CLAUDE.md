@@ -414,6 +414,44 @@ derived figures carry a 10% margin. The asymmetry is the design: an
 over-estimate declines a model that would have fitted; an under-estimate is an
 OOM partway through a load on a node that was serving traffic.
 
+### The agent: `internal/agent/`
+
+`computing-provider agent "<goal>"` gives a goal in plain language to a model
+this node already serves, along with `cp.md` and a fixed set of tools.
+
+**Bounded by its tools, not by its judgement.** There is no shell and no way to
+call anything outside the registry, so what a confused or manipulated model can
+do is exactly what those tools allow — which is why they are few, named, and
+individually reviewable. Tools that change the node carry `Acts: true`, are
+refused unless the operator passed `--allow-actions`, and still hit every
+guardrail a person running the same command would.
+
+**The grounding rule is the important one.** Asked what the node was earning,
+the planner wrote *"I need to check node_status"*, set `done` on the same turn,
+and returned a formatted table reporting **$142.80/day** — against a true
+**$0.0683**. It never called a tool. An operator would have acted on fiction.
+
+Prose in the prompt does not fix that; a model that ignores one instruction
+ignores another. So finishing with zero successful tool results is refused in
+code: the attempt is surfaced to the operator (`Ungrounded`), the model is told
+it has observed nothing and given the tool names again, and the run continues. A
+run that never looks at anything returns no figures at all.
+
+Three properties, each mutation-checked:
+
+- **No answer without evidence.** Zero observations means the answer is refused.
+- **Acting tools need permission**, decided per run by the operator, checked in
+  the loop rather than by each tool remembering to.
+- **Required arguments are verified before a tool runs.**
+
+Tool failures are fed back rather than ending the run — a wrong tool name or a
+missing argument is something a model can correct, and aborting would waste the
+episode on a typo. `MaxSteps` bounds a model that loops.
+
+Every step is printed, arguments included. An agent that changes a node while
+printing only conclusions gives the operator no way to stop it part way and no
+way to understand afterwards what it did.
+
 ### Model memory and `cp.md`: `internal/modelmem/`
 
 What the node has actually run, and what it actually cost. Published metadata

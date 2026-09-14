@@ -42,6 +42,7 @@ func main() {
 			dashboardCmd,
 			inferenceCmd,
 			modelsCmd,
+			agentCmd,
 			selfcheckCmd,
 			cliproxyCmd,
 			versionCmd,
@@ -62,6 +63,7 @@ func main() {
 			if c.Args().Present() {
 				firstArg := c.Args().First()
 				if strings.EqualFold(firstArg, researchCmd.Name) ||
+					strings.EqualFold(firstArg, agentCmd.Name) ||
 					strings.EqualFold(firstArg, dashboardCmd.Name) ||
 					strings.EqualFold(firstArg, inferenceCmd.Name) ||
 					strings.EqualFold(firstArg, modelsCmd.Name) ||
