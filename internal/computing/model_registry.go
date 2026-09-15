@@ -553,6 +553,29 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 	}
 
 	model.Enabled = true
+
+	// DisableModel sets State as well as the flag, and nothing else clears it:
+	// onHealthStatusChange only promotes Loading or Unhealthy to Ready, and
+	// deliberately leaves a disabled model disabled so a health check cannot
+	// silently undo an operator's decision. Without restoring State here, a
+	// re-enabled model serves and registers normally while reporting
+	// state "disabled" for the life of the process — which reads as an outage
+	// that is not happening.
+	//
+	// The state is derived from health rather than assumed Ready, so enabling a
+	// model whose backend is down does not claim otherwise. Unknown health
+	// becomes Loading, which the next check resolves.
+	if model.State == ModelStateDisabled {
+		switch model.Health {
+		case ModelHealthHealthy, ModelHealthDegraded:
+			model.State = ModelStateReady
+		case ModelHealthUnhealthy:
+			model.State = ModelStateUnhealthy
+		default:
+			model.State = ModelStateLoading
+		}
+		model.StateString = model.State.String()
+	}
 	model.UpdatedAt = time.Now()
 
 	logs.GetLogger().Infof("Enabled model: %s", modelID)
