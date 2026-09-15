@@ -12,6 +12,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/agent"
 	"github.com/swanchain/computing-provider-v2/internal/modelmem"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/term"
 )
 
 var agentCmd = &cli.Command{
@@ -70,6 +71,21 @@ Examples:
 		// reconstruct afterwards what it did.
 		if cctx.Bool("quiet") && cctx.Bool("allow-actions") {
 			return fmt.Errorf("--quiet cannot be combined with --allow-actions: a run that may change the node must show every step")
+		}
+
+		// Everything that makes an acting run defensible assumes an operator
+		// is reading the trace as it happens: the steps are printed so a
+		// surprising change can be interrupted part way. Detached from a
+		// terminal — a cron entry, a systemd timer, a CI job — nobody is, and
+		// the printed steps land in a file read after the fact if at all.
+		//
+		// The unattended path is the auto-switch scheduler, which is
+		// deliberately narrower: one decision, no free-form goal, and every
+		// guardrail applied before it acts. The agent takes an arbitrary goal
+		// from a model's interpretation, so the two should not be
+		// interchangeable.
+		if err := checkAttended(cctx.Bool("allow-actions"), isInteractive()); err != nil {
+			return err
 		}
 
 		cpRepoPath, err := repoPath(cctx)
@@ -215,3 +231,30 @@ func (c *consoleObserver) Ungrounded(step int, answer string) {
 }
 
 func (c *consoleObserver) Finished(string) {}
+
+// isInteractive reports whether an operator is plausibly watching: either end
+// of the run is still attached to a terminal.
+//
+// Either, not both, because the common ways of keeping a record while watching
+// break one of them. `agent ... | tee run.log` leaves stdout a pipe; `agent ...
+// > run.log` leaves it a file; both still have a terminal on stdin and a person
+// in front of it. What has neither is the case this guards: cron, a systemd
+// timer, a CI job.
+//
+// term.IsTerminal rather than os.ModeCharDevice: /dev/null is itself a
+// character device, so the cheaper test reports `< /dev/null` — how cron and
+// systemd routinely start things — as a terminal, which is exactly backwards.
+// checkAttended refuses an acting run that nobody is watching. Split from the
+// terminal detection so the rule can be tested without a pty.
+func checkAttended(allowActions, interactive bool) error {
+	if !allowActions || interactive {
+		return nil
+	}
+	return fmt.Errorf("--allow-actions needs a terminal: the agent prints every step so an operator can stop it part way, " +
+		"which means nothing when the run is detached. For unattended operation use the auto-switch scheduler " +
+		"([Inference.AutoSwitch] in config.toml), which acts on one narrow decision behind its own guardrails")
+}
+
+func isInteractive() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) || term.IsTerminal(int(os.Stdout.Fd()))
+}
