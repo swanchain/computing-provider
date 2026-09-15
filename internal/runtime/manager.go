@@ -331,6 +331,14 @@ func (m *Manager) Serve(ctx context.Context, spec *ServeSpec, opts ServeOptions)
 			return inst, fmt.Errorf("%s is running but could not be registered in models.json: %w", spec.ModelID, err)
 		}
 		opts.progress("Registered %s in models.json", spec.ModelID)
+
+		// Kept in step so the self-check's config/models.json agreement does
+		// not fail after every swap. A failure here is reported, not returned:
+		// the model is serving and models.json points at it, so the routing is
+		// correct and only the audit's copy of the list is stale.
+		if err := SyncConfigModels(m.cpRepoPath); err != nil {
+			opts.progress("Warning: could not update the Models list in config.toml: %v", err)
+		}
 	}
 
 	// Announced last, once the model is genuinely being served and declared.
@@ -358,6 +366,15 @@ type StopOptions struct {
 
 	// Decider is who asked: DeciderOperator or DeciderAutoSwitch.
 	Decider string
+
+	// Progress receives human-readable notes as the stop proceeds. Optional.
+	Progress func(string)
+}
+
+func (o *StopOptions) progress(format string, args ...interface{}) {
+	if o != nil && o.Progress != nil {
+		o.Progress(fmt.Sprintf(format, args...))
+	}
 }
 
 // Stop takes a model server down and stops declaring the model.
@@ -391,6 +408,9 @@ func (m *Manager) Stop(ctx context.Context, modelID string, opts StopOptions) (*
 	// deregistered model whose container is still serving is invisible.
 	if err := DeregisterModel(m.cpRepoPath, modelID, inst.Endpoint); err != nil {
 		return &inst, fmt.Errorf("%s was stopped but could not be removed from models.json: %w", modelID, err)
+	}
+	if err := SyncConfigModels(m.cpRepoPath); err != nil {
+		opts.progress("Warning: could not update the Models list in config.toml: %v", err)
 	}
 
 	inst.Status = "stopped"
