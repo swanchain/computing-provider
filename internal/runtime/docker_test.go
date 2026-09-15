@@ -100,8 +100,9 @@ func TestRunArgsNormalisesGPUSelector(t *testing.T) {
 	cases := map[string]string{
 		"":           "all",
 		"all":        "all",
-		"0,1":        "device=0,1",
-		"device=2,3": "device=2,3",
+		"0,1":        `"device=0,1"`,
+		"device=2,3": `"device=2,3"`,
+		"0,1,2,3":    `"device=0,1,2,3"`,
 	}
 	for in, want := range cases {
 		spec := &ServeSpec{ModelID: "m", Backend: "vllm", Weights: "/w", GPUs: in}
@@ -230,8 +231,9 @@ func TestNormaliseGPUs(t *testing.T) {
 		"none":       "",
 		"None":       "",
 		"0":          "device=0",
-		"0,1":        "device=0,1",
-		"device=2,3": "device=2,3",
+		"0,1":        `"device=0,1"`,
+		"device=2,3": `"device=2,3"`,
+		"0,1,2,3":    `"device=0,1,2,3"`,
 	}
 	for in, want := range cases {
 		if got := normaliseGPUs(in); got != want {

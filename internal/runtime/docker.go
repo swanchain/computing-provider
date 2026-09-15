@@ -150,8 +150,22 @@ func normaliseGPUs(selector string) string {
 	case strings.EqualFold(gpus, "all"):
 		return "all"
 	case strings.HasPrefix(gpus, "device="):
-		return gpus
+		return quoteDeviceList(gpus)
 	default:
-		return "device=" + gpus
+		return quoteDeviceList("device=" + gpus)
 	}
+}
+
+// quoteDeviceList wraps a multi-device selector in literal double quotes.
+//
+// Docker parses the --gpus value as CSV, so an unquoted "device=2,3" splits
+// into "device=2" and a bare "3" — and a bare number is read as a device
+// *count*, which fails as "cannot set both Count and DeviceIDs". The quotes
+// have to survive into the argv element itself, since we exec docker directly
+// rather than through a shell that would strip them.
+func quoteDeviceList(gpus string) string {
+	if !strings.Contains(gpus, ",") {
+		return gpus
+	}
+	return `"` + gpus + `"`
 }
