@@ -924,6 +924,10 @@ var inferenceSetBeneficiaryCmd = &cli.Command{
 		fmt.Println()
 		color.Green("Beneficiary address updated!")
 		fmt.Printf("Rewards will be sent to: %s\n", address)
+		// Said here because the wait is only discovered by hitting it: a
+		// payout requested right after a change is refused, and nothing on
+		// this command explained why.
+		color.Yellow("Note: payouts to a newly changed address are held for 24 hours.")
 		fmt.Println()
 
 		return nil
