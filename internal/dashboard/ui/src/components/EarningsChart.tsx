@@ -182,6 +182,12 @@ export function EarningsChart({ models }: EarningsChartProps) {
   // different claims, and only the second reconciles with what is paid.
   const authoritativePoints = data?.authoritative_points ?? 0;
   const allAuthoritative = points.length > 0 && authoritativePoints === points.length;
+  const fromPlatform = data?.source === 'platform';
+  // Subscription work is paid at the full rate only provisionally: it is
+  // pro-rated when its billing period closes, so it cannot be presented as
+  // money already earned.
+  const subscriptionUSD = data?.subscription_usd ?? 0;
+  const proRates = Object.entries(data?.subscription_pro_rate ?? {}).sort(([a], [b]) => a.localeCompare(b));
   const peak = points.reduce((m, p) => Math.max(m, p.usd), 0);
   const activeIndex = hovered;
   const active = activeIndex !== null ? points[activeIndex] : null;
@@ -257,7 +263,9 @@ export function EarningsChart({ models }: EarningsChartProps) {
               ? 'Loading…'
               : error && data
                 ? `${formatUSD(data.total_usd)} · showing stale data`
-                : `${formatUSD(data?.total_usd ?? 0)} in this window`}
+                : subscriptionUSD > 0
+                  ? `${formatUSD(data?.pay_as_you_go_usd ?? 0)} settled + up to ${formatUSD(subscriptionUSD)} subscription in this window`
+                  : `${formatUSD(data?.total_usd ?? 0)} in this window`}
           </p>
         </div>
         <div className="flex gap-1" role="group" aria-label="Time window">
@@ -299,6 +307,12 @@ export function EarningsChart({ models }: EarningsChartProps) {
                     <span className="text-slate-500">· hover a bar for one interval</span>
                   )}
                 </div>
+                {active && (active.subscription_usd ?? 0) > 0 && (
+                  <div className="mt-0.5 text-[11px] text-slate-400">
+                    {formatUSD(active.pay_as_you_go_usd ?? 0)} pay-as-you-go · up to{' '}
+                    {formatUSD(active.subscription_usd ?? 0)} subscription
+                  </div>
+                )}
                 {activeSegments.length > 0 ? (
                   <ul className="mt-1 space-y-0.5 text-[11px]">
                     {activeSegments.map((s) => (
@@ -414,7 +428,26 @@ export function EarningsChart({ models }: EarningsChartProps) {
 
       <p className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
+        {fromPlatform ? (
+          <span>
+            From Swan Inference’s own earnings records, split by model as the platform recorded it.
+            {subscriptionUSD > 0 &&
+              ` ${formatUSD(subscriptionUSD)} of it is subscription work, accrued at the full rate and pro-rated when its billing period closes — an upper bound until then.`}
+            {proRates.map(([period, r]) => (
+              <span key={period}>
+                {' '}
+                {period}:{' '}
+                {r.settled
+                  ? `settled at ${(r.ratio * 100).toFixed(1)}%.`
+                  : r.determined
+                    ? `running at ${(r.ratio * 100).toFixed(1)}%, not final.`
+                    : 'ratio not yet known.'}
+              </span>
+            ))}
+          </span>
+        ) : (
         <span>
+          {data?.platform_error && `Swan Inference’s earnings history could not be read (${data.platform_error}). `}
           {allAuthoritative
             ? 'From Swan Inference’s own earnings figure, sampled and differenced per interval.'
             : authoritativePoints > 0
@@ -426,6 +459,7 @@ export function EarningsChart({ models }: EarningsChartProps) {
             ` The counters reset ${data?.restarts} time(s) in this window, so estimated intervals are a floor.`}
           {data?.covers && ` History reaches back ${data.covers}.`}
         </span>
+        )}
       </p>
     </div>
   );

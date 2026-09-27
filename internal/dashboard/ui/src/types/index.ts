@@ -256,6 +256,21 @@ export interface EarningsPoint {
    * lifetime figure, rather than from local token counts at published rates.
    */
   authoritative?: boolean;
+  /** Platform points only: the part billed per request, already settled. */
+  pay_as_you_go_usd?: number;
+  /**
+   * Platform points only: subscription work, accrued at the full rate and
+   * pro-rated when its billing period closes — an upper bound until then.
+   */
+  subscription_usd?: number;
+  requests?: number;
+}
+
+export interface SubscriptionProRate {
+  ratio: number;
+  settled: boolean;
+  /** False while an open period's ratio means nothing yet. */
+  determined: boolean;
 }
 
 export interface EarningsSeries {
@@ -271,6 +286,51 @@ export interface EarningsSeries {
   bucket_seconds?: number;
   /** How many points came from the platform's ledger rather than local pricing. */
   authoritative_points?: number;
+  /** "platform" when read from Swan Inference's earnings history, "local" otherwise. */
+  source?: 'platform' | 'local';
+  /** Why the platform's history could not be used, when source is local. */
+  platform_error?: string;
+  /** True when the split by model is the platform's own. */
+  model_split_authoritative?: boolean;
+  pay_as_you_go_usd?: number;
+  subscription_usd?: number;
+  /** Keyed by billing period, e.g. "2026-09". */
+  subscription_pro_rate?: Record<string, SubscriptionProRate>;
+}
+
+/** Swan Inference's own record of one model this provider offers or offered. */
+export interface HubModel {
+  model_id: string;
+  model_name: string;
+  context_length: number;
+  /** How the platform arrived at context_length: reported, capped, assumed, … */
+  context_source: string;
+  input_price: number;
+  output_price: number;
+  capacity: number;
+  available: number;
+  total_requests: number;
+  total_tokens: number;
+  throughput_tok_per_s: number;
+  offering_source?: string;
+  plan_covered?: boolean;
+  recent_success_count: number;
+  recent_failure_count: number;
+  /** Dispatches that failed before producing a billable answer. */
+  dispatch_failures?: number;
+  success_count: number;
+  failure_count: number;
+  last_request_at?: string;
+  /** Whether the node is advertising the model now; false rows are history. */
+  offered: boolean;
+  registered_locally: boolean;
+}
+
+export interface HubModelView {
+  models: HubModel[];
+  /** Registered by this node but not offered on the platform; work served for them may not be credited. */
+  not_listed: string[];
+  error?: string;
 }
 
 export interface RequestLog {

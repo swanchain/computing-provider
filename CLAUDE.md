@@ -654,6 +654,23 @@ This is the provider's own arithmetic and the UI says so. The platform's figure
 is authoritative; the local one is worth showing beside it because the two can
 disagree, and the disagreement is the useful part.
 
+`GET /inference/earnings/history` reads the platform's own bucketed history
+(`/provider/me/earnings/history`) for the 24h/7d/30d windows and falls back to
+the local estimate only when that cannot be read; the response's `source` says
+which, and `platform_error` says why. The platform splits each bucket into
+pay-as-you-go and subscription work, and the UI keeps them apart: subscription
+work is pro-rated when its billing period closes, so it is an upper bound until
+then and must not be shown as settled money.
+
+`GET /inference/hub/models` sets the platform's per-model view of this provider
+beside the node's registered list. `not_listed` names models this node
+registers that the platform does not hold as offered. Do not read that as "no
+traffic": the hub can still route requests for such a model over the
+connection and the node will serve them, but with no offering the work is
+missing from the platform's per-model records and may not be credited. The
+node sees only the requests, never the missing credit, so this is the one
+place the gap shows.
+
 Show the operator their own rates and totals. The marketplace-economics material
 listed at the top of this file stays out of this repo.
 
