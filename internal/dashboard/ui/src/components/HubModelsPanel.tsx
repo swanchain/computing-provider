@@ -90,7 +90,7 @@ export function HubModelsPanel() {
             Swan Inference does not list {notListed.length === 1 ? 'this model' : 'these models'} as offered by this
             provider, though this node registers {notListed.length === 1 ? 'it' : 'them'}:{' '}
             <span className="break-all font-mono">{notListed.join(', ')}</span>. Requests can still arrive and be
-            served, but with no offering the work may not be credited — check its earnings above.
+            served, but with no offering the work may not be credited — compare the earnings chart.
           </span>
         </div>
       )}
