@@ -162,6 +162,23 @@ type AckPayload struct {
 	RequestID string `json:"request_id"`
 	Success   bool   `json:"success"`
 	Message   string `json:"message,omitempty"`
+	// The two fields below arrive only on the register ack, and only from a
+	// hub new enough to send them; heartbeat acks leave both empty.
+
+	// UpgradeAvailable says a newer release exists. Advisory: nothing is
+	// withheld from an older build.
+	UpgradeAvailable *UpgradeAdvisory `json:"upgrade_available,omitempty"`
+	// RegisteredModels is the list the hub actually holds for this connection
+	// after processing the register, which can differ from what was sent: IDs
+	// are canonicalised on arrival and an unknown model is dropped silently.
+	RegisteredModels []string `json:"registered_models,omitempty"`
+}
+
+// UpgradeAdvisory is the upgrade half of the register ack.
+type UpgradeAdvisory struct {
+	Running string `json:"running,omitempty"` // build this agent reported
+	Latest  string `json:"latest"`            // newest release available
+	Message string `json:"message,omitempty"` // ready-to-log sentence
 }
 
 // ErrorPayload for error responses
@@ -311,11 +328,28 @@ type InferenceClient struct {
 	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
 	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
 	modelContextsProvider     func() map[string]ModelContextInfo // Per-model real context window and how it was determined (#61)
+	modelCapacityProvider     func(modelID string) int           // Concurrent requests this agent will run for a model; 0 = unknown
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
 	// Cached hardware info (detected once at registration)
 	hardware *HardwareInfo
+
+	// Weight hashes from each model's manifest, keyed by model ID. Loaded at
+	// registration and reused by every declaration after it: the hub reads
+	// only model_declarations when they are present, so a hash that is not
+	// in the declaration is never seen, and heartbeats should not re-read a
+	// manifest from disk every interval. A model with no manifest is cached
+	// too, as an empty entry.
+	weightHashMu sync.Mutex
+	weightHashes map[string]ModelInfo
+	modelsRoot   string // overrides ~/.swan/models; tests only
+
+	// The hub's side of the last register ack.
+	hubMu            sync.RWMutex
+	hubModels        []string         // what the hub says this connection serves
+	upgradeAdvisory  *UpgradeAdvisory // newer release announced by the hub, if any
+	upgradeLoggedFor string           // Latest already logged, so reconnects do not repeat it
 
 	// Heartbeat ack tracking
 	lastHeartbeatAck time.Time // Last time we received an ack for a heartbeat
@@ -429,6 +463,97 @@ func (c *InferenceClient) SetModelMappingsProvider(provider func() map[string]Mo
 // context window (manual override or backend-detected) for register/heartbeat
 func (c *InferenceClient) SetModelContextsProvider(provider func() map[string]ModelContextInfo) {
 	c.modelContextsProvider = provider
+}
+
+// recordHubView keeps what the hub reported on a register ack and tells the
+// operator where it disagrees with this node. Acks that carry neither field —
+// every heartbeat ack, and every ack from an older hub — change nothing.
+func (c *InferenceClient) recordHubView(ack AckPayload) {
+	if ack.RegisteredModels != nil {
+		local := c.ModelList()
+
+		c.hubMu.Lock()
+		c.hubModels = append([]string(nil), ack.RegisteredModels...)
+		c.hubMu.Unlock()
+
+		missing, extra := diffModelLists(local, ack.RegisteredModels)
+		if len(missing) > 0 {
+			logs.GetLogger().Warnf("Swan Inference did not register %d model(s) this node declared, so no requests will be routed for them: %s",
+				len(missing), strings.Join(missing, ", "))
+		}
+		if len(extra) > 0 {
+			logs.GetLogger().Warnf("Swan Inference holds %d model(s) for this node that it did not declare: %s",
+				len(extra), strings.Join(extra, ", "))
+		}
+	}
+
+	if adv := ack.UpgradeAvailable; adv != nil && adv.Latest != "" {
+		c.hubMu.Lock()
+		c.upgradeAdvisory = adv
+		first := c.upgradeLoggedFor != adv.Latest
+		c.upgradeLoggedFor = adv.Latest
+		c.hubMu.Unlock()
+
+		// Once per release, not once per reconnect.
+		if first {
+			msg := adv.Message
+			if msg == "" {
+				msg = fmt.Sprintf("computing-provider %s is available (running %s)", adv.Latest, adv.Running)
+			}
+			logs.GetLogger().Warnf("Upgrade available: %s", msg)
+		}
+	}
+}
+
+// diffModelLists reports models in local but not in hub, and in hub but not
+// in local.
+func diffModelLists(local, hub []string) (missing, extra []string) {
+	inHub := make(map[string]bool, len(hub))
+	for _, m := range hub {
+		inHub[m] = true
+	}
+	inLocal := make(map[string]bool, len(local))
+	for _, m := range local {
+		inLocal[m] = true
+		if !inHub[m] {
+			missing = append(missing, m)
+		}
+	}
+	for _, m := range hub {
+		if !inLocal[m] {
+			extra = append(extra, m)
+		}
+	}
+	return missing, extra
+}
+
+// HubRegisteredModels is the model list the hub reported on the last register
+// ack, or nil if it has not reported one.
+func (c *InferenceClient) HubRegisteredModels() []string {
+	c.hubMu.RLock()
+	defer c.hubMu.RUnlock()
+	if c.hubModels == nil {
+		return nil
+	}
+	return append([]string(nil), c.hubModels...)
+}
+
+// UpgradeAvailable is the hub's last upgrade advisory, or nil.
+func (c *InferenceClient) UpgradeAvailable() *UpgradeAdvisory {
+	c.hubMu.RLock()
+	defer c.hubMu.RUnlock()
+	if c.upgradeAdvisory == nil {
+		return nil
+	}
+	adv := *c.upgradeAdvisory
+	return &adv
+}
+
+// SetModelCapacityProvider sets the function that returns how many requests
+// for each model this agent will run at once, declared to the hub as the
+// model's concurrency capacity.
+func (c *InferenceClient) SetModelCapacityProvider(provider func(modelID string) int) {
+	c.modelCapacityProvider = provider
 }
 
 // ProviderStatusResponse represents the status check response from Swan Inference
@@ -1394,6 +1519,7 @@ func (c *InferenceClient) handleMessage(msg Message) {
 			c.missedAcks = 0
 			c.mu.Unlock()
 			logs.GetLogger().Infof("Registration successful: %s", payload.Message)
+			c.recordHubView(payload)
 
 			// Send current model health immediately after first registration so the hub
 			// has up-to-date health status. Without this, health updates that fired
@@ -2157,6 +2283,7 @@ func (c *InferenceClient) buildModelMetadata() []ModelInfo {
 // loadModelHashes loads hash manifests for all configured models
 func (c *InferenceClient) loadModelHashes() []ModelInfo {
 	hashes := make([]ModelInfo, 0, len(c.models))
+	cache := make(map[string]ModelInfo, len(c.models))
 
 	// Get model mappings for format/quantization
 	var mappings map[string]ModelMapping
@@ -2183,28 +2310,62 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 		info.ContextLength = contexts[modelID].Length
 		info.ContextSource = declaredContextSource(contexts[modelID])
 
-		modelDir := c.getModelDir(modelID)
-		manifest, err := models.LoadHashManifest(modelDir)
-		if err != nil {
-			logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
-			hashes = append(hashes, info)
-			continue
-		}
-
-		if manifest != nil {
-			info.WeightHash = manifest.CompositeHash
-			info.HashAlgo = manifest.Algorithm
-			logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, manifest.CompositeHash[:16]+"...")
-		}
+		h := c.readWeightHash(modelID, true)
+		info.WeightHash, info.HashAlgo = h.WeightHash, h.HashAlgo
+		cache[modelID] = h
 
 		hashes = append(hashes, info)
 	}
 
+	c.weightHashMu.Lock()
+	c.weightHashes = cache
+	c.weightHashMu.Unlock()
+
 	return hashes
+}
+
+// readWeightHash reads a model's hash manifest. The result carries only the
+// hash fields; it is empty when there is no manifest or it cannot be read.
+func (c *InferenceClient) readWeightHash(modelID string, verbose bool) ModelInfo {
+	manifest, err := models.LoadHashManifest(c.getModelDir(modelID))
+	if err != nil {
+		logs.GetLogger().Warnf("Failed to load hash manifest for %s: %v", modelID, err)
+		return ModelInfo{}
+	}
+	if manifest == nil || manifest.CompositeHash == "" {
+		return ModelInfo{}
+	}
+	if verbose {
+		short := manifest.CompositeHash
+		if len(short) > 16 {
+			short = short[:16] + "..."
+		}
+		logs.GetLogger().Infof("Loaded hash manifest for %s: %s", modelID, short)
+	}
+	return ModelInfo{WeightHash: manifest.CompositeHash, HashAlgo: manifest.Algorithm}
+}
+
+// weightHashFor returns a model's cached weight hash, reading the manifest
+// once for a model added since registration.
+func (c *InferenceClient) weightHashFor(modelID string) ModelInfo {
+	c.weightHashMu.Lock()
+	defer c.weightHashMu.Unlock()
+	if h, ok := c.weightHashes[modelID]; ok {
+		return h
+	}
+	h := c.readWeightHash(modelID, true)
+	if c.weightHashes == nil {
+		c.weightHashes = make(map[string]ModelInfo)
+	}
+	c.weightHashes[modelID] = h
+	return h
 }
 
 // getModelDir returns the local directory for a model's weight files
 func (c *InferenceClient) getModelDir(modelID string) string {
+	if c.modelsRoot != "" {
+		return filepath.Join(c.modelsRoot, modelID)
+	}
 	home, err := homedir.Dir()
 	if err != nil {
 		home = "."
@@ -2530,7 +2691,6 @@ func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
 	if c.modelMappingsProvider != nil {
 		mappings = c.modelMappingsProvider()
 	}
-
 	decls := make([]ModelDeclaration, 0, len(c.models))
 	for _, modelID := range c.models {
 		mapping := mappings[modelID]
@@ -2545,9 +2705,25 @@ func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
 			InputModalities:  in,
 			OutputModalities: out,
 		}
+		h := c.weightHashFor(modelID)
+		d.WeightHash, d.HashAlgo = h.WeightHash, h.HashAlgo
+		if n := c.declaredCapacity(modelID); n > 0 {
+			d.Capacity = []DeclaredCapacity{{Type: "concurrency", Unit: "request", Value: int64(n)}}
+		}
 		decls = append(decls, d)
 	}
 	return decls
+}
+
+// declaredCapacity is how many requests for a model this agent runs at once.
+// The hub cannot see the agent's queue, so without this it assumes the
+// built-in default and keeps routing to a node whose operator lowered the
+// limit, where the excess waits in a queue it reads as a slow first token.
+func (c *InferenceClient) declaredCapacity(modelID string) int {
+	if c.modelCapacityProvider == nil {
+		return 0
+	}
+	return c.modelCapacityProvider(modelID)
 }
 
 // detectEngineName reports the serving runtime when models.json makes it

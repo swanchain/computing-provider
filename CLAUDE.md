@@ -614,6 +614,16 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `notice` | ← Server | Operational notice, forwarded to the operator's configured `[Alerts]` transports |
 | `ack` | Both | Acknowledgment |
 
+The hub reads `model_declarations` in place of `model_hashes` whenever both
+are present, so a field that is only in `model_hashes` never reaches it. Each
+declaration carries the weight hash from the model's manifest and a
+`concurrency` capacity taken from the concurrency limiter — without that the
+hub assumes the built-in default of 10 and keeps routing to a node whose
+operator lowered it. The register `ack` carries the hub's own
+`registered_models` and an `upgrade_available` advisory; a mismatch between the
+hub's list and this node's is logged, and both appear on `GET /inference/status`
+as `hub_registered_models` and `upgrade_available`.
+
 ### Alert email
 
 Alerts are sent as `multipart/alternative`: a styled HTML part and a plain-text

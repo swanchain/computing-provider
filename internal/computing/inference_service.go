@@ -292,6 +292,12 @@ func (s *InferenceService) Start() error {
 	// route against actual capacity instead of the catalog value (#61)
 	s.client.SetModelContextsProvider(s.resolveModelContexts)
 
+	// Declare how many requests per model this agent runs at once, so the hub
+	// routes against the operator's limit rather than the built-in default.
+	if s.concurrencyLimiter != nil {
+		s.client.SetModelCapacityProvider(s.concurrencyLimiter.ModelCapacity)
+	}
+
 	// Engine probes are real completions and consume the same capacity as
 	// routed work, so they belong in the request history rather than being
 	// invisible traffic against the operator's GPUs.
@@ -750,6 +756,23 @@ func (s *InferenceService) GetRegisteredModels() []string {
 		return nil
 	}
 	return s.client.ModelList()
+}
+
+// GetHubRegisteredModels returns the model list the hub reported holding for
+// this node at the last registration, or nil if it has not reported one.
+func (s *InferenceService) GetHubRegisteredModels() []string {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.HubRegisteredModels()
+}
+
+// GetUpgradeAvailable returns the hub's upgrade advisory, or nil.
+func (s *InferenceService) GetUpgradeAvailable() *UpgradeAdvisory {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.UpgradeAvailable()
 }
 
 // GetMetrics returns a snapshot of the current inference metrics
