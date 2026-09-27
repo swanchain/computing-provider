@@ -664,8 +664,12 @@ then and must not be shown as settled money.
 
 `GET /inference/hub/models` sets the platform's per-model view of this provider
 beside the node's registered list. `not_listed` names models this node
-registers that the platform does not hold as offered — they get no traffic,
-and nothing on the node itself shows it.
+registers that the platform does not hold as offered. Do not read that as "no
+traffic": the hub can still route requests for such a model over the
+connection and the node will serve them, but with no offering the work is
+missing from the platform's per-model records and may not be credited. The
+node sees only the requests, never the missing credit, so this is the one
+place the gap shows.
 
 Show the operator their own rates and totals. The marketplace-economics material
 listed at the top of this file stays out of this repo.

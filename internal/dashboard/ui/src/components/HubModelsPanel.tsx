@@ -9,9 +9,10 @@ import type { HubModel } from '../types';
  *
  * The node's model panel says what this node is serving. This one says what
  * the platform believes it is serving, and the two disagree in ways that cost
- * traffic without any local symptom: a model the node registers that the
- * platform does not list receives no requests, and a failure that happened
- * before a request was billed is visible only on the platform's side.
+ * money without any local symptom: a model the node registers that the
+ * platform does not list can still be sent requests and served, yet have no
+ * offering to credit the work to, and a failure that happened before a
+ * request was billed is visible only on the platform's side.
  */
 
 const HUB_POLL_MS = 120_000; // the backend caches the platform's answer for two minutes
@@ -86,9 +87,10 @@ export function HubModelsPanel() {
         <div role="alert" className="flex items-start gap-2 border-b border-slate-800 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
           <AlertTriangle aria-hidden="true" size={14} className="mt-px shrink-0" />
           <span>
-            This node registers {notListed.length === 1 ? 'a model' : `${notListed.length} models`} the platform
-            does not list as offered, so {notListed.length === 1 ? 'it receives' : 'they receive'} no traffic:{' '}
-            <span className="break-all font-mono">{notListed.join(', ')}</span>
+            Swan Inference does not list {notListed.length === 1 ? 'this model' : 'these models'} as offered by this
+            provider, though this node registers {notListed.length === 1 ? 'it' : 'them'}:{' '}
+            <span className="break-all font-mono">{notListed.join(', ')}</span>. Requests can still arrive and be
+            served, but with no offering the work may not be credited — check its earnings above.
           </span>
         </div>
       )}

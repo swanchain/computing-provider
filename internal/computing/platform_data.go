@@ -304,7 +304,8 @@ func PlatformSpans(window string) (duration, bucket string, ok bool) {
 type HubModelView struct {
 	Models []HubModelRow `json:"models"`
 	// NotListed are models this node registers that the platform does not
-	// hold as offered. They receive no traffic.
+	// hold as offered. Requests for them can still arrive over the
+	// connection, but with no offering the work may not be credited.
 	NotListed []string `json:"not_listed"`
 	// Error is set when the platform could not be reached; Models is then
 	// empty rather than a guess.

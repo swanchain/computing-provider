@@ -546,7 +546,8 @@ func runDaemon(cctx *cli.Context) error {
 
 	// The platform's per-model view of this provider beside the node's own
 	// registered list. A model this node registers that the platform does not
-	// hold as offered receives no traffic, and nothing else shows it.
+	// hold as offered can still be sent requests, but is missing from the
+	// platform's offerings and may not be credited; nothing else shows it.
 	router.GET("/inference/hub/models", func(c *gin.Context) {
 		platform, err := providerStats.Models(c.Request.Context())
 		if err != nil {

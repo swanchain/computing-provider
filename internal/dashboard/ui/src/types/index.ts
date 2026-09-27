@@ -328,7 +328,7 @@ export interface HubModel {
 
 export interface HubModelView {
   models: HubModel[];
-  /** Registered by this node but not offered on the platform: no traffic. */
+  /** Registered by this node but not offered on the platform; work served for them may not be credited. */
   not_listed: string[];
   error?: string;
 }
