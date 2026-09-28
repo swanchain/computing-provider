@@ -12,6 +12,7 @@ import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
 import { UsageChart } from './components/UsageChart';
+import type { ModelColourMap } from './lib/modelPalette';
 import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
@@ -42,6 +43,9 @@ function viewFromHash(): DashboardView {
 
 function App() {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  // One model-colour map for the usage and earnings charts, owned by the
+  // earnings chart, so a model is the same colour in both.
+  const [modelColours, setModelColours] = useState<ModelColourMap | null>(null);
   const [activeView, setActiveView] = useState<DashboardView>(viewFromHash);
   const [authenticated, setAuthenticated] = useState(false);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
@@ -291,11 +295,11 @@ function App() {
                   <section aria-labelledby="earnings-heading">
                     <div className="mb-3">
                       <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
-                      <p className="mt-1 text-sm text-slate-300">What the GPUs served, by source, beside what Swan Inference paid for.</p>
+                      <p className="mt-1 text-sm text-slate-300">What the GPUs served, by model or source, beside what Swan Inference paid for.</p>
                     </div>
                     <div className="min-w-0 space-y-4">
-                      <UsageChart />
-                      <EarningsChart models={earnings?.models} />
+                      <UsageChart models={earnings?.models} colours={modelColours} />
+                      <EarningsChart models={earnings?.models} onColours={setModelColours} />
                       <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
                     </div>
                   </section>
