@@ -265,14 +265,26 @@ func (b *BackendUsageSampler) Status() []BackendEndpointStatus {
 }
 
 // generatedDeltas turns an endpoint's cumulative samples, oldest first, into
-// tokens generated per bucket. A counter that goes down means the server
-// restarted; the new reading is then the work done since.
+// tokens generated per bucket.
 func generatedDeltas(samples []BackendUsageSample, bucketOf func(time.Time) time.Time) map[time.Time]float64 {
+	return counterDeltas(samples, bucketOf, func(s BackendUsageSample) float64 { return s.Generated })
+}
+
+// promptDeltas is generatedDeltas for the prompt counter: prompt tokens the
+// server processed, which excludes tokens served from its prompt cache.
+func promptDeltas(samples []BackendUsageSample, bucketOf func(time.Time) time.Time) map[time.Time]float64 {
+	return counterDeltas(samples, bucketOf, func(s BackendUsageSample) float64 { return s.Prompt })
+}
+
+// counterDeltas turns one cumulative counter into its increase per bucket. A
+// counter that goes down means the server restarted; the new reading is then
+// the work done since.
+func counterDeltas(samples []BackendUsageSample, bucketOf func(time.Time) time.Time, value func(BackendUsageSample) float64) map[time.Time]float64 {
 	out := make(map[time.Time]float64)
 	for i := 1; i < len(samples); i++ {
-		d := samples[i].Generated - samples[i-1].Generated
+		d := value(samples[i]) - value(samples[i-1])
 		if d < 0 {
-			d = samples[i].Generated
+			d = value(samples[i])
 		}
 		if d > 0 {
 			out[bucketOf(samples[i].Time)] += d

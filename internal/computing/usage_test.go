@@ -241,3 +241,84 @@ func TestLocalGatewayBindsLoopbackOnly(t *testing.T) {
 		t.Errorf("gateway bound to %q; it has no authentication and must stay on loopback", srv.Addr)
 	}
 }
+
+func glmSeries(records []usageRecord, samples []BackendUsageSample, from time.Time, hours int) UsageSeries {
+	return BuildUsageSeries(records, map[string][]BackendUsageSample{"http://g": samples},
+		map[string][]string{"http://g": {"g"}}, from, from.Add(time.Duration(hours)*time.Hour), time.Hour, "24h")
+}
+
+// A request recorded in one hour but generated mostly in the next leaves a
+// shortfall then a surplus of the same size. That is timing, and must net out
+// rather than surface as direct usage.
+func TestDirectNetsAcrossABucketEdge(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	records := []usageRecord{{Model: "g", Source: "hub", StartTime: from.Add(59 * time.Minute), TokensOut: 500}}
+	samples := []BackendUsageSample{
+		{Time: from.Add(-time.Minute), Generated: 0},
+		{Time: from.Add(59*time.Minute + 30*time.Second), Generated: 10},
+		{Time: from.Add(62 * time.Minute), Generated: 500},
+	}
+	s := glmSeries(records, samples, from, 2)
+	for i, p := range s.Points {
+		if d, ok := p.Sources[SourceDirect]; ok && d.TokensOut != 0 {
+			t.Errorf("hour %d reports %d direct tokens from a request that straddled the edge", i, d.TokensOut)
+		}
+	}
+}
+
+// The carry is one bucket deep: a shortfall must not hide direct usage that
+// happens hours later.
+func TestDirectCarryDoesNotPersist(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	records := []usageRecord{{Model: "g", Source: "hub", StartTime: from.Add(10 * time.Minute), TokensOut: 1000}}
+	samples := []BackendUsageSample{
+		{Time: from.Add(-time.Minute), Generated: 0},
+		{Time: from.Add(30 * time.Minute), Generated: 0},     // hour 0: recorded 1000, counted 0
+		{Time: from.Add(90 * time.Minute), Generated: 0},     // hour 1: nothing
+		{Time: from.Add(150 * time.Minute), Generated: 700}, // hour 2: 700 nobody recorded
+	}
+	s := glmSeries(records, samples, from, 3)
+	if got := s.Points[2].Sources[SourceDirect].TokensOut; got != 700 {
+		t.Errorf("hour 2 direct = %d, want 700 — an old shortfall swallowed it", got)
+	}
+}
+
+// Direct input is a floor: the server's prompt counter skips cache hits, so
+// only the part it processed beyond what the node recorded is certain.
+func TestDirectInputIsALowerBound(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	records := []usageRecord{
+		{Model: "g", Source: "hub", StartTime: from.Add(5 * time.Minute), TokensIn: 5000}, // mostly cache hits
+		{Model: "g", Source: "hub", StartTime: from.Add(65 * time.Minute), TokensIn: 100},
+	}
+	samples := []BackendUsageSample{
+		{Time: from.Add(-time.Minute)},
+		{Time: from.Add(30 * time.Minute), Prompt: 800},   // processed less than recorded: cache
+		{Time: from.Add(90 * time.Minute), Prompt: 10800}, // 10000 processed, 100 recorded
+	}
+	s := glmSeries(records, samples, from, 2)
+	if d, ok := s.Points[0].Sources[SourceDirect]; ok && d.TokensIn != 0 {
+		t.Errorf("hour 0 direct input = %d; cache hits must not read as direct work", d.TokensIn)
+	}
+	if got := s.Points[1].Sources[SourceDirect].TokensIn; got != 9900 {
+		t.Errorf("hour 1 direct input = %d, want at least 10000-100", got)
+	}
+}
+
+// The bucket where measurement begins is partial and is not judged.
+func TestDirectSkipsThePartlyMeasuredBucket(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	records := []usageRecord{{Model: "g", Source: "hub", StartTime: from.Add(5 * time.Minute), TokensOut: 900}}
+	samples := []BackendUsageSample{
+		{Time: from.Add(40 * time.Minute), Generated: 0}, // sampling starts mid-hour 0
+		{Time: from.Add(50 * time.Minute), Generated: 20},
+		{Time: from.Add(80 * time.Minute), Generated: 320}, // hour 1: 300 nobody recorded
+	}
+	s := glmSeries(records, samples, from, 2)
+	if _, ok := s.Points[0].Sources[SourceDirect]; ok {
+		t.Error("the partly measured hour was judged")
+	}
+	if got := s.Points[1].Sources[SourceDirect].TokensOut; got != 300 {
+		t.Errorf("hour 1 direct = %d, want 300 (no carry from the unmeasured part of hour 0)", got)
+	}
+}

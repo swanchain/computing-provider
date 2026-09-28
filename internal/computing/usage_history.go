@@ -17,7 +17,14 @@ import (
 // is GPU time that earned nothing.
 
 // SourceDirect labels work a model server did that the node never handled,
-// derived from the server's own counters. It carries generated tokens only.
+// derived from the server's own counters.
+//
+// Its output tokens are the server's generated count minus what the node
+// recorded. Its input tokens are a lower bound, never an estimate: the
+// server's prompt counter excludes prompt-cache hits while recorded requests
+// include them, so the true figure is at least the difference and can only be
+// higher. Where the node's own traffic hits the cache heavily the difference
+// is negative and the bound says nothing, which is reported as zero.
 const SourceDirect = "direct"
 
 // UsageTotals is traffic from one source.
@@ -105,9 +112,10 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 		s.Totals[source] = tot
 	}
 
-	// Generated tokens the node recorded, per model per bucket, from every
-	// source: the node's own work on an endpoint is not direct usage.
+	// Tokens the node recorded, per model per bucket, from every source: the
+	// node's own work on an endpoint is not direct usage.
 	recordedOut := map[string]map[time.Time]int64{}
+	recordedIn := map[string]map[time.Time]int64{}
 	for _, r := range records {
 		b := bucketOf(r.StartTime)
 		i, ok := index[b]
@@ -121,8 +129,10 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 		add(&s.Points[i], r.Model, source, UsageTotals{Requests: 1, TokensIn: r.TokensIn, TokensOut: r.TokensOut})
 		if recordedOut[r.Model] == nil {
 			recordedOut[r.Model] = map[time.Time]int64{}
+			recordedIn[r.Model] = map[time.Time]int64{}
 		}
 		recordedOut[r.Model][b] += r.TokensOut
+		recordedIn[r.Model][b] += r.TokensIn
 	}
 
 	endpoints := make([]string, 0, len(samples))
@@ -138,21 +148,43 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 		}
 		s.Direct = append(s.Direct, DirectCoverage{Endpoint: ep, Models: models, Since: ss[0].Time})
 		label := strings.Join(models, ", ")
-		for b, generated := range generatedDeltas(ss, bucketOf) {
-			i, ok := index[b]
-			if !ok {
+		generated := generatedDeltas(ss, bucketOf)
+		prompted := promptDeltas(ss, bucketOf)
+
+		// A request is recorded in the bucket it started in, but the server
+		// counts its tokens as it produces them, so one straddling an edge
+		// makes one bucket's residual negative and the next one's positive by
+		// the same amount. A shortfall is therefore carried into the next
+		// bucket only: it cancels that edge effect, and cannot swallow real
+		// direct usage hours later.
+		// The bucket the first sample falls in is only partly measured: the
+		// counters start mid-bucket while the node's records cover all of it.
+		// Its shortfall is not a timing edge, so it neither counts nor carries.
+		firstMeasured := bucketOf(ss[0].Time)
+		var carry int64
+		for i := range s.Points {
+			b := s.Points[i].Timestamp
+			if !b.After(firstMeasured) {
 				continue
 			}
-			var recorded int64
+			var recOut, recIn int64
 			for _, m := range models {
-				recorded += recordedOut[m][b]
+				recOut += recordedOut[m][b]
+				recIn += recordedIn[m][b]
 			}
-			// Clamped at zero: a request is recorded at its start and counted
-			// by the server as it generates, so one straddling a bucket edge
-			// can make a bucket's recorded figure exceed what the server
-			// counted in it. That is timing, not negative work.
-			if direct := int64(generated) - recorded; direct > 0 {
-				add(&s.Points[i], label, SourceDirect, UsageTotals{TokensOut: direct})
+			var u UsageTotals
+			own := int64(generated[b]) - recOut
+			if r := own + carry; r > 0 {
+				u.TokensOut = r
+			}
+			// Only this bucket's own shortfall moves on, so none outlives the
+			// bucket after it.
+			carry = min(own, 0)
+			if r := int64(prompted[b]) - recIn; r > 0 {
+				u.TokensIn = r
+			}
+			if u.TokensOut > 0 || u.TokensIn > 0 {
+				add(&s.Points[i], label, SourceDirect, u)
 			}
 		}
 	}

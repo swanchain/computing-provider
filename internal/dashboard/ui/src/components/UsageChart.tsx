@@ -13,9 +13,11 @@ import type { ModelEarnings, UsagePoint, UsageSource, UsageTotals } from '../typ
  * reached a model server without passing through the node — is visible rather
  * than being load nobody can account for.
  *
- * Bars measure generated tokens. That is the one figure every source has:
- * direct usage comes from a server's counters, which count tokens but not
- * requests, and prompt counters exclude cache hits so they cannot be compared.
+ * Bars measure generated tokens by default: the one figure every source has
+ * exactly, since direct usage comes from a server's counters, which count
+ * tokens but not requests. Input tokens are the larger share of the work, so
+ * they are a toggle away — with direct input shown as a floor, because the
+ * server's prompt counter skips cache hits and the gap can only be larger.
  *
  * Two views of the same bars. By model is the default and uses the colours the
  * earnings chart below uses, so a model reads the same in both; by source is
@@ -47,14 +49,22 @@ const SOURCE_SHORT: Record<string, string> = {
 };
 
 /** Where a model's tokens came from, as "hub 12k · local 3k". */
-function sourceBreakdown(bySource: Partial<Record<UsageSource, UsageTotals>> | undefined) {
+type Metric = 'out' | 'in';
+
+/** The figure a bar measures: generated tokens, or input tokens. */
+function tokensOf(t: UsageTotals, metric: Metric) {
+  return metric === 'out' ? t.tokens_out : t.tokens_in;
+}
+
+function sourceBreakdown(bySource: Partial<Record<UsageSource, UsageTotals>> | undefined, metric: Metric) {
   const acc = new Map<string, number>();
   for (const [src, t] of Object.entries(bySource ?? {})) {
-    if (!t || t.tokens_out <= 0) continue;
+    if (!t || tokensOf(t, metric) <= 0) continue;
     const k = SOURCE_SHORT[src] ?? src;
-    acc.set(k, (acc.get(k) ?? 0) + t.tokens_out);
+    acc.set(k, (acc.get(k) ?? 0) + tokensOf(t, metric));
   }
-  return [...acc].map(([k, v]) => `${k} ${formatTokens(v)}`).join(' · ');
+  // Direct input is a floor (the server's prompt counter skips cache hits).
+  return [...acc].map(([k, v]) => `${k} ${metric === 'in' && k === 'direct' ? '≥' : ''}${formatTokens(v)}`).join(' · ');
 }
 
 interface Segment {
@@ -69,12 +79,12 @@ interface Segment {
 type ModelsBySource = Record<string, Partial<Record<UsageSource, UsageTotals>>>;
 
 /** Sum a point's (or the window's) per-model figures across sources. */
-function modelOut(m: Partial<Record<UsageSource, UsageTotals>> | undefined) {
+function modelOut(m: Partial<Record<UsageSource, UsageTotals>> | undefined, metric: Metric = 'out') {
   let out = 0;
   let req = 0;
   for (const t of Object.values(m ?? {})) {
     if (!t) continue;
-    out += t.tokens_out;
+    out += tokensOf(t, metric);
     req += t.requests;
   }
   return { out, req };
@@ -124,6 +134,7 @@ interface UsageChartProps {
 export function UsageChart({ models, colours: shared }: UsageChartProps) {
   const [window_, setWindow] = useState<string>('24h');
   const [view, setView] = useState<'model' | 'source'>('model');
+  const [metric, setMetric] = useState<Metric>('out');
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error } = usePolling(
     useCallback(() => api.getUsageHistory(window_), [window_]),
@@ -173,11 +184,14 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
           const t = sum({ sources }, s);
           return {
             key: s.key,
-            label: s.label,
             colour: s.colour,
-            value: t.tokens_out,
+            value: tokensOf(t, metric),
             title: s.title,
-            detail: s.key === 'direct' ? 'requests not seen' : `${t.requests.toLocaleString()} req · ${formatTokens(t.tokens_in)} in`,
+            label: s.key === 'direct' && metric === 'in' ? `${s.label} (at least)` : s.label,
+            detail:
+              s.key === 'direct'
+                ? 'requests not seen'
+                : `${t.requests.toLocaleString()} req · ${formatTokens(metric === 'out' ? t.tokens_in : t.tokens_out)} ${metric === 'out' ? 'in' : 'out'}`,
           };
         });
       }
@@ -185,26 +199,27 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
       let other = 0;
       const otherSources: Partial<Record<UsageSource, UsageTotals>> = {};
       for (const [model, bySource] of Object.entries(byModel)) {
-        const { out } = modelOut(bySource);
+        const { out } = modelOut(bySource, metric);
         if (out <= 0) continue;
         if (colours.colours.has(model)) {
-          named.push({ key: model, label: model, colour: colourFor(colours, model), value: out, detail: sourceBreakdown(bySource) });
+          named.push({ key: model, label: model, colour: colourFor(colours, model), value: out, detail: sourceBreakdown(bySource, metric) });
         } else {
           other += out;
           for (const [src, t] of Object.entries(bySource)) {
             if (!t) continue;
             const cur = (otherSources[src as UsageSource] ??= { requests: 0, tokens_in: 0, tokens_out: 0 });
             cur.tokens_out += t.tokens_out;
+            cur.tokens_in += t.tokens_in;
           }
         }
       }
       named.sort((a, b) => b.value - a.value);
       if (other > 0) {
-        named.push({ key: '__other', label: OTHER_LABEL, colour: OTHER_COLOUR, value: other, detail: sourceBreakdown(otherSources) });
+        named.push({ key: '__other', label: OTHER_LABEL, colour: OTHER_COLOUR, value: other, detail: sourceBreakdown(otherSources, metric) });
       }
       return named;
     },
-    [view, colours],
+    [view, colours, metric],
   );
 
   const peak = points.reduce((m, p) => Math.max(m, segmentsFor(p.sources, p.models ?? {}).reduce((a, s) => a + s.value, 0)), 0);
@@ -216,7 +231,7 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
       : [];
   // The legend names models that appear in this window, not every model ever.
   const legendModels = (() => {
-    const present = new Set(Object.keys(windowModels).filter((m) => modelOut(windowModels[m]).out > 0));
+    const present = new Set(Object.keys(windowModels).filter((m) => modelOut(windowModels[m], metric).out > 0));
     const entries: { key: string; label: string; colour: string; title?: string }[] = colours.ordered
       .filter((m) => present.has(m))
       .map((m) => ({ key: m, label: m, colour: colourFor(colours, m) }));
@@ -230,8 +245,8 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
     : (WINDOWS.find((w) => w.id === window_)?.label ?? window_);
 
   const unmeasured = (data?.endpoints ?? []).filter((e) => !e.measured);
-  const hubOut = data ? sum({ sources: data.totals }, SERIES[0]).tokens_out : 0;
-  const allOut = data ? SERIES.reduce((a, s) => a + sum({ sources: data.totals }, s).tokens_out, 0) : 0;
+  const hubOut = data ? tokensOf(sum({ sources: data.totals }, SERIES[0]), metric) : 0;
+  const allOut = data ? SERIES.reduce((a, s) => a + tokensOf(sum({ sources: data.totals }, s), metric), 0) : 0;
 
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
@@ -242,11 +257,26 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
             {loading && !data
               ? 'Loading…'
               : allOut > 0
-                ? `${formatTokens(allOut)} tokens generated · ${Math.round((hubOut / allOut) * 100)}% for the hub`
+                ? `${formatTokens(allOut)} ${metric === 'out' ? 'tokens generated' : 'input tokens'} · ${Math.round((hubOut / allOut) * 100)}% for the hub`
                 : 'No generated tokens in this window'}
           </p>
         </div>
         <div className="flex flex-wrap gap-1">
+        <div className="flex gap-1" role="group" aria-label="Tokens measured">
+          {(['out', 'in'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMetric(m)}
+              aria-pressed={metric === m}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                metric === m ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+              }`}
+            >
+              {m === 'out' ? 'Output' : 'Input'}
+            </button>
+          ))}
+        </div>
         <div className="flex gap-1" role="group" aria-label="Split bars by">
           {(['model', 'source'] as const).map((v) => (
             <button
@@ -286,7 +316,7 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
         <p className="px-4 py-6 text-sm text-slate-400">No usage recorded for this window yet.</p>
       ) : (
         <div className="px-4 py-4">
-          <div className="mb-2 min-h-24 text-xs" aria-live="polite">
+          <div className="mb-2 min-h-32 text-xs" aria-live="polite">
             <div className="flex items-baseline gap-2">
               <span className="text-slate-400">{summaryLabel}</span>
               {!active && <span className="text-slate-500">· hover a bar for one interval</span>}
@@ -294,11 +324,15 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
             {summarySegments.length > 0 ? (
               <ul className="mt-1 space-y-0.5 text-[11px]">
                 {summarySegments.map((s) => (
-                  <li key={s.key} className="flex items-center gap-2" title={s.title}>
-                    <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: s.colour }} />
-                    <span className="min-w-0 flex-1 truncate text-slate-300">{s.label}</span>
-                    <span className="font-mono text-slate-400">{formatTokens(s.value)} out</span>
-                    <span className="w-44 shrink-0 truncate whitespace-nowrap text-right font-mono text-slate-500">{s.detail}</span>
+                  <li key={s.key} title={s.title}>
+                    <div className="flex items-center gap-2">
+                      <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: s.colour }} />
+                      <span className="min-w-0 flex-1 truncate text-slate-300">{s.label}</span>
+                      <span className="shrink-0 font-mono text-slate-400">{formatTokens(s.value)} {metric}</span>
+                    </div>
+                    {/* Its own line: at half width, a right-aligned column cut
+                        off the direct share, which is the part worth reading. */}
+                    {s.detail && <div className="pl-4 font-mono text-[10px] text-slate-500">{s.detail}</div>}
                   </li>
                 ))}
               </ul>
@@ -311,7 +345,7 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
             className="flex h-32 items-end gap-px"
             onMouseLeave={() => setHovered(null)}
             role="group"
-            aria-label={`Generated tokens per interval over ${window_}, split by source`}
+            aria-label={`${metric === 'out' ? 'Generated' : 'Input'} tokens per interval over ${window_}, split by ${view}`}
           >
             {points.map((p, i) => {
               const segs = segmentsFor(p.sources, p.models ?? {}).filter((x) => x.value > 0);
@@ -367,7 +401,10 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <div className="space-y-1">
           <p>
-            Bars are generated tokens. Only hub traffic is paid.
+            {metric === 'out'
+              ? 'Bars are generated tokens.'
+              : 'Bars are input tokens. Direct input is a floor: the model server’s prompt counter skips cache hits, so the real figure can only be higher.'}{' '}
+            Only hub traffic is paid.
             {data?.local_gateway && (
               <>
                 {' '}Point local clients at <span className="font-mono text-slate-300">{data.local_gateway}</span> to
