@@ -451,10 +451,10 @@ func runDaemon(cctx *cli.Context) error {
 		// and a typo would read as a working filter.
 		source := c.Query("source")
 		switch computing.RequestSource(source) {
-		case "", computing.SourceHub, computing.SourceHealth, computing.SourceSelfCheck:
+		case "", computing.SourceHub, computing.SourceHealth, computing.SourceSelfCheck, computing.SourceLocal:
 		default:
 			c.JSON(400, gin.H{"error": "unknown source", "valid": []string{
-				string(computing.SourceHub), string(computing.SourceHealth), string(computing.SourceSelfCheck),
+				string(computing.SourceHub), string(computing.SourceHealth), string(computing.SourceSelfCheck), string(computing.SourceLocal),
 			}})
 			return
 		}
@@ -544,6 +544,34 @@ func runDaemon(cctx *cli.Context) error {
 		c.JSON(200, series)
 	})
 
+	// Usage over time by source: routed work, probes, local clients, and work
+	// the model servers did that never passed through the node. Bucketed the
+	// same way as earnings so the two charts line up.
+	router.GET("/inference/usage/history", func(c *gin.Context) {
+		durationStr := c.DefaultQuery("duration", "24h")
+		var window, bucket time.Duration
+		switch durationStr {
+		case "24h":
+			window, bucket = 24*time.Hour, time.Hour
+		case "7d":
+			window, bucket = 7*24*time.Hour, 24*time.Hour
+		case "30d":
+			window, bucket = 30*24*time.Hour, 24*time.Hour
+		default:
+			c.JSON(400, gin.H{"error": "duration must be 24h, 7d or 30d"})
+			return
+		}
+		series, err := inferenceService.UsageHistory(durationStr, window, bucket)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		if port := conf.GetConfig().Inference.GatewayPort(); port > 0 {
+			series.LocalGateway = fmt.Sprintf("http://127.0.0.1:%d/v1", port)
+		}
+		c.JSON(200, series)
+	})
+
 	// The platform's per-model view of this provider beside the node's own
 	// registered list. A model this node registers that the platform does not
 	// hold as offered can still be sent requests, but is missing from the
@@ -607,6 +635,17 @@ func runDaemon(cctx *cli.Context) error {
 
 	handlers := []util.ShutdownHandler{
 		{Component: "cp-api", StopFunc: httpStopper},
+	}
+
+	// The local gateway records the operator's own clients, which otherwise
+	// call the model servers directly and never appear anywhere. A failure to
+	// bind is logged, not fatal: the node serves the hub either way.
+	if port := conf.GetConfig().Inference.GatewayPort(); port > 0 {
+		if gw, err := inferenceService.StartLocalGateway(port); err != nil {
+			logs.GetLogger().Warnf("Local gateway not started: %v", err)
+		} else {
+			handlers = append(handlers, util.ShutdownHandler{Component: "local-gateway", StopFunc: gw.Shutdown})
+		}
 	}
 	if autoSwitch != nil {
 		// Stopped before the inference service: a cycle in flight is still

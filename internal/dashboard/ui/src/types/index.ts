@@ -352,7 +352,7 @@ export interface RequestLog {
   source?: RequestSource;
 }
 
-export type RequestSource = 'hub' | 'health' | 'selfcheck';
+export type RequestSource = 'hub' | 'health' | 'selfcheck' | 'local';
 
 export interface RequestHistoryResponse {
   requests: RequestLog[];
@@ -400,4 +400,40 @@ export interface ModelDetailedMetrics {
   };
   price?: ModelPrice;
   recent_requests?: RequestLog[];
+}
+
+export interface UsageTotals {
+  requests: number;
+  tokens_in: number;
+  tokens_out: number;
+}
+
+/** Keys are request sources plus "direct": work a model server did that never passed through the node. */
+export type UsageSource = RequestSource | 'direct';
+
+export interface UsagePoint {
+  timestamp: string;
+  sources: Partial<Record<UsageSource, UsageTotals>>;
+  models: Record<string, Partial<Record<UsageSource, UsageTotals>>>;
+}
+
+export interface BackendEndpointStatus {
+  endpoint: string;
+  models: string[];
+  measured: boolean;
+  /** Why the endpoint's counters cannot be read, phrased as what to change. */
+  reason?: string;
+  last_read?: string;
+}
+
+export interface UsageSeries {
+  points: UsagePoint[];
+  duration: string;
+  bucket_seconds: number;
+  totals: Partial<Record<UsageSource, UsageTotals>>;
+  /** Endpoints direct usage is measured on, and since when. */
+  direct_coverage: { endpoint: string; models: string[]; since: string }[];
+  endpoints: BackendEndpointStatus[];
+  /** Where to point local clients; empty when the gateway is off. */
+  local_gateway: string;
 }

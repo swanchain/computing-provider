@@ -11,6 +11,7 @@ import {
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
+import { UsageChart } from './components/UsageChart';
 import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
@@ -289,10 +290,11 @@ function App() {
                 <div className="min-w-0 space-y-6">
                   <section aria-labelledby="earnings-heading">
                     <div className="mb-3">
-                      <h2 id="earnings-heading" className="text-xl font-semibold text-white">Earnings and traffic mix</h2>
-                      <p className="mt-1 text-sm text-slate-300">Swan Inference’s earnings records and the models contributing to them.</p>
+                      <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
+                      <p className="mt-1 text-sm text-slate-300">What the GPUs served, by source, beside what Swan Inference paid for.</p>
                     </div>
                     <div className="min-w-0 space-y-4">
+                      <UsageChart />
                       <EarningsChart models={earnings?.models} />
                       <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
                     </div>

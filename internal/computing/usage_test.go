@@ -1,0 +1,243 @@
+package computing
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// --- backend counters -----------------------------------------------------
+
+func TestParseBackendCountersLlamaCpp(t *testing.T) {
+	text := `# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
+# TYPE llamacpp:prompt_tokens_total counter
+llamacpp:prompt_tokens_total 1200
+llamacpp:tokens_predicted_total 3400
+llamacpp:requests_processing 1
+`
+	p, g, ok := parseBackendCounters(strings.NewReader(text))
+	if !ok || p != 1200 || g != 3400 {
+		t.Errorf("got prompt=%v generated=%v ok=%v", p, g, ok)
+	}
+}
+
+func TestParseBackendCountersSumsLabelledLines(t *testing.T) {
+	text := `vllm:generation_tokens_total{model_name="a b"} 10
+vllm:generation_tokens_total{model_name="c"} 5
+vllm:prompt_tokens_total{model_name="c"} 7
+`
+	p, g, ok := parseBackendCounters(strings.NewReader(text))
+	if !ok || g != 15 || p != 7 {
+		t.Errorf("got prompt=%v generated=%v ok=%v", p, g, ok)
+	}
+}
+
+func TestParseBackendCountersUnknownEngine(t *testing.T) {
+	if _, _, ok := parseBackendCounters(strings.NewReader("process_cpu_seconds_total 3\n")); ok {
+		t.Error("a metrics page with no token counter must not read as zero usage")
+	}
+}
+
+func TestGeneratedDeltasSurviveARestart(t *testing.T) {
+	t0 := time.Date(2026, 9, 28, 1, 0, 0, 0, time.UTC)
+	samples := []BackendUsageSample{
+		{Time: t0, Generated: 100},
+		{Time: t0.Add(10 * time.Minute), Generated: 150},
+		{Time: t0.Add(70 * time.Minute), Generated: 30}, // restarted, then 30 more
+		{Time: t0.Add(80 * time.Minute), Generated: 50},
+	}
+	d := generatedDeltas(samples, func(t time.Time) time.Time { return t.Truncate(time.Hour) })
+	if d[t0] != 50 || d[t0.Add(time.Hour)] != 50 {
+		t.Errorf("deltas = %v, want 50 in each hour", d)
+	}
+}
+
+// --- usage series ---------------------------------------------------------
+
+func TestUsageSeriesBySourceAndDirect(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	to := from.Add(2*time.Hour + 30*time.Minute)
+	records := []usageRecord{
+		{Model: "q", Source: "hub", StartTime: from.Add(5 * time.Minute), TokensIn: 100, TokensOut: 40},
+		{Model: "q", Source: "", StartTime: from.Add(6 * time.Minute), TokensIn: 10, TokensOut: 10}, // legacy row
+		{Model: "q", Source: "local", StartTime: from.Add(65 * time.Minute), TokensIn: 5, TokensOut: 20},
+		{Model: "q", Source: "health", StartTime: from.Add(66 * time.Minute), TokensIn: 1, TokensOut: 1},
+		{Model: "other", Source: "hub", StartTime: from.Add(70 * time.Minute), TokensOut: 999}, // a different endpoint
+	}
+	samples := map[string][]BackendUsageSample{
+		"http://q": {
+			{Time: from.Add(-time.Minute), Generated: 0},
+			{Time: from.Add(30 * time.Minute), Generated: 50},   // hour 0: 50 generated, 50 recorded
+			{Time: from.Add(90 * time.Minute), Generated: 1071}, // hour 1: 1021 generated, 21 recorded
+		},
+	}
+	s := BuildUsageSeries(records, samples, map[string][]string{"http://q": {"q"}}, from, to, time.Hour, "24h")
+
+	if len(s.Points) != 3 {
+		t.Fatalf("points = %d, want a bucket per hour including empty ones", len(s.Points))
+	}
+	h0, h1 := s.Points[0], s.Points[1]
+	if got := h0.Sources["hub"]; got.Requests != 2 || got.TokensOut != 50 {
+		t.Errorf("hour 0 hub = %+v (a row with no source is hub traffic)", got)
+	}
+	if _, ok := h0.Sources[SourceDirect]; ok {
+		t.Error("hour 0: everything the server generated was recorded, so there is no direct usage")
+	}
+	if got := h1.Sources[SourceDirect].TokensOut; got != 1000 {
+		t.Errorf("hour 1 direct = %d, want 1021 generated - 21 recorded", got)
+	}
+	if got := h1.Models["q"][SourceDirect].TokensOut; got != 1000 {
+		t.Errorf("direct usage not attributed to the endpoint's model: %d", got)
+	}
+	if got := s.Totals["local"].Requests; got != 1 {
+		t.Errorf("local requests = %d", got)
+	}
+	if len(s.Direct) != 1 || !s.Direct[0].Since.Equal(from.Add(-time.Minute)) {
+		t.Errorf("direct coverage = %+v", s.Direct)
+	}
+}
+
+func TestUsageSeriesClampsDirectAtZero(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	records := []usageRecord{{Model: "q", Source: "hub", StartTime: from.Add(59 * time.Minute), TokensOut: 500}}
+	samples := map[string][]BackendUsageSample{"http://q": {
+		{Time: from, Generated: 0},
+		{Time: from.Add(58 * time.Minute), Generated: 10},
+	}}
+	s := BuildUsageSeries(records, samples, map[string][]string{"http://q": {"q"}}, from, from.Add(time.Hour), time.Hour, "24h")
+	if _, ok := s.Points[0].Sources[SourceDirect]; ok {
+		t.Error("recorded exceeding counted is timing across a bucket edge, not negative direct usage")
+	}
+}
+
+func TestUsageSeriesSkipsUnmeasuredEndpoints(t *testing.T) {
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	s := BuildUsageSeries(nil, map[string][]BackendUsageSample{"http://q": {{Time: from, Generated: 5}}},
+		map[string][]string{"http://q": {"q"}}, from, from.Add(time.Hour), time.Hour, "24h")
+	if len(s.Direct) != 0 {
+		t.Error("one sample has nothing to difference; the endpoint is not yet measured")
+	}
+}
+
+// --- local gateway --------------------------------------------------------
+
+func newGatewayService(t *testing.T, backend http.HandlerFunc) (*InferenceService, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewServer(backend)
+	t.Cleanup(srv.Close)
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["org/model"] = ModelMapping{Endpoint: srv.URL, LocalModel: "local-name"}
+	// The WebSocket client is created by Start; the gateway only needs its
+	// metrics recorder.
+	s.client = &InferenceClient{metrics: NewInferenceMetrics()}
+	return s, srv
+}
+
+func lastLocalRecord(t *testing.T, s *InferenceService) RequestMetric {
+	t.Helper()
+	page := s.client.metrics.QueryRequestHistory(RequestHistoryQuery{Source: string(SourceLocal)})
+	if len(page.Requests) == 0 {
+		t.Fatal("the request was not recorded as local")
+	}
+	return page.Requests[0]
+}
+
+func TestLocalGatewayForwardsAndRecords(t *testing.T) {
+	var sawModel string
+	s, _ := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"local-name"`) {
+			sawModel = "local-name"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}`)
+	})
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	resp, err := http.Post(gw.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"org/model","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"hi"`) {
+		t.Fatalf("status %d body %s", resp.StatusCode, body)
+	}
+	if sawModel != "local-name" {
+		t.Error("the backend was not sent its local model name")
+	}
+	rec := lastLocalRecord(t, s)
+	if !rec.Success || rec.TokensIn != 12 || rec.TokensOut != 3 || rec.Model != "org/model" {
+		t.Errorf("record = %+v", rec)
+	}
+	if got := s.client.metrics.GetSnapshot().TotalRequests; got != 0 {
+		t.Errorf("local work reached the aggregate counters earnings are priced from (%d)", got)
+	}
+}
+
+func TestLocalGatewayStreams(t *testing.T) {
+	s, _ := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":9}}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	})
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	resp, err := http.Post(gw.URL+"/v1/chat/completions", "application/json",
+		strings.NewReader(`{"model":"org/model","stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if l := sc.Text(); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "text/event-stream" || len(lines) == 0 || lines[len(lines)-1] != "data: [DONE]" {
+		t.Fatalf("stream = %v (%s)", lines, resp.Header.Get("Content-Type"))
+	}
+	rec := lastLocalRecord(t, s)
+	if !rec.Success || !rec.Streaming || rec.TokensIn != 4 || rec.TokensOut != 9 {
+		t.Errorf("record = %+v", rec)
+	}
+}
+
+func TestLocalGatewayRejectsUnknownModel(t *testing.T) {
+	s, _ := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("an unknown model must not reach a backend")
+	})
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+	resp, err := http.Post(gw.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"nope"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestLocalGatewayBindsLoopbackOnly(t *testing.T) {
+	s := NewInferenceService("test-node", t.TempDir())
+	srv, err := s.StartLocalGateway(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if !strings.HasPrefix(srv.Addr, "127.0.0.1:") {
+		t.Errorf("gateway bound to %q; it has no authentication and must stay on loopback", srv.Addr)
+	}
+}
