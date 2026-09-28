@@ -3,6 +3,7 @@ package selfcheck
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -456,5 +457,23 @@ func TestProbeTimeoutIsGenerousByDefault(t *testing.T) {
 	_ = r // Run applies the default; assert it here rather than reaching inside.
 	if (Options{}).ProbeTimeout != 0 {
 		t.Fatal("zero value should be unset")
+	}
+}
+
+func TestReadProbeResponseTakesUsage(t *testing.T) {
+	// Usage comes after the choices, beyond the 200 bytes an error snippet
+	// needs, so a success has to read the whole reply.
+	pad := strings.Repeat("x", 400)
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
+		`{"choices":[{"message":{"content":"` + pad + `"}}],"usage":{"prompt_tokens":12,"completion_tokens":1}}`))}
+	r := ReadProbeResponse(resp)
+	if !r.OK || r.TokensIn != 12 || r.TokensOut != 1 {
+		t.Errorf("got %+v", r)
+	}
+
+	resp = &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader(strings.Repeat("e", 500)))}
+	r = ReadProbeResponse(resp)
+	if r.OK || r.StatusCode != 503 || len(r.Error) != 200 {
+		t.Errorf("failure: ok=%v status=%d error len=%d, want a 200-byte snippet", r.OK, r.StatusCode, len(r.Error))
 	}
 }

@@ -189,6 +189,8 @@ func (r *selfCheckRunner) recordProbes(report selfcheck.Report) {
 			StartTime:   now.Add(-latency),
 			EndTime:     now,
 			LatencyMs:   probe.LatencyMs,
+			TokensIn:    probe.TokensIn,
+			TokensOut:   probe.TokensOut,
 			Success:     probe.OK,
 			ErrorReason: probe.Error,
 			Source:      SourceSelfCheck,
