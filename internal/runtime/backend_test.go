@@ -201,3 +201,12 @@ func TestExtraArgsComeLast(t *testing.T) {
 		}
 	}
 }
+
+// Without --metrics llama-server has no token counters, and the node cannot
+// account for work sent to it directly.
+func TestLlamacppExposesMetrics(t *testing.T) {
+	b, _ := LookupBackend("llamacpp")
+	if !hasArg(b.Args(&ServeSpec{ModelID: "org/m"}), "--metrics") {
+		t.Error("llama.cpp is started without --metrics")
+	}
+}

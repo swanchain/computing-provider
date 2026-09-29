@@ -684,10 +684,32 @@ the dashboard shows it as a column:
 | `hub` | an inference request routed over the WebSocket |
 | `health` | this node's engine probe — a one-token completion per endpoint per `DeepCheckEvery` cycles |
 | `selfcheck` | the periodic audit's inference probe |
+| `local` | a client on this machine using the local gateway |
+| `direct` | work a model server did that never passed through the node — derived, not recorded (see below) |
 
 Probes are real completions and consume the same backend capacity as routed
 work, so they belong in the history rather than being load the operator cannot
 account for.
+
+**The local gateway.** The operator's own clients — benchmarks, agents — used
+to call the model servers directly, and the node never saw them: a benchmark
+could hold a GPU for hours while the dashboard showed an idle model. The daemon
+now serves an OpenAI-compatible endpoint on `127.0.0.1:9088/v1`
+(`[Inference] LocalGatewayPort`, `-1` disables) that forwards to the same
+backend and records each request as `local`. It bypasses the rate and
+concurrency limiters, which exist to protect routed work, and it feeds the
+request history only — never the aggregate counters earnings are priced from.
+Loopback only, since neither it nor the servers behind it authenticate.
+
+**Direct usage.** Anything that still calls a model server directly can only
+be seen in the server's own counters, so the daemon samples each endpoint's
+`/metrics` every minute (`backend_usage_samples`) and reports generated tokens
+the node did not record as `direct` in `GET /inference/usage/history`. Only
+generated tokens are compared: llama.cpp's prompt counter excludes prompt-cache
+hits while a request's `prompt_tokens` does not, so subtracting prompts would
+report cache hits as missing work. llama.cpp answers `/metrics` with 501 unless
+started with `--metrics`, which `models serve` now always passes; an endpoint
+that cannot be read is listed as unmeasured, never as zero.
 
 `source` says where a request *entered*, not who *originated* it. A hub request
 carries no marker distinguishing customer traffic from the marketplace's own

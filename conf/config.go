@@ -293,6 +293,24 @@ type Inference struct {
 	ApiKey       string     `toml:"ApiKey"`       // Provider API key for authentication (sk-prov-*)
 	Models       []string   `toml:"Models"`       // Models this provider serves
 	AutoSwitch   AutoSwitch `toml:"AutoSwitch,omitempty"`
+	// LocalGatewayPort is where the local gateway listens, on 127.0.0.1 only.
+	// Local clients sent there are recorded as source "local" instead of being
+	// load the node cannot see. 0 means the default; -1 turns it off.
+	LocalGatewayPort int `toml:"LocalGatewayPort,omitempty"`
+}
+
+// DefaultLocalGatewayPort is the local gateway's port when none is configured.
+const DefaultLocalGatewayPort = 9088
+
+// GatewayPort resolves the configured port: 0 when the gateway is off.
+func (i Inference) GatewayPort() int {
+	switch {
+	case i.LocalGatewayPort < 0:
+		return 0
+	case i.LocalGatewayPort == 0:
+		return DefaultLocalGatewayPort
+	}
+	return i.LocalGatewayPort
 }
 
 // AutoSwitch configures re-planning which models this node serves.
