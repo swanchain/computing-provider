@@ -986,12 +986,7 @@ func detectNvidiaHardware() *HardwareInfo {
 	vramStr := strings.TrimSpace(parts[1])
 	driverVersion := strings.TrimSpace(parts[2])
 
-	// Parse VRAM (in MiB from nvidia-smi)
-	vramMiB, _ := strconv.Atoi(vramStr)
-	vramGB := vramMiB / 1024
-	if vramGB == 0 {
-		vramGB = 1 // Minimum 1GB
-	}
+	vramGB := parseNvidiaVRAMGB(vramStr, systemMemoryGB)
 
 	// Convert GPU model to type (e.g., "NVIDIA GeForce RTX 3070" -> "RTX 3070")
 	gpuType := gpuModel
@@ -1022,6 +1017,47 @@ func detectNvidiaHardware() *HardwareInfo {
 
 	logs.GetLogger().Infof("Detected GPU hardware: %s (%dGB VRAM x%d)", gpuType, vramGB, len(lines))
 	return hardware
+}
+
+// parseNvidiaVRAMGB turns nvidia-smi's memory.total (MiB) into whole GB.
+//
+// Unified-memory GPUs — DGX Spark's GB10, Jetson and Thor — have no memory of
+// their own, so nvidia-smi reports "[N/A]". The GPU uses system RAM, so system
+// RAM is the honest figure. The previous fallback reported 1 GB, which the hub
+// reads as a card below its 8 GB minimum and answers with register_rejected,
+// removing every model the machine serves from routing.
+//
+// 0 means unknown, which the hub treats as unknown rather than as too small.
+func parseNvidiaVRAMGB(field string, systemGB func() int) int {
+	if mib, err := strconv.Atoi(strings.TrimSpace(field)); err == nil && mib > 0 {
+		if gb := mib / 1024; gb > 0 {
+			return gb
+		}
+		return 1 // a real card under 1 GB
+	}
+	if systemGB != nil {
+		return systemGB()
+	}
+	return 0
+}
+
+// systemMemoryGB reads total system memory from /proc/meminfo, or 0.
+func systemMemoryGB() int {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if kb, err := strconv.Atoi(fields[1]); err == nil {
+					return kb / (1024 * 1024)
+				}
+			}
+		}
+	}
+	return 0
 }
 
 // detectAppleSiliconHardware detects Apple Silicon GPU hardware
