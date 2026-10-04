@@ -383,6 +383,24 @@ func (cl *ConcurrencyLimiter) GetMetrics() ConcurrencyMetrics {
 	}
 }
 
+// ModelCapacity is how many requests for a model can run at once: its own
+// limit (the default until one is set or GPU awareness adjusts it), capped by
+// the global limit shared with every other model.
+func (cl *ConcurrencyLimiter) ModelCapacity(modelID string) int {
+	cl.mu.RLock()
+	sem := cl.modelSems[modelID]
+	cl.mu.RUnlock()
+
+	n := cl.config.DefaultModelMax
+	if sem != nil {
+		_, n, _, _, _, _, _ = sem.GetStats()
+	}
+	if _, global, _, _, _, _, _ := cl.globalSem.GetStats(); global < n {
+		n = global
+	}
+	return n
+}
+
 // SetGlobalMax updates the global maximum concurrent requests
 func (cl *ConcurrencyLimiter) SetGlobalMax(max int) {
 	cl.globalSem.SetMax(max)

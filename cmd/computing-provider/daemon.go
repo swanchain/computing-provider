@@ -246,6 +246,12 @@ func runDaemon(cctx *cli.Context) error {
 			"connected":         inferenceService.IsConnected(),
 			"active_models":     inferenceService.GetActiveModels(),
 			"registered_models": inferenceService.GetRegisteredModels(),
+			// The hub's own list, from the register ack. It can differ from
+			// registered_models above, which is what this node sent; a model
+			// in one and not the other receives no traffic. Null until a hub
+			// new enough to report it has acked a registration.
+			"hub_registered_models": inferenceService.GetHubRegisteredModels(),
+			"upgrade_available":     inferenceService.GetUpgradeAvailable(),
 			// The build actually serving requests, which is what the operator
 			// needs to see. `update` replaces the binary without restarting, so
 			// after an update this deliberately keeps reporting the old version
