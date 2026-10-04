@@ -193,8 +193,9 @@ type ErrorPayload struct {
 // StreamChunkPayload represents a streaming chunk sent to Swan Inference
 type StreamChunkPayload struct {
 	RequestID string          `json:"request_id"`
-	Chunk     json.RawMessage `json:"chunk"` // OpenAI-compatible SSE chunk data
-	Done      bool            `json:"done"`  // True when stream is complete
+	Chunk     json.RawMessage `json:"chunk"`           // OpenAI-compatible SSE chunk data
+	Done      bool            `json:"done"`            // True when stream is complete
+	Error     string          `json:"error,omitempty"` // Why the stream failed, when it failed before any data
 }
 
 // StreamEndPayload signals end of stream with usage stats
@@ -1772,8 +1773,12 @@ func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestI
 		return
 	}
 
-	// Create a callback for sending chunks
+	// Create a callback for sending chunks, noting whether any data went out.
+	var sentData bool
 	sendChunk := func(chunk []byte, done bool) error {
+		if len(chunk) > 0 {
+			sentData = true
+		}
 		return c.sendStreamChunk(requestID, chunk, done)
 	}
 
@@ -1828,10 +1833,40 @@ func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestI
 	if err != nil {
 		streamReq.ErrorReason = err.Error()
 		logs.GetLogger().Errorf("Streaming inference request %s for model %s failed after %dms (status %d, tokens in/out %d/%d): %v", requestID, payload.ModelID, latency, statusCode, tokensIn, tokensOut, err)
+		if !sentData {
+			// Swan Inference classifies a stream's failure from its first
+			// chunk: "prompt too long" becomes a 400 for the consumer and a
+			// learned context bound for this offering. The same text in
+			// stream_end alone is dropped, so the stream reads as "closed
+			// before any chunk" — a provider failure — and the hub resends
+			// the identical oversized prompt. Deliver it where it is read.
+			if serr := c.sendStreamError(requestID, err.Error()); serr != nil {
+				logs.GetLogger().Warnf("Failed to send stream error for %s: %v", requestID, serr)
+			}
+		}
 	}
 	c.metrics.RecordRequestEnd(streamReq)
 
 	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, statusCode, err)
+}
+
+// sendStreamError reports a stream that failed before sending any data, as a
+// final stream_chunk carrying the error.
+func (c *InferenceClient) sendStreamError(requestID, errText string) error {
+	payloadBytes, err := json.Marshal(StreamChunkPayload{RequestID: requestID, Done: true, Error: errText})
+	if err != nil {
+		return err
+	}
+	msgBytes, err := json.Marshal(Message{Type: MsgTypeStreamChunk, RequestID: requestID, Payload: payloadBytes})
+	if err != nil {
+		return err
+	}
+	select {
+	case c.send <- msgBytes:
+		return nil
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("send buffer full")
+	}
 }
 
 // sendStreamChunk sends a streaming chunk to Swan Inference
