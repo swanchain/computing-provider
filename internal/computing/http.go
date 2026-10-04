@@ -73,14 +73,25 @@ func NewHttpClient(host string, header http.Header) *HttpClient {
 }
 
 func (c *HttpClient) PostJSON(api string, data any, dest any) error {
+	return c.PostJSONContext(context.Background(), api, data, dest)
+}
+
+// PostJSONContext is PostJSON bound to ctx: cancelling it aborts the request,
+// which a model server reads as the client going away and stops generating.
+func (c *HttpClient) PostJSONContext(ctx context.Context, api string, data any, dest any) error {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	return c.Request(http.MethodPost, api, bytes.NewReader(b), dest, "application/json")
+	return c.RequestContext(ctx, http.MethodPost, api, bytes.NewReader(b), dest, "application/json")
 }
 
 func (c *HttpClient) Request(method string, api string, body io.Reader, dest any, contentType ...string) (err error) {
+	return c.RequestContext(context.Background(), method, api, body, dest, contentType...)
+}
+
+// RequestContext is Request bound to ctx.
+func (c *HttpClient) RequestContext(ctx context.Context, method string, api string, body io.Reader, dest any, contentType ...string) (err error) {
 	if body != nil {
 		rb, _ := io.ReadAll(body)
 		body = bytes.NewReader(rb)
@@ -97,7 +108,7 @@ func (c *HttpClient) Request(method string, api string, body io.Reader, dest any
 		url += "/" + api
 	}
 
-	req, err := http.NewRequest(method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return
 	}

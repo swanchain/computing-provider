@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,10 +128,12 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 		Source:    SourceLocal,
 	}
 
+	// Bound to the client's own request: a local client that disconnects
+	// stops the generation instead of leaving it to run for nobody.
 	if head.Stream {
-		s.serveLocalStream(w, body, head.Model, endpoint, localModel, apiKey, &rec)
+		s.serveLocalStream(r.Context(), w, body, head.Model, endpoint, localModel, apiKey, &rec)
 	} else {
-		s.serveLocalOnce(w, body, head.Model, endpoint, localModel, apiKey, &rec)
+		s.serveLocalOnce(r.Context(), w, body, head.Model, endpoint, localModel, apiKey, &rec)
 	}
 
 	rec.EndTime = time.Now()
@@ -142,8 +145,8 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (s *InferenceService) serveLocalOnce(w http.ResponseWriter, body []byte, modelID, endpoint, localModel, apiKey string, rec *RequestMetric) {
-	resp, err := s.forwardToDockerModel(endpoint, body, modelID, localModel, apiKey)
+func (s *InferenceService) serveLocalOnce(ctx context.Context, w http.ResponseWriter, body []byte, modelID, endpoint, localModel, apiKey string, rec *RequestMetric) {
+	resp, err := s.forwardToDockerModelContext(ctx, endpoint, body, modelID, localModel, apiKey)
 	if err != nil {
 		status := http.StatusBadGateway
 		var mse *ModelServerError
@@ -160,7 +163,7 @@ func (s *InferenceService) serveLocalOnce(w http.ResponseWriter, body []byte, mo
 	_, _ = w.Write(resp)
 }
 
-func (s *InferenceService) serveLocalStream(w http.ResponseWriter, body []byte, modelID, endpoint, localModel, apiKey string, rec *RequestMetric) {
+func (s *InferenceService) serveLocalStream(ctx context.Context, w http.ResponseWriter, body []byte, modelID, endpoint, localModel, apiKey string, rec *RequestMetric) {
 	flusher, _ := w.(http.Flusher)
 	started := false
 	send := func(chunk []byte, done bool) error {
@@ -182,7 +185,7 @@ func (s *InferenceService) serveLocalStream(w http.ResponseWriter, body []byte, 
 		return err
 	}
 
-	result := s.streamFromDockerModel(endpoint, body, modelID, localModel, apiKey, send)
+	result := s.streamFromDockerModelContext(ctx, endpoint, body, modelID, localModel, apiKey, send)
 	rec.TokensIn, rec.TokensOut = int(result.TokensInput), int(result.TokensOutput)
 	if result.Error != nil {
 		rec.ErrorReason = result.Error.Error()

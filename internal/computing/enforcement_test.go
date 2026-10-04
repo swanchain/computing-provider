@@ -116,7 +116,7 @@ func TestHandleInferenceEnforcement(t *testing.T) {
 	}
 
 	// Happy path: 502 is retried, second attempt succeeds
-	resp, err := s.handleInference(payload)
+	resp, err := s.handleInference(context.Background(), payload)
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestHandleInferenceEnforcement(t *testing.T) {
 
 	// Rate limited: zero-token bucket rejects with 429
 	s.rateLimiter.SetModelLimit("test/model", 0, 0)
-	_, err = s.handleInference(payload)
+	_, err = s.handleInference(context.Background(), payload)
 	var modelErr *ModelServerError
 	if !errors.As(err, &modelErr) || modelErr.StatusCode != 429 {
 		t.Fatalf("expected 429 ModelServerError, got: %v", err)
@@ -141,7 +141,7 @@ func TestHandleInferenceEnforcement(t *testing.T) {
 	concConfig.GlobalMaxConcurrent = 0
 	concConfig.AcquireTimeout = 20 * time.Millisecond
 	s.concurrencyLimiter = NewConcurrencyLimiter(concConfig, nil)
-	_, err = s.handleInference(payload)
+	_, err = s.handleInference(context.Background(), payload)
 	if !errors.As(err, &modelErr) || modelErr.StatusCode != 429 {
 		t.Fatalf("expected 429 ModelServerError for concurrency, got: %v", err)
 	}
