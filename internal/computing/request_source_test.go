@@ -21,7 +21,10 @@ func probeBackend(t *testing.T, completionStatus int) *httptest.Server {
 			http.Error(w, `{"error":"EngineDeadError"}`, completionStatus)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{}}})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{}},
+			"usage":   map[string]int{"prompt_tokens": 9, "completion_tokens": 1},
+		})
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -50,6 +53,10 @@ func TestEngineProbeIsRecordedAsHealth(t *testing.T) {
 	}
 	if got[0].Model != "test/model" || !got[0].Success {
 		t.Errorf("got %+v", got[0])
+	}
+	// The probe consumed tokens; recording it as zero understates the load.
+	if got[0].TokensIn != 9 || got[0].TokensOut != 1 {
+		t.Errorf("tokens = %d/%d, want the backend's 9/1", got[0].TokensIn, got[0].TokensOut)
 	}
 }
 

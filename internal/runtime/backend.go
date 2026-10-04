@@ -109,6 +109,10 @@ func (b llamacppBackend) Args(spec *ServeSpec) []string {
 		// Offload every layer it can. A GPU box that wanted partial
 		// offload can say so in ExtraArgs, which are appended after these.
 		"-ngl", "99",
+		// Token counters at /metrics. llama-server answers 501 there
+		// without this, and those counters are the only record of work a
+		// client sends the server directly instead of through the node.
+		"--metrics",
 	}
 	if spec.ContextLength > 0 {
 		args = append(args, "-c", strconv.Itoa(spec.ContextLength))

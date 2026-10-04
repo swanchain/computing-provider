@@ -614,6 +614,16 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `notice` | ← Server | Operational notice, forwarded to the operator's configured `[Alerts]` transports |
 | `ack` | Both | Acknowledgment |
 
+The hub reads `model_declarations` in place of `model_hashes` whenever both
+are present, so a field that is only in `model_hashes` never reaches it. Each
+declaration carries the weight hash from the model's manifest and a
+`concurrency` capacity taken from the concurrency limiter — without that the
+hub assumes the built-in default of 10 and keeps routing to a node whose
+operator lowered it. The register `ack` carries the hub's own
+`registered_models` and an `upgrade_available` advisory; a mismatch between the
+hub's list and this node's is logged, and both appear on `GET /inference/status`
+as `hub_registered_models` and `upgrade_available`.
+
 ### Alert email
 
 Alerts are sent as `multipart/alternative`: a styled HTML part and a plain-text
@@ -654,6 +664,23 @@ This is the provider's own arithmetic and the UI says so. The platform's figure
 is authoritative; the local one is worth showing beside it because the two can
 disagree, and the disagreement is the useful part.
 
+`GET /inference/earnings/history` reads the platform's own bucketed history
+(`/provider/me/earnings/history`) for the 24h/7d/30d windows and falls back to
+the local estimate only when that cannot be read; the response's `source` says
+which, and `platform_error` says why. The platform splits each bucket into
+pay-as-you-go and subscription work, and the UI keeps them apart: subscription
+work is pro-rated when its billing period closes, so it is an upper bound until
+then and must not be shown as settled money.
+
+`GET /inference/hub/models` sets the platform's per-model view of this provider
+beside the node's registered list. `not_listed` names models this node
+registers that the platform does not hold as offered. Do not read that as "no
+traffic": the hub can still route requests for such a model over the
+connection and the node will serve them, but with no offering the work is
+missing from the platform's per-model records and may not be credited. The
+node sees only the requests, never the missing credit, so this is the one
+place the gap shows.
+
 Show the operator their own rates and totals. The marketplace-economics material
 listed at the top of this file stays out of this repo.
 
@@ -667,10 +694,32 @@ the dashboard shows it as a column:
 | `hub` | an inference request routed over the WebSocket |
 | `health` | this node's engine probe — a one-token completion per endpoint per `DeepCheckEvery` cycles |
 | `selfcheck` | the periodic audit's inference probe |
+| `local` | a client on this machine using the local gateway |
+| `direct` | work a model server did that never passed through the node — derived, not recorded (see below) |
 
 Probes are real completions and consume the same backend capacity as routed
 work, so they belong in the history rather than being load the operator cannot
 account for.
+
+**The local gateway.** The operator's own clients — benchmarks, agents — used
+to call the model servers directly, and the node never saw them: a benchmark
+could hold a GPU for hours while the dashboard showed an idle model. The daemon
+now serves an OpenAI-compatible endpoint on `127.0.0.1:9088/v1`
+(`[Inference] LocalGatewayPort`, `-1` disables) that forwards to the same
+backend and records each request as `local`. It bypasses the rate and
+concurrency limiters, which exist to protect routed work, and it feeds the
+request history only — never the aggregate counters earnings are priced from.
+Loopback only, since neither it nor the servers behind it authenticate.
+
+**Direct usage.** Anything that still calls a model server directly can only
+be seen in the server's own counters, so the daemon samples each endpoint's
+`/metrics` every minute (`backend_usage_samples`) and reports generated tokens
+the node did not record as `direct` in `GET /inference/usage/history`. Only
+generated tokens are compared: llama.cpp's prompt counter excludes prompt-cache
+hits while a request's `prompt_tokens` does not, so subtracting prompts would
+report cache hits as missing work. llama.cpp answers `/metrics` with 501 unless
+started with `--metrics`, which `models serve` now always passes; an endpoint
+that cannot be read is listed as unmeasured, never as zero.
 
 `source` says where a request *entered*, not who *originated* it. A hub request
 carries no marker distinguishing customer traffic from the marketplace's own

@@ -46,6 +46,10 @@ type ProviderStatsClient struct {
 	cached      *ProviderStats
 	lastErr     error
 	nextRefresh time.Time
+
+	platform platformCache // earnings history and model details
+	idMu     sync.Mutex
+	id       string // provider ID, resolved from /provider/me once
 }
 
 func NewProviderStatsClient(baseURL, apiKey string) *ProviderStatsClient {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -175,5 +176,28 @@ func TestCancelledRequestSendsNothingBackAndIsRecorded(t *testing.T) {
 	}
 	if c.cancelReason("r1") != "" {
 		t.Error("the finished request is still registered as in flight")
+	}
+}
+
+// A local client that disconnects stops its generation too.
+func TestLocalGatewayClientDisconnectStopsTheBackend(t *testing.T) {
+	srv, aborted, _ := slowBackend(t, false)
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["m"] = ModelMapping{Endpoint: srv.URL}
+	s.client = &InferenceClient{metrics: NewInferenceMetrics()}
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	if resp, err := client.Post(gw.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"m","messages":[]}`)); err == nil {
+		resp.Body.Close()
+		t.Fatal("expected the client to give up before the slow backend answered")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !aborted.Load() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !aborted.Load() {
+		t.Error("the backend kept generating after the local client went away")
 	}
 }

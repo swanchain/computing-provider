@@ -60,6 +60,11 @@ const SOURCE_LABELS: Record<string, { label: string; title: string; className: s
     title: "This node's periodic audit probe",
     className: 'bg-slate-500/10 text-slate-400 ring-slate-500/30',
   },
+  local: {
+    label: 'Local',
+    title: 'A client on this machine using the local gateway — your own traffic, not paid',
+    className: 'bg-amber-500/10 text-amber-300 ring-amber-500/30',
+  },
 };
 
 const PAGE_SIZES = [25, 50, 100];

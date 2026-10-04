@@ -1,6 +1,8 @@
 import type {
   Earnings,
   EarningsSeries,
+  HubModelView,
+  UsageSeries,
   InferenceMetrics,
   ModelsResponse,
   ConnectionStatus,
@@ -119,6 +121,12 @@ export const api = {
   // Earnings
   getEarnings: () => fetchJson<Earnings>('/earnings'),
   getEarningsHistory: (duration: string) => fetchJson<EarningsSeries>(`/earnings/history?duration=${duration}`),
+
+  // Usage by source, including work that bypassed the node
+  getUsageHistory: (duration: string) => fetchJson<UsageSeries>(`/usage/history?duration=${duration}`),
+
+  // Swan Inference's own view of this provider's models
+  getHubModels: () => fetchJson<HubModelView>('/hub/models'),
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {

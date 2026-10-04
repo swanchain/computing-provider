@@ -11,10 +11,13 @@ import {
 import { usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
+import { UsageChart } from './components/UsageChart';
+import type { ModelColourMap } from './lib/modelPalette';
 import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
+import { HubModelsPanel } from './components/HubModelsPanel';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { RequestHistoryPanel } from './components/RequestHistoryPanel';
@@ -40,6 +43,9 @@ function viewFromHash(): DashboardView {
 
 function App() {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  // One model-colour map for the usage and earnings charts, owned by the
+  // earnings chart, so a model is the same colour in both.
+  const [modelColours, setModelColours] = useState<ModelColourMap | null>(null);
   const [activeView, setActiveView] = useState<DashboardView>(viewFromHash);
   const [authenticated, setAuthenticated] = useState(false);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
@@ -258,6 +264,17 @@ function App() {
               />
             </section>
 
+            <section aria-labelledby="earnings-heading">
+              <div className="mb-3">
+                <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
+                <p className="mt-1 text-sm text-slate-300">What the GPUs served, by model or source, beside what Swan Inference paid for.</p>
+              </div>
+              <div className="grid items-start gap-6 lg:grid-cols-2">
+                <UsageChart models={earnings?.models} colours={modelColours} />
+                <EarningsChart models={earnings?.models} onColours={setModelColours} />
+              </div>
+            </section>
+
             <section aria-labelledby="operations-heading">
               <div className="mb-3">
                 <h2 id="operations-heading" className="text-xl font-semibold text-white">Operations</h2>
@@ -277,6 +294,7 @@ function App() {
                     authenticated={authenticated}
                     onUnlock={() => setShowAuthDialog(true)}
                   />
+                  <HubModelsPanel />
                   <RequestManagementPanel
                     data={requestMgmt}
                     loading={requestMgmtLoading}
@@ -285,16 +303,7 @@ function App() {
                   />
                 </div>
                 <div className="min-w-0 space-y-6">
-                  <section aria-labelledby="earnings-heading">
-                    <div className="mb-3">
-                      <h2 id="earnings-heading" className="text-xl font-semibold text-white">Earnings and traffic mix</h2>
-                      <p className="mt-1 text-sm text-slate-300">Estimated local history and the models contributing to it.</p>
-                    </div>
-                    <div className="min-w-0 space-y-4">
-                      <EarningsChart models={earnings?.models} />
-                      <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
-                    </div>
-                  </section>
+                  <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
                   <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
                 </div>
               </div>

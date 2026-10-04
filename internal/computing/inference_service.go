@@ -94,6 +94,7 @@ type InferenceService struct {
 	gpuCollector       *GPUMetricsCollector
 	metricsHistory     *MetricsHistory
 	requestStore       *RequestStore
+	usageSampler       *BackendUsageSampler // model servers' own token counters
 	alertMonitor       *alertMonitor
 	selfCheck          *selfCheckRunner
 	noticeLimiter      *noticeLimiter
@@ -292,6 +293,12 @@ func (s *InferenceService) Start() error {
 	// route against actual capacity instead of the catalog value (#61)
 	s.client.SetModelContextsProvider(s.resolveModelContexts)
 
+	// Declare how many requests per model this agent runs at once, so the hub
+	// routes against the operator's limit rather than the built-in default.
+	if s.concurrencyLimiter != nil {
+		s.client.SetModelCapacityProvider(s.concurrencyLimiter.ModelCapacity)
+	}
+
 	// Engine probes are real completions and consume the same capacity as
 	// routed work, so they belong in the request history rather than being
 	// invisible traffic against the operator's GPUs.
@@ -374,6 +381,14 @@ func (s *InferenceService) Start() error {
 		}
 	}
 
+	// Sample the model servers' token counters, the only record of work sent
+	// to them directly rather than through this node.
+	s.usageSampler = NewBackendUsageSampler(s.modelEndpoints)
+	if err := s.usageSampler.Start(); err != nil {
+		logs.GetLogger().Warnf("Failed to start backend usage sampler: %v", err)
+		s.usageSampler = nil
+	}
+
 	// Start metrics history recorder
 	if s.metricsHistory != nil {
 		if err := s.metricsHistory.Start(func() *InferenceMetricsData {
@@ -415,6 +430,9 @@ func (s *InferenceService) Stop() {
 	}
 	if s.requestStore != nil {
 		s.requestStore.Stop()
+	}
+	if s.usageSampler != nil {
+		s.usageSampler.Stop()
 	}
 	if s.alertMonitor != nil {
 		s.alertMonitor.Stop()
@@ -758,6 +776,23 @@ func (s *InferenceService) GetRegisteredModels() []string {
 	return s.client.ModelList()
 }
 
+// GetHubRegisteredModels returns the model list the hub reported holding for
+// this node at the last registration, or nil if it has not reported one.
+func (s *InferenceService) GetHubRegisteredModels() []string {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.HubRegisteredModels()
+}
+
+// GetUpgradeAvailable returns the hub's upgrade advisory, or nil.
+func (s *InferenceService) GetUpgradeAvailable() *UpgradeAdvisory {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.UpgradeAvailable()
+}
+
 // GetMetrics returns a snapshot of the current inference metrics
 func (s *InferenceService) GetMetrics() *InferenceMetricsData {
 	if s.client == nil {
@@ -799,35 +834,11 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 		defer token.Release()
 	}
 
-	// Try to get endpoint and local model name from registry first (preferred)
-	var endpoint string
-	var localModel string
-	var apiKey string
-
-	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
-		endpoint = ep
-		localModel = s.registry.GetLocalModelName(payload.ModelID)
-		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
-	} else if _, disabled := s.disabledInRegistry(payload.ModelID); disabled {
-		// The registry knows this model and has taken it out of service. The
-		// mapping below still exists, so without this check a disabled model
-		// would keep being forwarded to the backend it was disabled for.
-		return &StreamResult{Error: &ModelServerError{
-			StatusCode: 503,
-			Message:    fmt.Sprintf("model %s is disabled on this provider", payload.ModelID),
-		}}
-	} else {
-		// Fall back to direct mapping lookup for backward compatibility
-		mapping, mapOk := s.modelMappings[payload.ModelID]
-		if !mapOk {
-			return &StreamResult{Error: &ModelServerError{
-				StatusCode: 404,
-				Message:    fmt.Sprintf("model %s not deployed on this provider", payload.ModelID),
-			}}
-		}
-		endpoint = mapping.Endpoint
-		localModel = mapping.LocalModel
-		apiKey = mapping.APIKey
+	// Registry first; a model it has disabled is refused rather than falling
+	// through to the models.json mapping that still names its backend.
+	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(payload.ModelID)
+	if mse != nil {
+		return &StreamResult{Error: mse}
 	}
 
 	// Check model health before forwarding

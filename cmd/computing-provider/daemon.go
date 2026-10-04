@@ -246,6 +246,12 @@ func runDaemon(cctx *cli.Context) error {
 			"connected":         inferenceService.IsConnected(),
 			"active_models":     inferenceService.GetActiveModels(),
 			"registered_models": inferenceService.GetRegisteredModels(),
+			// The hub's own list, from the register ack. It can differ from
+			// registered_models above, which is what this node sent; a model
+			// in one and not the other receives no traffic. Null until a hub
+			// new enough to report it has acked a registration.
+			"hub_registered_models": inferenceService.GetHubRegisteredModels(),
+			"upgrade_available":     inferenceService.GetUpgradeAvailable(),
 			// The build actually serving requests, which is what the operator
 			// needs to see. `update` replaces the binary without restarting, so
 			// after an update this deliberately keeps reporting the old version
@@ -451,10 +457,10 @@ func runDaemon(cctx *cli.Context) error {
 		// and a typo would read as a working filter.
 		source := c.Query("source")
 		switch computing.RequestSource(source) {
-		case "", computing.SourceHub, computing.SourceHealth, computing.SourceSelfCheck:
+		case "", computing.SourceHub, computing.SourceHealth, computing.SourceSelfCheck, computing.SourceLocal:
 		default:
 			c.JSON(400, gin.H{"error": "unknown source", "valid": []string{
-				string(computing.SourceHub), string(computing.SourceHealth), string(computing.SourceSelfCheck),
+				string(computing.SourceHub), string(computing.SourceHealth), string(computing.SourceSelfCheck), string(computing.SourceLocal),
 			}})
 			return
 		}
@@ -492,10 +498,22 @@ func runDaemon(cctx *cli.Context) error {
 		c.JSON(200, earnings)
 	})
 
-	// Earnings over time, priced from the node's own stored history. Windows
-	// longer than the retained history report what they actually cover.
+	// Earnings over time. The platform's own earnings history is the figure
+	// that is paid, split by model from its settlement records, so it is used
+	// whenever it can be read. The node's estimate, priced from its own stored
+	// history, is the fallback, and the response says which one it is and why.
+	// Windows longer than the retained local history report what they cover.
 	router.GET("/inference/earnings/history", func(c *gin.Context) {
 		durationStr := c.DefaultQuery("duration", "24h")
+		var platformErr string
+		if span, bucketSpan, ok := computing.PlatformSpans(durationStr); ok && c.Query("source") != computing.EarningsSourceLocal {
+			h, err := providerStats.EarningsHistory(c.Request.Context(), span, bucketSpan)
+			if err == nil {
+				c.JSON(200, computing.PlatformSeries(h, durationStr))
+				return
+			}
+			platformErr = err.Error()
+		}
 		duration, err := time.ParseDuration(durationStr)
 		if err != nil {
 			// 30d is not a Go duration, but it is the window an operator asks
@@ -526,8 +544,51 @@ func runDaemon(cctx *cli.Context) error {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(200, computing.CalculateEarningsHistory(
-			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr, bucket))
+		series := computing.CalculateEarningsHistory(
+			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr, bucket)
+		series.PlatformError = platformErr
+		c.JSON(200, series)
+	})
+
+	// Usage over time by source: routed work, probes, local clients, and work
+	// the model servers did that never passed through the node. Bucketed the
+	// same way as earnings so the two charts line up.
+	router.GET("/inference/usage/history", func(c *gin.Context) {
+		durationStr := c.DefaultQuery("duration", "24h")
+		var window, bucket time.Duration
+		switch durationStr {
+		case "24h":
+			window, bucket = 24*time.Hour, time.Hour
+		case "7d":
+			window, bucket = 7*24*time.Hour, 24*time.Hour
+		case "30d":
+			window, bucket = 30*24*time.Hour, 24*time.Hour
+		default:
+			c.JSON(400, gin.H{"error": "duration must be 24h, 7d or 30d"})
+			return
+		}
+		series, err := inferenceService.UsageHistory(durationStr, window, bucket)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		if port := conf.GetConfig().Inference.GatewayPort(); port > 0 {
+			series.LocalGateway = fmt.Sprintf("http://127.0.0.1:%d/v1", port)
+		}
+		c.JSON(200, series)
+	})
+
+	// The platform's per-model view of this provider beside the node's own
+	// registered list. A model this node registers that the platform does not
+	// hold as offered can still be sent requests, but is missing from the
+	// platform's offerings and may not be credited; nothing else shows it.
+	router.GET("/inference/hub/models", func(c *gin.Context) {
+		platform, err := providerStats.Models(c.Request.Context())
+		if err != nil {
+			c.JSON(200, computing.HubModelView{Models: []computing.HubModelRow{}, NotListed: []string{}, Error: err.Error()})
+			return
+		}
+		c.JSON(200, computing.BuildHubModelView(platform, inferenceService.GetRegisteredModels()))
 	})
 
 	// Historical metrics endpoint
@@ -580,6 +641,17 @@ func runDaemon(cctx *cli.Context) error {
 
 	handlers := []util.ShutdownHandler{
 		{Component: "cp-api", StopFunc: httpStopper},
+	}
+
+	// The local gateway records the operator's own clients, which otherwise
+	// call the model servers directly and never appear anywhere. A failure to
+	// bind is logged, not fatal: the node serves the hub either way.
+	if port := conf.GetConfig().Inference.GatewayPort(); port > 0 {
+		if gw, err := inferenceService.StartLocalGateway(port); err != nil {
+			logs.GetLogger().Warnf("Local gateway not started: %v", err)
+		} else {
+			handlers = append(handlers, util.ShutdownHandler{Component: "local-gateway", StopFunc: gw.Shutdown})
+		}
 	}
 	if autoSwitch != nil {
 		// Stopped before the inference service: a cycle in flight is still

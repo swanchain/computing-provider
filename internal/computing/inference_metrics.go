@@ -127,6 +127,9 @@ const (
 	SourceHealth RequestSource = "health"
 	// SourceSelfCheck is the periodic audit's inference probe.
 	SourceSelfCheck RequestSource = "selfcheck"
+	// SourceLocal is a client on this machine using the local gateway: the
+	// operator's own traffic, recorded so it is not invisible load.
+	SourceLocal RequestSource = "local"
 )
 
 // NewInferenceMetrics creates a new InferenceMetrics instance
