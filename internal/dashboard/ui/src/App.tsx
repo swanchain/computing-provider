@@ -15,6 +15,7 @@ import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
+import { HubModelsPanel } from './components/HubModelsPanel';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { RequestHistoryPanel } from './components/RequestHistoryPanel';
@@ -277,6 +278,7 @@ function App() {
                     authenticated={authenticated}
                     onUnlock={() => setShowAuthDialog(true)}
                   />
+                  <HubModelsPanel />
                   <RequestManagementPanel
                     data={requestMgmt}
                     loading={requestMgmtLoading}
@@ -288,7 +290,7 @@ function App() {
                   <section aria-labelledby="earnings-heading">
                     <div className="mb-3">
                       <h2 id="earnings-heading" className="text-xl font-semibold text-white">Earnings and traffic mix</h2>
-                      <p className="mt-1 text-sm text-slate-300">Estimated local history and the models contributing to it.</p>
+                      <p className="mt-1 text-sm text-slate-300">Swan Inference’s earnings records and the models contributing to them.</p>
                     </div>
                     <div className="min-w-0 space-y-4">
                       <EarningsChart models={earnings?.models} />

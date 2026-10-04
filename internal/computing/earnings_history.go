@@ -24,6 +24,13 @@ type EarningsPoint struct {
 	// platform's ledger accounts for how it actually settles, so the UI must
 	// be able to say which one a bar is.
 	Authoritative bool `json:"authoritative,omitempty"`
+	// The platform splits its own buckets by how the work is billed, and the
+	// two halves settle differently: pay-as-you-go is paid per request, while
+	// subscription work accrues at the full rate and is pro-rated when the
+	// billing period closes. Set only on platform points.
+	PayAsYouGoUSD   float64 `json:"pay_as_you_go_usd,omitempty"`
+	SubscriptionUSD float64 `json:"subscription_usd,omitempty"`
+	Requests        int64   `json:"requests,omitempty"`
 }
 
 // ModelEarningsPoint is one model's contribution to a bucket.
@@ -54,7 +61,26 @@ type EarningsSeries struct {
 	// and describe points from what was actually aggregated, rather than
 	// re-deriving the rule from the requested duration and drifting from it.
 	BucketSeconds int `json:"bucket_seconds,omitempty"`
+	// Source is where the series came from: "platform" when read from the
+	// platform's earnings history, "local" when priced from this node's own
+	// stored history. PlatformError says why a local series was used instead.
+	Source        string `json:"source"`
+	PlatformError string `json:"platform_error,omitempty"`
+	// ModelSplitAuthoritative is true when the split by model is the
+	// platform's own rather than this node's share of served tokens.
+	ModelSplitAuthoritative bool `json:"model_split_authoritative,omitempty"`
+	// The billing split over the window, platform series only. The ratio
+	// per billing period is the platform's, carried through unchanged.
+	PayAsYouGoUSD       float64                        `json:"pay_as_you_go_usd,omitempty"`
+	SubscriptionUSD     float64                        `json:"subscription_usd,omitempty"`
+	SubscriptionProRate map[string]SubscriptionProRate `json:"subscription_pro_rate,omitempty"`
 }
+
+// Where an earnings series came from.
+const (
+	EarningsSourcePlatform = "platform"
+	EarningsSourceLocal    = "local"
+)
 
 // blendedRate is the average provider payout per million tokens, weighted by
 // what each model has actually served.
@@ -165,7 +191,7 @@ func blendedRate(metrics *InferenceMetricsData, rates map[string]ModelPrice) (in
 func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration) *EarningsSeries {
 	out := &EarningsSeries{
 		Points: []EarningsPoint{}, Currency: "USD", Duration: duration,
-		BucketSeconds: int(bucket / time.Second),
+		BucketSeconds: int(bucket / time.Second), Source: EarningsSourceLocal,
 	}
 	if len(snapshots) == 0 || metrics == nil {
 		return out
