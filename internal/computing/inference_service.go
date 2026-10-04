@@ -425,7 +425,7 @@ func (s *InferenceService) Stop() {
 }
 
 // handleInference processes inference requests from Inference service
-func (s *InferenceService) handleInference(payload InferencePayload) (*InferenceResponse, error) {
+func (s *InferenceService) handleInference(ctx context.Context, payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
 	// Enforce rate limit
@@ -438,7 +438,7 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 
 	// Enforce concurrency limit (blocks up to AcquireTimeout for a free slot)
 	if s.concurrencyLimiter != nil {
-		token, err := s.concurrencyLimiter.Acquire(context.Background(), payload.ModelID)
+		token, err := s.concurrencyLimiter.Acquire(ctx, payload.ModelID)
 		if err != nil {
 			return nil, &ModelServerError{
 				StatusCode: 429,
@@ -488,14 +488,14 @@ func (s *InferenceService) handleInference(payload InferencePayload) (*Inference
 	var response json.RawMessage
 	forward := func() error {
 		var ferr error
-		response, ferr = s.forwardToDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+		response, ferr = s.forwardToDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey)
 		return ferr
 	}
 	var err error
 	if s.retryPolicy != nil {
 		// Retry transient failures (connection refused/reset, 502/503/504, timeouts)
 		// with exponential backoff and jitter
-		err = s.retryPolicy.Execute(context.Background(), forward)
+		err = s.retryPolicy.Execute(ctx, forward)
 	} else {
 		err = forward()
 	}
@@ -648,6 +648,12 @@ func postProcessResponse(request json.RawMessage, response json.RawMessage) json
 
 // forwardToDockerModel forwards inference request to a Docker container endpoint
 func (s *InferenceService) forwardToDockerModel(endpoint string, request json.RawMessage, modelID, localModel, apiKey string) (json.RawMessage, error) {
+	return s.forwardToDockerModelContext(context.Background(), endpoint, request, modelID, localModel, apiKey)
+}
+
+// forwardToDockerModelContext is forwardToDockerModel bound to ctx, so a
+// request Swan Inference has abandoned stops generating on the backend.
+func (s *InferenceService) forwardToDockerModelContext(ctx context.Context, endpoint string, request json.RawMessage, modelID, localModel, apiKey string) (json.RawMessage, error) {
 	// Substitute model name if local_model is configured
 	modifiedRequest := s.substituteModelName(request, modelID, localModel)
 
@@ -659,7 +665,7 @@ func (s *InferenceService) forwardToDockerModel(endpoint string, request json.Ra
 	httpClient := NewHttpClient(endpoint, headers)
 
 	var response json.RawMessage
-	if err := httpClient.PostJSON("/v1/chat/completions", modifiedRequest, &response); err != nil {
+	if err := httpClient.PostJSONContext(ctx, "/v1/chat/completions", modifiedRequest, &response); err != nil {
 		return nil, fmt.Errorf("failed to forward request to Docker model: %w", err)
 	}
 
@@ -770,7 +776,7 @@ func (s *InferenceService) GetMetricsPrometheus() string {
 }
 
 // handleStreamingInference processes streaming inference requests
-func (s *InferenceService) handleStreamingInference(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+func (s *InferenceService) handleStreamingInference(ctx context.Context, requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
 
 	// Enforce rate limit
@@ -783,7 +789,7 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 
 	// Enforce concurrency limit (blocks up to AcquireTimeout for a free slot)
 	if s.concurrencyLimiter != nil {
-		token, err := s.concurrencyLimiter.Acquire(context.Background(), payload.ModelID)
+		token, err := s.concurrencyLimiter.Acquire(ctx, payload.ModelID)
 		if err != nil {
 			return &StreamResult{Error: &ModelServerError{
 				StatusCode: 429,
@@ -830,7 +836,7 @@ func (s *InferenceService) handleStreamingInference(requestID string, payload In
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
-	return s.streamFromDockerModel(endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
+	return s.streamFromDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
 }
 
 // resolveModelContexts returns each configured model's real context window and
@@ -1016,6 +1022,12 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 
 // streamFromDockerModel streams inference response from a model endpoint
 func (s *InferenceService) streamFromDockerModel(endpoint string, request json.RawMessage, modelID, localModel, apiKey string, sendChunk func(chunk []byte, done bool) error) *StreamResult {
+	return s.streamFromDockerModelContext(context.Background(), endpoint, request, modelID, localModel, apiKey, sendChunk)
+}
+
+// streamFromDockerModelContext is streamFromDockerModel bound to ctx:
+// cancelling it closes the connection, and the backend stops generating.
+func (s *InferenceService) streamFromDockerModelContext(ctx context.Context, endpoint string, request json.RawMessage, modelID, localModel, apiKey string, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	result := &StreamResult{}
 
 	// Ensure stream is set to true in the request and request usage
@@ -1042,7 +1054,7 @@ func (s *InferenceService) streamFromDockerModel(endpoint string, request json.R
 
 	// Make streaming request to model using shared HTTP client with connection pooling
 	url := endpoint + "/v1/chat/completions"
-	req, err := http.NewRequest("POST", url, bytes.NewReader(modifiedRequest))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(modifiedRequest))
 	if err != nil {
 		result.Error = fmt.Errorf("failed to create request: %w", err)
 		return result

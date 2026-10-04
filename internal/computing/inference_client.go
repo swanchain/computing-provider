@@ -1,6 +1,7 @@
 package computing
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,7 @@ const (
 	MsgTypeBenchmark         MessageType = "benchmark"           // Benchmark test request from server
 	MsgTypeBenchmarkResponse MessageType = "benchmark_response"  // Benchmark test results to server
 	MsgTypeNotice            MessageType = "notice"              // Operational notice from Swan Inference for the operator
+	MsgTypeCancel            MessageType = "cancel"              // Swan Inference abandoned a request; stop serving it
 )
 
 // Message is the base WebSocket message structure
@@ -269,7 +271,7 @@ const (
 )
 
 // InferenceHandler handles non-streaming inference requests from Inference service
-type InferenceHandler func(payload InferencePayload) (*InferenceResponse, error)
+type InferenceHandler func(ctx context.Context, payload InferencePayload) (*InferenceResponse, error)
 
 // StreamResult contains the final result of a streaming inference including token usage
 type StreamResult struct {
@@ -280,7 +282,17 @@ type StreamResult struct {
 
 // StreamingInferenceHandler handles streaming inference requests
 // It receives a callback to send chunks back to Swan Inference and returns token usage
-type StreamingInferenceHandler func(requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
+type StreamingInferenceHandler func(ctx context.Context, requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult
+
+// CancelPayload asks the provider to stop serving a request. Swan Inference
+// sends it when it has given up on the attempt — the first chunk or the whole
+// answer took longer than its budget, or the consumer disconnected — and has
+// moved on. Nothing will read the rest of the answer, so generating it only
+// holds a slot that paying work is queued behind.
+type CancelPayload struct {
+	RequestID string `json:"request_id"`
+	Reason    string `json:"reason,omitempty"`
+}
 
 // WarmupHandler handles model warmup requests
 type WarmupHandler func(payload WarmupPayload) (*WarmupResponse, error)
@@ -311,6 +323,8 @@ type InferenceClient struct {
 	modelHealthProvider       func() map[string]string           // Returns current model health for heartbeat
 	modelMappingsProvider     func() map[string]ModelMapping     // Returns current model mappings for format/quantization
 	modelContextsProvider     func() map[string]ModelContextInfo // Per-model real context window and how it was determined (#61)
+	inflightMu                sync.Mutex
+	inflight                  map[string]*inflightRequest // requests being served, by hub request ID
 	mu                        sync.RWMutex
 	writeMu                   sync.Mutex // Mutex for WebSocket writes to prevent concurrent writes
 
@@ -1443,6 +1457,20 @@ func (c *InferenceClient) handleMessage(msg Message) {
 		}
 		go c.handleWarmup(msg.RequestID, payload)
 
+	case MsgTypeCancel:
+		var payload CancelPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			logs.GetLogger().Errorf("Failed to parse cancel payload: %v", err)
+			return
+		}
+		id := payload.RequestID
+		if id == "" {
+			id = msg.RequestID
+		}
+		if c.cancelRequest(id, payload.Reason) {
+			logs.GetLogger().Infof("Swan Inference cancelled request %s (%s); stopping the backend", id, payload.Reason)
+		}
+
 	case MsgTypeNotice:
 		var payload NoticePayload
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
@@ -1476,9 +1504,13 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	// Record request start for metrics
 	c.metrics.RecordRequestStart(payload.ModelID, payload.Stream)
 
+	// Registered so a cancel from Swan Inference can stop the backend call.
+	ctx, done := c.beginRequest(requestID)
+	defer done()
+
 	// Handle streaming inference
 	if payload.Stream {
-		c.handleStreamingInference(requestID, payload, startTime)
+		c.handleStreamingInference(ctx, requestID, payload, startTime)
 		return
 	}
 
@@ -1487,13 +1519,30 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	var err error
 
 	if c.inferenceHandler != nil {
-		response, err = c.inferenceHandler(payload)
+		response, err = c.inferenceHandler(ctx, payload)
 	} else {
 		err = fmt.Errorf("no inference handler configured")
 	}
 
 	latency := time.Since(startTime).Milliseconds()
 	latencyFloat := float64(latency)
+
+	if reason := c.cancelReason(requestID); reason != "" {
+		// Swan Inference gave up on this request and is no longer waiting, so
+		// nothing is sent back. Recorded so the history shows why it stopped.
+		logs.GetLogger().Infof("Inference request %s for model %s cancelled by Swan Inference after %dms (%s)", requestID, payload.ModelID, latency, reason)
+		c.metrics.RecordRequestEnd(RequestMetric{
+			Source:      SourceHub,
+			RequestID:   requestID,
+			Model:       payload.ModelID,
+			StartTime:   startTime,
+			EndTime:     time.Now(),
+			LatencyMs:   latencyFloat,
+			Success:     false,
+			ErrorReason: cancelledError(reason),
+		})
+		return
+	}
 
 	if err != nil {
 		// Extract HTTP status code from ModelServerError if available
@@ -1544,7 +1593,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	c.sendInferenceResponse(response)
 }
 
-func (c *InferenceClient) handleStreamingInference(requestID string, payload InferencePayload, startTime time.Time) {
+func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestID string, payload InferencePayload, startTime time.Time) {
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
 		c.metrics.RecordRequestEnd(RequestMetric{
@@ -1567,7 +1616,7 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 	}
 
 	// Execute streaming inference
-	result := c.streamingInferenceHandler(requestID, payload, sendChunk)
+	result := c.streamingInferenceHandler(ctx, requestID, payload, sendChunk)
 
 	latency := time.Since(startTime).Milliseconds()
 	latencyFloat := float64(latency)
@@ -1605,11 +1654,19 @@ func (c *InferenceClient) handleStreamingInference(requestID string, payload Inf
 		Streaming: true,
 		Success:   err == nil,
 	}
+	streamReq.Source = SourceHub
+	if reason := c.cancelReason(requestID); reason != "" {
+		// Swan Inference stopped reading this stream; no stream_end is owed.
+		streamReq.Success = false
+		streamReq.ErrorReason = cancelledError(reason)
+		logs.GetLogger().Infof("Streaming inference request %s for model %s cancelled by Swan Inference after %dms (%s)", requestID, payload.ModelID, latency, reason)
+		c.metrics.RecordRequestEnd(streamReq)
+		return
+	}
 	if err != nil {
 		streamReq.ErrorReason = err.Error()
 		logs.GetLogger().Errorf("Streaming inference request %s for model %s failed after %dms (status %d, tokens in/out %d/%d): %v", requestID, payload.ModelID, latency, statusCode, tokensIn, tokensOut, err)
 	}
-	streamReq.Source = SourceHub
 	c.metrics.RecordRequestEnd(streamReq)
 
 	c.sendStreamEnd(requestID, latency, tokensIn, tokensOut, statusCode, err)
@@ -1857,7 +1914,7 @@ func (c *InferenceClient) handleDeterministicChallenge(requestID string, payload
 		Stream:  false,
 	}
 
-	resp, err := c.inferenceHandler(inferPayload)
+	resp, err := c.inferenceHandler(context.Background(), inferPayload)
 	if err != nil {
 		logs.GetLogger().Errorf("Deterministic inference failed for %s: %v", requestID, err)
 		c.sendVerifyResponse(requestID, payload.ChallengeID, false, nil, "inference failed: "+err.Error())
@@ -2007,7 +2064,7 @@ func (c *InferenceClient) runBenchmarkPrompt(modelID string, prompt BenchmarkPro
 	}
 	ch := make(chan inferResult, 1)
 	go func() {
-		resp, err := c.inferenceHandler(inferPayload)
+		resp, err := c.inferenceHandler(context.Background(), inferPayload)
 		ch <- inferResult{resp, err}
 	}()
 
@@ -2569,4 +2626,62 @@ func detectEngineName(m ModelMapping) string {
 		return "tgi"
 	}
 	return ""
+}
+
+// beginRequest registers an in-flight request and returns the context its
+// backend call runs under. A cancel message for requestID cancels it; done
+// must be called when the request finishes, cancelled or not.
+func (c *InferenceClient) beginRequest(requestID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c.inflightMu.Lock()
+	if c.inflight == nil {
+		c.inflight = make(map[string]*inflightRequest)
+	}
+	c.inflight[requestID] = &inflightRequest{cancel: cancel}
+	c.inflightMu.Unlock()
+	return ctx, func() {
+		c.inflightMu.Lock()
+		delete(c.inflight, requestID)
+		c.inflightMu.Unlock()
+		cancel()
+	}
+}
+
+// cancelRequest stops an in-flight request. It reports whether one was found:
+// a cancel can race the request finishing, which is not an error.
+func (c *InferenceClient) cancelRequest(requestID, reason string) bool {
+	c.inflightMu.Lock()
+	r, ok := c.inflight[requestID]
+	if ok {
+		r.reason = reason
+	}
+	c.inflightMu.Unlock()
+	if ok {
+		r.cancel()
+	}
+	return ok
+}
+
+// cancelReason is why requestID was cancelled, or "" if it was not.
+func (c *InferenceClient) cancelReason(requestID string) string {
+	c.inflightMu.Lock()
+	defer c.inflightMu.Unlock()
+	if r, ok := c.inflight[requestID]; ok {
+		return r.reason
+	}
+	return ""
+}
+
+// inflightRequest is a request being served, and why it was cancelled if it was.
+type inflightRequest struct {
+	cancel context.CancelFunc
+	reason string
+}
+
+// cancelledError describes a request Swan Inference cancelled, for the history.
+func cancelledError(reason string) string {
+	if reason == "" {
+		reason = "unspecified"
+	}
+	return "cancelled by Swan Inference: " + reason
 }
