@@ -585,6 +585,8 @@ func (h *ModelHealthChecker) deepCheckModel(modelID, endpoint string) error {
 			StartTime:   started,
 			EndTime:     started.Add(elapsed),
 			LatencyMs:   float64(elapsed.Milliseconds()),
+			TokensIn:    result.TokensIn,
+			TokensOut:   result.TokensOut,
 			Success:     result.OK,
 			ErrorReason: reason,
 			Source:      SourceHealth,
@@ -671,12 +673,7 @@ func (h *ModelHealthChecker) deepProbe(endpoint, apiKey, servedName string) self
 		return selfcheck.ProbeResult{Error: err.Error()}
 	}
 	defer resp.Body.Close()
-
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-	if resp.StatusCode >= 300 {
-		return selfcheck.ProbeResult{StatusCode: resp.StatusCode, Error: strings.TrimSpace(string(snippet))}
-	}
-	return selfcheck.ProbeResult{OK: true, StatusCode: resp.StatusCode}
+	return selfcheck.ReadProbeResponse(resp)
 }
 
 // recordDeepResult stores the engine-probe outcome for the status API.

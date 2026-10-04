@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { api } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
@@ -9,6 +9,7 @@ import {
   UNATTRIBUTED_LABEL,
   buildModelColours,
   colourFor,
+  type ModelColourMap,
 } from '../lib/modelPalette';
 import type { EarningsPoint, ModelEarnings, ModelEarningsPoint } from '../types';
 
@@ -19,6 +20,12 @@ interface EarningsChartProps {
    * repaints when this chart's time window changes.
    */
   models?: ModelEarnings[];
+  /**
+   * Receives the colour map this chart settles on, so the usage chart beside
+   * it can paint each model the same colour instead of ranking independently
+   * and disagreeing.
+   */
+  onColours?: (colours: ModelColourMap) => void;
 }
 
 const WINDOWS = [
@@ -127,7 +134,7 @@ function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModel
   return named;
 }
 
-export function EarningsChart({ models }: EarningsChartProps) {
+export function EarningsChart({ models, onColours }: EarningsChartProps) {
   const [window_, setWindow] = useState<string>('24h');
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error } = usePolling(
@@ -175,6 +182,9 @@ export function EarningsChart({ models }: EarningsChartProps) {
       })),
     );
   }, [models, data?.points]);
+  useEffect(() => {
+    onColours?.(colours);
+  }, [colours, onColours]);
   const points = useMemo(() => data?.points ?? [], [data?.points]);
   const bucketSeconds = data?.bucket_seconds;
   // How much of this window came from the platform's ledger. The provenance

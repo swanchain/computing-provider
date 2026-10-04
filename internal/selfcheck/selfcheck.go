@@ -53,6 +53,40 @@ type ProbeResult struct {
 	// probes can be recorded alongside routed traffic instead of being load the
 	// operator cannot see.
 	LatencyMs float64 `json:"latency_ms,omitempty"`
+	// TokensIn and TokensOut are the backend's own usage figures for the
+	// probe, so recorded probes show the capacity they actually consumed.
+	TokensIn  int `json:"tokens_in,omitempty"`
+	TokensOut int `json:"tokens_out,omitempty"`
+}
+
+// probeBodyLimit bounds how much of a probe's reply is read. A one-token
+// completion is well under this; the bound only guards against a backend that
+// answers with something unexpected and large.
+const probeBodyLimit = 64 << 10
+
+// ReadProbeResponse turns a probe's HTTP response into a result: an error
+// snippet for a failure, and the reply's usage figures for a success. The
+// whole reply is read on success because usage comes after the choices.
+func ReadProbeResponse(resp *http.Response) ProbeResult {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit))
+	if resp.StatusCode >= 300 {
+		snippet := body
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return ProbeResult{StatusCode: resp.StatusCode, Error: strings.TrimSpace(string(snippet))}
+	}
+	res := ProbeResult{OK: true, StatusCode: resp.StatusCode}
+	var parsed struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(body, &parsed) == nil {
+		res.TokensIn, res.TokensOut = parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens
+	}
+	return res
 }
 
 // BackendAtFault reports whether this failure is the backend's to answer for.
@@ -545,11 +579,7 @@ func (c *checker) probeModel(id string, m modelEntry) (res ProbeResult) {
 		return ProbeResult{Error: err.Error()}
 	}
 	defer resp.Body.Close()
-	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-	if resp.StatusCode >= 300 {
-		return ProbeResult{StatusCode: resp.StatusCode, Error: strings.TrimSpace(string(snippet))}
-	}
-	return ProbeResult{OK: true, StatusCode: resp.StatusCode}
+	return ReadProbeResponse(resp)
 }
 
 // checkTraffic flags models that are registered and healthy but have never been
