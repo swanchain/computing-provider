@@ -69,6 +69,111 @@ type UsageSeries struct {
 	// LocalGateway is where local clients should be pointed, or empty when
 	// the gateway is off.
 	LocalGateway string `json:"local_gateway"`
+	// Machines is set for a combined series: one entry per node it covers.
+	// A node whose usage could not be fetched is listed with its error rather
+	// than silently left out — a missing machine would read as an idle one.
+	Machines []MachineUsage `json:"machines,omitempty"`
+}
+
+// MachineUsage is one node's part of a combined series.
+type MachineUsage struct {
+	Name   string      `json:"name"`
+	Self   bool        `json:"self,omitempty"`
+	Error  string      `json:"error,omitempty"`
+	Totals UsageTotals `json:"totals"`
+	// Points is this node's tokens per bucket, every source and model summed,
+	// aligned with the combined series' points.
+	Points []UsageTotals `json:"points"`
+}
+
+// CombineUsage merges node series into one: sources and models are summed per
+// bucket (a model served on several machines adds up), and each node's totals
+// are kept for a By-machine view. Buckets are UTC-aligned on every node, so
+// identical timestamps line up; a bucket only one node has is kept.
+func CombineUsage(self string, local UsageSeries, peers map[string]UsageSeries, peerErrs map[string]string) UsageSeries {
+	out := UsageSeries{
+		Duration: local.Duration, BucketSeconds: local.BucketSeconds,
+		Totals: map[string]UsageTotals{}, Direct: []DirectCoverage{}, Endpoints: []BackendEndpointStatus{},
+		LocalGateway: local.LocalGateway,
+	}
+	index := map[time.Time]int{}
+	addPoint := func(ts time.Time) int {
+		if i, ok := index[ts]; ok {
+			return i
+		}
+		index[ts] = len(out.Points)
+		out.Points = append(out.Points, UsagePoint{Timestamp: ts, Sources: map[string]UsageTotals{}, Models: map[string]map[string]UsageTotals{}})
+		return index[ts]
+	}
+	type named struct {
+		name   string
+		self   bool
+		series UsageSeries
+	}
+	nodes := []named{{self, true, local}}
+	peerNames := make([]string, 0, len(peers))
+	for n := range peers {
+		peerNames = append(peerNames, n)
+	}
+	sort.Strings(peerNames)
+	for _, n := range peerNames {
+		nodes = append(nodes, named{n, false, peers[n]})
+	}
+	perNode := make([]map[time.Time]UsageTotals, len(nodes))
+	for k, nd := range nodes {
+		perNode[k] = map[time.Time]UsageTotals{}
+		for _, p := range nd.series.Points {
+			i := addPoint(p.Timestamp)
+			for src, t := range p.Sources {
+				cur := out.Points[i].Sources[src]
+				cur.add(t)
+				out.Points[i].Sources[src] = cur
+				tot := out.Totals[src]
+				tot.add(t)
+				out.Totals[src] = tot
+				nt := perNode[k][p.Timestamp]
+				nt.add(t)
+				perNode[k][p.Timestamp] = nt
+			}
+			for model, bySrc := range p.Models {
+				if out.Points[i].Models[model] == nil {
+					out.Points[i].Models[model] = map[string]UsageTotals{}
+				}
+				for src, t := range bySrc {
+					cur := out.Points[i].Models[model][src]
+					cur.add(t)
+					out.Points[i].Models[model][src] = cur
+				}
+			}
+		}
+		for _, d := range nd.series.Direct {
+			d.Endpoint = nd.name + " " + d.Endpoint
+			out.Direct = append(out.Direct, d)
+		}
+		for _, e := range nd.series.Endpoints {
+			e.Endpoint = nd.name + " " + e.Endpoint
+			out.Endpoints = append(out.Endpoints, e)
+		}
+	}
+	sort.Slice(out.Points, func(a, b int) bool { return out.Points[a].Timestamp.Before(out.Points[b].Timestamp) })
+	for k, nd := range nodes {
+		mu := MachineUsage{Name: nd.name, Self: nd.self, Points: make([]UsageTotals, len(out.Points))}
+		for i, p := range out.Points {
+			t := perNode[k][p.Timestamp]
+			mu.Points[i] = t
+			mu.Totals.add(t)
+		}
+		out.Machines = append(out.Machines, mu)
+	}
+	errNames := make([]string, 0, len(peerErrs))
+	for n := range peerErrs {
+		errNames = append(errNames, n)
+	}
+	sort.Strings(errNames)
+	for _, n := range errNames {
+		out.Machines = append(out.Machines, MachineUsage{Name: n, Error: peerErrs[n], Points: make([]UsageTotals, len(out.Points))})
+	}
+	return out
 }
 
 // usageRecord is the part of a recorded request the series needs.

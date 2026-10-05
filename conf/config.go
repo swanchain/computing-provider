@@ -87,6 +87,17 @@ type ComputeNode struct {
 	RequestLimits RequestLimits `toml:"RequestLimits,omitempty"`
 	Dashboard     Dashboard     `toml:"Dashboard,omitempty"`
 	RequestLog    RequestLog    `toml:"RequestLog,omitempty"`
+	// Peers are the provider's other nodes. The dashboard shows their usage
+	// beside this node's, because earnings are account-wide and a model
+	// served only on another machine is otherwise invisible here.
+	Peers []Peer `toml:"Peers,omitempty"`
+}
+
+// Peer is another node of the same provider, reached over its local API
+// (typically through an SSH tunnel, since node APIs listen on loopback).
+type Peer struct {
+	Name string `toml:"Name"` // shown in the dashboard
+	URL  string `toml:"URL"`  // its API base, e.g. http://127.0.0.1:19085
 }
 
 // RequestLog controls how long the per-request history kept for the

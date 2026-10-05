@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
@@ -261,7 +264,8 @@ func runDaemon(cctx *cli.Context) error {
 			// The node's own name, so the dashboard can say which machine its
 			// usage figures describe: earnings are provider-wide, usage is not.
 			"node_name": conf.GetConfig().API.NodeName,
-			"build":   build.UserVersion(),
+			"peers":     peerNames(conf.GetConfig().Peers),
+			"build":     build.UserVersion(),
 		})
 	})
 
@@ -578,6 +582,12 @@ func runDaemon(cctx *cli.Context) error {
 		if port := conf.GetConfig().Inference.GatewayPort(); port > 0 {
 			series.LocalGateway = fmt.Sprintf("http://127.0.0.1:%d/v1", port)
 		}
+		// scope=all adds the provider's other nodes, so usage covers the same
+		// machines the account-wide earnings do. Peers are only read.
+		if peers := conf.GetConfig().Peers; c.Query("scope") == "all" && len(peers) > 0 {
+			got, errs := fetchPeerUsage(c.Request.Context(), peers, durationStr)
+			series = computing.CombineUsage(conf.GetConfig().API.NodeName, series, got, errs)
+		}
 		c.JSON(200, series)
 	})
 
@@ -688,4 +698,54 @@ func runDaemon(cctx *cli.Context) error {
 func configureEncodedPathParameters(engine *gin.Engine) {
 	engine.UseRawPath = true
 	engine.UnescapePathValues = true
+}
+
+// fetchPeerUsage reads each peer node's usage series in parallel. A peer that
+// cannot be read is reported with its error, never dropped.
+func fetchPeerUsage(ctx context.Context, peers []conf.Peer, duration string) (map[string]computing.UsageSeries, map[string]string) {
+	type result struct {
+		name   string
+		series computing.UsageSeries
+		err    error
+	}
+	ch := make(chan result, len(peers))
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, p := range peers {
+		go func(p conf.Peer) {
+			r := result{name: p.Name}
+			endpoint := strings.TrimRight(p.URL, "/") + "/api/v1/computing/inference/usage/history?duration=" + url.QueryEscape(duration)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			if err == nil {
+				var resp *http.Response
+				if resp, err = client.Do(req); err == nil {
+					if resp.StatusCode != http.StatusOK {
+						err = fmt.Errorf("HTTP %d", resp.StatusCode)
+					} else {
+						err = json.NewDecoder(resp.Body).Decode(&r.series)
+					}
+					resp.Body.Close()
+				}
+			}
+			r.err = err
+			ch <- r
+		}(p)
+	}
+	got, errs := map[string]computing.UsageSeries{}, map[string]string{}
+	for range peers {
+		r := <-ch
+		if r.err != nil {
+			errs[r.name] = r.err.Error()
+		} else {
+			got[r.name] = r.series
+		}
+	}
+	return got, errs
+}
+
+func peerNames(peers []conf.Peer) []string {
+	out := make([]string, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p.Name)
+	}
+	return out
 }

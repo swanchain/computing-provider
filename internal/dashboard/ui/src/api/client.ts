@@ -123,7 +123,8 @@ export const api = {
   getEarningsHistory: (duration: string) => fetchJson<EarningsSeries>(`/earnings/history?duration=${duration}`),
 
   // Usage by source, including work that bypassed the node
-  getUsageHistory: (duration: string) => fetchJson<UsageSeries>(`/usage/history?duration=${duration}`),
+  getUsageHistory: (duration: string, scope: 'node' | 'all' = 'node') =>
+    fetchJson<UsageSeries>(`/usage/history?duration=${duration}${scope === 'all' ? '&scope=all' : ''}`),
 
   // Swan Inference's own view of this provider's models
   getHubModels: () => fetchJson<HubModelView>('/hub/models'),
