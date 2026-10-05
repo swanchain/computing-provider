@@ -26,6 +26,12 @@ interface EarningsChartProps {
    * and disagreeing.
    */
   onColours?: (colours: ModelColourMap) => void;
+  /**
+   * The models this node serves. Earnings are the provider account's, across
+   * every machine, so a model missing from this list was earned elsewhere and
+   * is labelled that way rather than looking like this node's work.
+   */
+  localModels?: string[];
 }
 
 const WINDOWS = [
@@ -85,7 +91,7 @@ interface Segment {
  * segment, so a bar's segments always sum to its total instead of quietly
  * losing the difference.
  */
-function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModelColours>): Segment[] {
+function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModelColours>, local?: Set<string>): Segment[] {
   const named: Segment[] = [];
   let otherUSD = 0;
   let otherIn = 0;
@@ -95,7 +101,7 @@ function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModel
     if (colours.colours.has(model)) {
       named.push({
         key: model,
-        label: model,
+        label: local && !local.has(model) ? `${model} · other machine` : model,
         colour: colourFor(colours, model),
         usd: m.usd,
         tokensIn: m.tokens_in,
@@ -134,7 +140,8 @@ function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModel
   return named;
 }
 
-export function EarningsChart({ models, onColours }: EarningsChartProps) {
+export function EarningsChart({ models, onColours, localModels }: EarningsChartProps) {
+  const local = useMemo(() => (localModels && localModels.length ? new Set(localModels) : undefined), [localModels]);
   const [window_, setWindow] = useState<string>('24h');
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error } = usePolling(
@@ -238,7 +245,7 @@ export function EarningsChart({ models, onColours }: EarningsChartProps) {
   const summaryLabel = active
     ? formatBucket(active.timestamp, bucketSeconds, true)
     : (WINDOWS.find((w) => w.id === window_)?.label ?? window_);
-  const activeSegments = summary ? segmentsFor(summary, colours) : [];
+  const activeSegments = summary ? segmentsFor(summary, colours, local) : [];
 
   // Which models actually appear anywhere in this window — the legend should
   // name what is on screen, not every model the node has ever served.
@@ -267,7 +274,9 @@ export function EarningsChart({ models, onColours }: EarningsChartProps) {
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div>
-          <h3 className="text-sm font-medium text-slate-300">Earnings over time</h3>
+          <h3 className="text-sm font-medium text-slate-300">
+            Earnings over time <span className="font-normal text-slate-500">· whole provider account, all machines</span>
+          </h3>
           <p className="text-xs text-slate-400">
             {loading && !data
               ? 'Loading…'
@@ -363,7 +372,7 @@ export function EarningsChart({ models, onColours }: EarningsChartProps) {
               // as a busy period rather than an idle one.
               const h = peak > 0 ? Math.max(2, (p.usd / peak) * 100) : 2;
               const on = activeIndex === i;
-              const segments = segmentsFor(p, colours);
+              const segments = segmentsFor(p, colours, local);
               const describe = segments.length
                 ? segments.map((s) => `${s.label} ${formatUSD(s.usd)}`).join(', ')
                 : `${p.tokens_in.toLocaleString()} in, ${p.tokens_out.toLocaleString()} out`;

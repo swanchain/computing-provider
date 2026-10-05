@@ -189,6 +189,10 @@ export interface RetryMetrics {
 export interface ConnectionStatus {
   connected: boolean;
   active_models: string[];
+  /** Models this node registers with Swan Inference. */
+  registered_models?: string[];
+  /** This node's configured name. */
+  node_name?: string;
   /** Semantic version of the running provider, e.g. "0.5.0". */
   version?: string;
   /** Full build string, e.g. "0.5.0+mainnet+git.5f7e316". */
