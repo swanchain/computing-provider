@@ -193,6 +193,8 @@ export interface ConnectionStatus {
   registered_models?: string[];
   /** This node's configured name. */
   node_name?: string;
+  /** Names of this provider's other nodes whose usage can be combined here. */
+  peers?: string[];
   /** Semantic version of the running provider, e.g. "0.5.0". */
   version?: string;
   /** Full build string, e.g. "0.5.0+mainnet+git.5f7e316". */
@@ -440,4 +442,17 @@ export interface UsageSeries {
   endpoints: BackendEndpointStatus[];
   /** Where to point local clients; empty when the gateway is off. */
   local_gateway: string;
+  /** Set when the series combines several nodes (scope=all). */
+  machines?: MachineUsage[];
+}
+
+export interface MachineUsage {
+  name: string;
+  /** The node serving this dashboard. */
+  self?: boolean;
+  /** Why this node's usage could not be read; it is then absent from the bars. */
+  error?: string;
+  totals: UsageTotals;
+  /** Tokens per bucket, aligned with the series' points. */
+  points: UsageTotals[];
 }

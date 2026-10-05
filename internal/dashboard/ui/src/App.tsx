@@ -270,7 +270,7 @@ function App() {
                 <p className="mt-1 text-sm text-slate-300">What the GPUs served, by model or source, beside what Swan Inference paid for.</p>
               </div>
               <div className="grid items-start gap-6 lg:grid-cols-2">
-                <UsageChart models={earnings?.models} colours={modelColours} nodeName={status?.node_name} />
+                <UsageChart models={earnings?.models} colours={modelColours} nodeName={status?.node_name} peers={status?.peers} />
                 <EarningsChart models={earnings?.models} onColours={setModelColours} localModels={status?.registered_models} />
               </div>
             </section>

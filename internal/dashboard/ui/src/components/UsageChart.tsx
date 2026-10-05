@@ -136,16 +136,23 @@ interface UsageChartProps {
   models?: ModelEarnings[];
   /** The earnings chart's colour map; used as-is so a model matches in both. */
   colours?: ModelColourMap | null;
-  /** This node's name: usage covers this machine only. */
+  /** This node's name. */
   nodeName?: string;
+  /** The provider's other nodes. When there are any, usage can cover every machine. */
+  peers?: string[];
 }
 
-export function UsageChart({ models, colours: shared, nodeName }: UsageChartProps) {
+export function UsageChart({ models, colours: shared, nodeName, peers }: UsageChartProps) {
+  const hasPeers = (peers?.length ?? 0) > 0;
+  // All machines by default when there are any: that is the scope the earnings
+  // chart beside it reports, so the two can be read against each other.
+  const [scope, setScope] = useState<'node' | 'all'>('all');
+  const effectiveScope = hasPeers ? scope : 'node';
   const [window_, setWindow] = useState<string>('24h');
-  const [view, setView] = useState<'model' | 'source'>('model');
+  const [view, setView] = useState<'model' | 'source' | 'machine'>('model');
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error } = usePolling(
-    useCallback(() => api.getUsageHistory(window_), [window_]),
+    useCallback(() => api.getUsageHistory(window_, effectiveScope), [window_, effectiveScope]),
     60_000,
   );
 
@@ -182,8 +189,25 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
   }, [models, windowModels]);
   const colours = shared ?? own;
 
+  const machines = useMemo(() => (effectiveScope === 'all' ? (data?.machines ?? []) : []), [data?.machines, effectiveScope]);
   const segmentsFor = useCallback(
-    (sources: BySource, byModel: ModelsBySource): Segment[] => {
+    (sources: BySource, byModel: ModelsBySource, bucket: number | 'total'): Segment[] => {
+      if (view === 'machine' && machines.length > 0) {
+        return machines
+          .filter((m) => !m.error)
+          .map((m, k) => {
+            const t = bucket === 'total' ? m.totals : (m.points[bucket] ?? { requests: 0, tokens_in: 0, tokens_out: 0 });
+            return {
+              key: 'machine:' + m.name,
+              label: m.self ? `${m.name} (this node)` : m.name,
+              colour: SERIES_COLOURS[k] ?? OTHER_COLOUR,
+              tokensIn: t.tokens_in,
+              tokensOut: t.tokens_out,
+              inIsFloor: false,
+              detail: `${t.requests.toLocaleString()} req`,
+            };
+          });
+      }
       if (view === 'source') {
         return SERIES.map((s) => {
           const t = sumSources(sources, s.sources);
@@ -235,16 +259,16 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
       }
       return named;
     },
-    [view, colours],
+    [view, colours, machines],
   );
 
   const total = (segs: Segment[]) => segs.reduce((a, s) => a + s.tokensIn + s.tokensOut, 0);
-  const peak = points.reduce((m, p) => Math.max(m, total(segmentsFor(p.sources, p.models ?? {}))), 0);
+  const peak = points.reduce((m, p, i) => Math.max(m, total(segmentsFor(p.sources, p.models ?? {}, i))), 0);
   const active = hovered !== null ? points[hovered] : null;
   const summarySegments = active
-    ? segmentsFor(active.sources, active.models ?? {})
+    ? segmentsFor(active.sources, active.models ?? {}, hovered ?? 0)
     : data
-      ? segmentsFor(data.totals, windowModels)
+      ? segmentsFor(data.totals, windowModels, 'total')
       : [];
   const summaryLabel = active
     ? formatBucket(active.timestamp, bucketSeconds, true)
@@ -278,7 +302,11 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
         <div>
           <h3 className="text-sm font-medium text-slate-300">
             Usage over time{' '}
-            <span className="font-normal text-slate-500">· this node{nodeName ? ` (${nodeName})` : ''} only</span>
+            <span className="font-normal text-slate-500">
+              {effectiveScope === 'all'
+                ? `· all machines (${machines.length || (peers?.length ?? 0) + 1})`
+                : `· this node${nodeName ? ` (${nodeName})` : ''} only`}
+            </span>
           </h3>
           <p className="text-xs text-slate-400">
             {loading && !data
@@ -291,8 +319,28 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
           </p>
         </div>
         <div className="flex flex-wrap gap-1">
+          {hasPeers && (
+            <div className="flex gap-1" role="group" aria-label="Machines covered">
+              {(['all', 'node'] as const).map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  onClick={() => {
+                    setScope(sc);
+                    if (sc === 'node' && view === 'machine') setView('model');
+                  }}
+                  aria-pressed={scope === sc}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                    scope === sc ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {sc === 'all' ? 'All machines' : 'This node'}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex gap-1" role="group" aria-label="Split bars by">
-            {(['model', 'source'] as const).map((v) => (
+            {(effectiveScope === 'all' ? (['model', 'source', 'machine'] as const) : (['model', 'source'] as const)).map((v) => (
               <button
                 key={v}
                 type="button"
@@ -362,7 +410,7 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
             aria-label={`Input and output tokens per interval over ${window_}, split by ${view}`}
           >
             {points.map((p, i) => {
-              const segs = segmentsFor(p.sources, p.models ?? {}).filter((x) => x.tokensIn + x.tokensOut > 0);
+              const segs = segmentsFor(p.sources, p.models ?? {}, i).filter((x) => x.tokensIn + x.tokensOut > 0);
               const t = total(segs);
               const h = peak > 0 && t > 0 ? Math.max(2, (t / peak) * 100) : 0;
               const describe = segs.length ? segs.map((x) => `${x.label} ${inOut(x)}`).join(', ') : 'nothing served';
@@ -409,7 +457,12 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
           </div>
 
           <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-label={view === 'model' ? 'Models in this chart' : 'Sources in this chart'}>
-            {(view === 'source' ? SERIES.map((s) => ({ key: s.key, label: s.label, colour: s.colour, title: s.title })) : legendModels).map((s) => (
+            {(view === 'source'
+              ? SERIES.map((s) => ({ key: s.key, label: s.label, colour: s.colour, title: s.title }))
+              : view === 'machine' && machines.length > 0
+                ? machines.filter((m) => !m.error).map((m, k) => ({ key: 'machine:' + m.name, label: m.self ? `${m.name} (this node)` : m.name, colour: SERIES_COLOURS[k] ?? OTHER_COLOUR, title: undefined as string | undefined }))
+                : legendModels
+            ).map((s) => (
               <li key={s.key} className="flex min-w-0 items-center gap-1.5" title={s.title}>
                 <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: s.colour }} />
                 <span className="break-all text-slate-400">{s.label}</span>
@@ -429,8 +482,10 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <div className="space-y-1">
           <p>
-            Counts only this machine; the earnings beside it are for the whole provider account, so models served
-            on another machine appear there and not here. Bars are total tokens: output solid, input light. Direct input (≥) is a floor — the model server’s
+            {effectiveScope === 'all'
+              ? 'Covers every machine of this provider, the same scope as the earnings beside it.'
+              : 'Counts only this machine; the earnings beside it are for the whole provider account, so models served on another machine appear there and not here.'}{' '}
+            Bars are total tokens: output solid, input light. Direct input (≥) is a floor — the model server’s
             prompt counter skips cache hits, so the real figure can only be higher. Only hub traffic is paid.
             {data?.local_gateway && (
               <>
@@ -439,6 +494,12 @@ export function UsageChart({ models, colours: shared, nodeName }: UsageChartProp
               </>
             )}
           </p>
+          {machines.filter((m) => m.error).map((m) => (
+            <p key={m.name} className="text-amber-300/90">
+              Usage from <span className="font-mono">{m.name}</span> could not be read ({m.error}); it is missing from these
+              bars, not idle.
+            </p>
+          ))}
           {unmeasured.length > 0 && (
             <p className="text-amber-300/90">
               Direct usage is not measured for{' '}
