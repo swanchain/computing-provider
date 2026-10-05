@@ -258,6 +258,9 @@ func runDaemon(cctx *cli.Context) error {
 			// until the provider is restarted — the same version the platform
 			// was told at registration.
 			"version": build.BuildVersion,
+			// The node's own name, so the dashboard can say which machine its
+			// usage figures describe: earnings are provider-wide, usage is not.
+			"node_name": conf.GetConfig().API.NodeName,
 			"build":   build.UserVersion(),
 		})
 	})

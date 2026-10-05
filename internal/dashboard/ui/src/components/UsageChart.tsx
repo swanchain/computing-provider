@@ -136,9 +136,11 @@ interface UsageChartProps {
   models?: ModelEarnings[];
   /** The earnings chart's colour map; used as-is so a model matches in both. */
   colours?: ModelColourMap | null;
+  /** This node's name: usage covers this machine only. */
+  nodeName?: string;
 }
 
-export function UsageChart({ models, colours: shared }: UsageChartProps) {
+export function UsageChart({ models, colours: shared, nodeName }: UsageChartProps) {
   const [window_, setWindow] = useState<string>('24h');
   const [view, setView] = useState<'model' | 'source'>('model');
   const [hovered, setHovered] = useState<number | null>(null);
@@ -274,7 +276,10 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div>
-          <h3 className="text-sm font-medium text-slate-300">Usage over time</h3>
+          <h3 className="text-sm font-medium text-slate-300">
+            Usage over time{' '}
+            <span className="font-normal text-slate-500">· this node{nodeName ? ` (${nodeName})` : ''} only</span>
+          </h3>
           <p className="text-xs text-slate-400">
             {loading && !data
               ? 'Loading…'
@@ -424,7 +429,8 @@ export function UsageChart({ models, colours: shared }: UsageChartProps) {
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <div className="space-y-1">
           <p>
-            Bars are total tokens: output solid, input light. Direct input (≥) is a floor — the model server’s
+            Counts only this machine; the earnings beside it are for the whole provider account, so models served
+            on another machine appear there and not here. Bars are total tokens: output solid, input light. Direct input (≥) is a floor — the model server’s
             prompt counter skips cache hits, so the real figure can only be higher. Only hub traffic is paid.
             {data?.local_gateway && (
               <>
