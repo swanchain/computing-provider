@@ -114,6 +114,9 @@ type RequestMetric struct {
 	// rather than customer traffic is not something a provider client should
 	// try to infer or publish.
 	Source RequestSource `json:"source,omitempty"`
+	// Client describes who sent a local-gateway request: the calling process
+	// and the User-Agent it sent. Empty for every other source.
+	Client string `json:"client,omitempty"`
 }
 
 // RequestSource identifies the entry point a request arrived through.

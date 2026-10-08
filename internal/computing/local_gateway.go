@@ -136,6 +136,11 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 		Streaming: head.Stream,
 		Source:    SourceLocal,
 	}
+	// Identifying the caller scans /proc, which takes a noticeable fraction of
+	// a second on a busy host. Run it beside the request instead of in front
+	// of it; the client's socket stays open until the response is written.
+	client := make(chan string, 1)
+	go func() { client <- describeLocalClient(r) }()
 
 	// Bound to the client's own request: a local client that disconnects
 	// stops the generation instead of leaving it to run for nobody.
@@ -147,6 +152,7 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 
 	rec.EndTime = time.Now()
 	rec.LatencyMs = float64(rec.EndTime.Sub(rec.StartTime).Milliseconds())
+	rec.Client = <-client
 	if s.client != nil {
 		if m := s.client.Metrics(); m != nil {
 			m.RecordRequest(rec)

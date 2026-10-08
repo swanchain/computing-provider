@@ -33,6 +33,8 @@ type RequestHistoryEntity struct {
 	// ErrorReason can be an upstream body, so it is truncated before storage:
 	// a row per request means an unbounded field is an unbounded table.
 	ErrorReason string
+	// Client is set for local-gateway requests only; see describeLocalClient.
+	Client string
 }
 
 func (RequestHistoryEntity) TableName() string {
@@ -206,6 +208,7 @@ func entityFor(req RequestMetric) RequestHistoryEntity {
 		Streaming:   req.Streaming,
 		Success:     req.Success,
 		ErrorReason: req.ErrorReason,
+		Client:      req.Client,
 	}
 }
 
@@ -324,6 +327,7 @@ func (s *RequestStore) Query(q RequestHistoryQuery) (RequestHistoryPage, error) 
 			Success:     row.Success,
 			ErrorReason: row.ErrorReason,
 			Source:      RequestSource(row.Source),
+			Client:      row.Client,
 		})
 	}
 	return page, nil

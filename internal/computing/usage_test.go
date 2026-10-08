@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -215,6 +216,42 @@ func TestLocalGatewayStreams(t *testing.T) {
 	}
 }
 
+// A local request records who sent it: the User-Agent, and on Linux the
+// process holding the client end of the connection — here, this test binary.
+func TestLocalGatewayRecordsTheClient(t *testing.T) {
+	s, _ := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	})
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions", strings.NewReader(`{"model":"org/model"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "batch-judge/1.0\r\nX-Injected: 1")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		// net/http refuses a header value with CR/LF; send it without.
+		req.Header.Set("User-Agent", "batch-judge/1.0")
+		if resp, err = http.DefaultClient.Do(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp.Body.Close()
+
+	client := lastLocalRecord(t, s).Client
+	if !strings.Contains(client, "batch-judge/1.0") {
+		t.Errorf("client = %q, want the User-Agent in it", client)
+	}
+	if strings.ContainsAny(client, "\r\n") {
+		t.Errorf("client = %q carries control characters", client)
+	}
+	if _, err := os.Stat("/proc/net/tcp"); err == nil {
+		if want := fmt.Sprintf("pid %d", os.Getpid()); !strings.Contains(client, want) {
+			t.Errorf("client = %q, want the calling process (%s)", client, want)
+		}
+	}
+}
+
 func TestLocalGatewayRejectsUnknownModel(t *testing.T) {
 	s, _ := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("an unknown model must not reach a backend")
@@ -319,8 +356,8 @@ func TestDirectCarryDoesNotPersist(t *testing.T) {
 	records := []usageRecord{{Model: "g", Source: "hub", StartTime: from.Add(10 * time.Minute), TokensOut: 1000}}
 	samples := []BackendUsageSample{
 		{Time: from.Add(-time.Minute), Generated: 0},
-		{Time: from.Add(30 * time.Minute), Generated: 0},     // hour 0: recorded 1000, counted 0
-		{Time: from.Add(90 * time.Minute), Generated: 0},     // hour 1: nothing
+		{Time: from.Add(30 * time.Minute), Generated: 0},    // hour 0: recorded 1000, counted 0
+		{Time: from.Add(90 * time.Minute), Generated: 0},    // hour 1: nothing
 		{Time: from.Add(150 * time.Minute), Generated: 700}, // hour 2: 700 nobody recorded
 	}
 	s := glmSeries(records, samples, from, 3)
