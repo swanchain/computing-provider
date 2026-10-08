@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,7 +85,15 @@ func (s *InferenceService) serveLocalModels(w http.ResponseWriter, r *http.Reque
 		Object string  `json:"object"`
 		Data   []model `json:"data"`
 	}{Object: "list", Data: []model{}}
-	for _, id := range s.GetActiveModels() {
+	// List only what a chat request would be forwarded for. Listing every
+	// mapped model told clients a disabled one was available, and they found
+	// out otherwise only from the 503 on the request itself.
+	ids := s.GetActiveModels()
+	sort.Strings(ids)
+	for _, id := range ids {
+		if _, _, _, mse := s.resolveModelEndpoint(id); mse != nil {
+			continue
+		}
 		out.Data = append(out.Data, model{ID: id, Object: "model", OwnedBy: "computing-provider"})
 	}
 	w.Header().Set("Content-Type", "application/json")

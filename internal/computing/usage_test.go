@@ -2,6 +2,7 @@ package computing
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -227,6 +228,51 @@ func TestLocalGatewayRejectsUnknownModel(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// /v1/models must agree with /v1/chat/completions: a model the gateway would
+// refuse as disabled is not listed, and enabling it brings it back.
+func TestLocalGatewayModelsHidesDisabled(t *testing.T) {
+	s, srv := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {})
+	s.modelMappings["org/off"] = ModelMapping{Endpoint: srv.URL}
+	s.registry = NewModelRegistry("", nil)
+	s.registry.models["org/off"] = &RegisteredModel{ID: "org/off", Endpoint: srv.URL, Enabled: true}
+	if err := s.registry.DisableModel("org/off"); err != nil {
+		t.Fatal(err)
+	}
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	list := func() []string {
+		resp, err := http.Get(gw.URL + "/v1/models")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out struct {
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, m := range out.Data {
+			ids = append(ids, m.ID)
+		}
+		return ids
+	}
+
+	if got := list(); len(got) != 1 || got[0] != "org/model" {
+		t.Errorf("with org/off disabled, /v1/models = %v, want [org/model]", got)
+	}
+	if err := s.registry.EnableModel("org/off"); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); len(got) != 2 || got[0] != "org/model" || got[1] != "org/off" {
+		t.Errorf("after enabling org/off, /v1/models = %v, want [org/model org/off]", got)
 	}
 }
 
