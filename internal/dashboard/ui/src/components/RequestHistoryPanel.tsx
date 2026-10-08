@@ -111,6 +111,12 @@ function RequestReceipt({ request }: { request: RequestLog }) {
         <span className="block text-slate-400">Delivery</span>
         <span className="mt-1 block text-slate-300">{request.streaming ? 'Streaming' : 'Single response'}</span>
       </div>
+      {request.client && (
+        <div className="sm:col-span-2 lg:col-span-4">
+          <span className="block text-slate-400">Client</span>
+          <span className="mt-1 block break-all font-mono text-slate-300">{request.client}</span>
+        </div>
+      )}
       {request.error_reason && (
         <div className="sm:col-span-2 lg:col-span-4">
           <span className="block text-slate-400">Error</span>

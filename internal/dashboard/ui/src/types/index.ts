@@ -356,6 +356,8 @@ export interface RequestLog {
    * Absent on records written before the field existed.
    */
   source?: RequestSource;
+  /** Local-gateway requests only: the calling process and its User-Agent. */
+  client?: string;
 }
 
 export type RequestSource = 'hub' | 'health' | 'selfcheck' | 'local';
