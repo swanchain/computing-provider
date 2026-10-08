@@ -124,6 +124,11 @@ type InferencePayload struct {
 	ModelID    string          `json:"model_id"`
 	Request    json.RawMessage `json:"request"`
 	Stream     bool            `json:"stream"` // Whether to stream the response
+	// Operation is what the request asks for, as the OpenAI path after /v1/
+	// ("chat/completions", "images/generations", "embeddings",
+	// "audio/transcriptions"). Hubs that predate it leave it empty; see
+	// resolveOperation.
+	Operation string `json:"operation,omitempty"`
 }
 
 // InferenceResponse is returned by provider
@@ -278,8 +283,11 @@ const (
 	// Send pings to peer with this period
 	pingPeriod = (pongWait * 9) / 10
 
-	// Maximum message size allowed from peer
-	maxMessageSize = 1024 * 1024 // 1MB
+	// Maximum message size allowed from peer. A transcription request carries
+	// the whole audio upload, base64-encoded: up to 25 MB of audio is ~34 MB
+	// on the wire. At the old 1 MB a single such request closed the
+	// connection and took every model on this node off the hub with it.
+	maxMessageSize = 64 << 20
 
 	// Reconnection delay
 	reconnectDelay = 5 * time.Second

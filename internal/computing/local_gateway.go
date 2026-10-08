@@ -45,6 +45,8 @@ func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.serveLocalChat)
 	mux.HandleFunc("/v1/models", s.serveLocalModels)
+	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
+	mux.HandleFunc("/v1/audio/transcriptions", s.serveLocalTranscription)
 	return mux
 }
 
@@ -247,4 +249,142 @@ func writeLocalError(w http.ResponseWriter, status int, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{"message": strings.TrimSpace(msg), "type": typ},
 	})
+}
+
+// serveLocalImages forwards an image generation request, recorded as local
+// work like the chat path.
+func (s *InferenceService) serveLocalImages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeLocalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, localGatewayMaxBody+1))
+	if err != nil || len(body) > localGatewayMaxBody {
+		writeLocalError(w, http.StatusRequestEntityTooLarge, "request body unreadable or too large")
+		return
+	}
+	var head struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &head); err != nil || head.Model == "" {
+		writeLocalError(w, http.StatusBadRequest, "request must be JSON with a model field")
+		return
+	}
+	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(head.Model)
+	if mse != nil {
+		writeLocalError(w, mse.StatusCode, mse.Message)
+		return
+	}
+	s.recordLocal(r, head.Model, func(rec *RequestMetric) {
+		resp, err := s.forwardJSONOperation(r.Context(), OpImagesGenerations, endpoint, body, head.Model, localModel, apiKey)
+		if err != nil {
+			rec.ErrorReason = err.Error()
+			writeLocalError(w, statusOf(err), err.Error())
+			return
+		}
+		rec.TokensIn, rec.TokensOut = extractTokenCounts(resp)
+		rec.Success = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp)
+	})
+}
+
+// serveLocalTranscription takes the standard multipart upload, builds the
+// same JSON request the hub sends, and answers it through the realtime
+// bridge.
+func (s *InferenceService) serveLocalTranscription(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeLocalError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTranscriptionFile+(1<<20))
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeLocalError(w, http.StatusBadRequest, "expected a multipart upload with a file field: "+err.Error())
+		return
+	}
+	f, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeLocalError(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	audio, err := io.ReadAll(f)
+	f.Close()
+	if err != nil {
+		writeLocalError(w, http.StatusBadRequest, "could not read the uploaded file")
+		return
+	}
+	req := transcriptionRequest{
+		Model:          r.FormValue("model"),
+		File:           audio,
+		Filename:       hdr.Filename,
+		Language:       r.FormValue("language"),
+		Prompt:         r.FormValue("prompt"),
+		ResponseFormat: r.FormValue("response_format"),
+	}
+	if req.Model == "" {
+		writeLocalError(w, http.StatusBadRequest, "missing model field")
+		return
+	}
+	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(req.Model)
+	if mse != nil {
+		writeLocalError(w, mse.StatusCode, mse.Message)
+		return
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		writeLocalError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.recordLocal(r, req.Model, func(rec *RequestMetric) {
+		resp, err := s.transcribe(r.Context(), endpoint, body, localModel, apiKey)
+		if err != nil {
+			rec.ErrorReason = err.Error()
+			writeLocalError(w, statusOf(err), err.Error())
+			return
+		}
+		rec.TokensIn, rec.TokensOut = extractTokenCounts(resp)
+		rec.Success = true
+		if req.ResponseFormat == "text" {
+			var out struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(resp, &out)
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = io.WriteString(w, out.Text)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp)
+	})
+}
+
+// recordLocal runs one local request and records it, with the caller looked
+// up beside it as the chat path does.
+func (s *InferenceService) recordLocal(r *http.Request, model string, serve func(rec *RequestMetric)) {
+	rec := RequestMetric{
+		RequestID: fmt.Sprintf("local-%d", time.Now().UnixNano()),
+		Model:     model,
+		StartTime: time.Now(),
+		Source:    SourceLocal,
+	}
+	client := make(chan string, 1)
+	go func() { client <- describeLocalClient(r) }()
+	serve(&rec)
+	rec.EndTime = time.Now()
+	rec.LatencyMs = float64(rec.EndTime.Sub(rec.StartTime).Milliseconds())
+	rec.Client = <-client
+	if s.client != nil {
+		if m := s.client.Metrics(); m != nil {
+			m.RecordRequest(rec)
+		}
+	}
+}
+
+// statusOf maps a forwarding error to the HTTP status to report.
+func statusOf(err error) int {
+	var mse *ModelServerError
+	if errors.As(err, &mse) && mse.StatusCode > 0 {
+		return mse.StatusCode
+	}
+	return http.StatusBadGateway
 }

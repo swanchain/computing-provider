@@ -470,11 +470,15 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 	var endpoint string
 	var localModel string
 	var apiKey string
+	var category string
 
 	if ep, ok := s.registry.GetModelEndpoint(payload.ModelID); ok {
 		endpoint = ep
 		localModel = s.registry.GetLocalModelName(payload.ModelID)
 		apiKey = s.registry.GetModelAPIKey(payload.ModelID)
+		if m, ok := s.registry.GetModel(payload.ModelID); ok {
+			category = m.Category
+		}
 	} else if _, disabled := s.disabledInRegistry(payload.ModelID); disabled {
 		// The registry knows this model and has taken it out of service. The
 		// mapping below still exists, so without this check a disabled model
@@ -495,6 +499,7 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 		endpoint = mapping.Endpoint
 		localModel = mapping.LocalModel
 		apiKey = mapping.APIKey
+		category = mapping.Category
 	}
 
 	// Check model health before forwarding
@@ -503,10 +508,18 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	op := resolveOperation(payload.Operation, category, payload.Request)
 	var response json.RawMessage
 	forward := func() error {
 		var ferr error
-		response, ferr = s.forwardToDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+		switch op {
+		case OpTranscriptions:
+			response, ferr = s.transcribe(ctx, endpoint, payload.Request, localModel, apiKey)
+		case OpImagesGenerations, OpEmbeddings:
+			response, ferr = s.forwardJSONOperation(ctx, op, endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+		default:
+			response, ferr = s.forwardToDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey)
+		}
 		return ferr
 	}
 	var err error

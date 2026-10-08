@@ -614,6 +614,24 @@ Provider communicates with Swan Inference using typed JSON messages:
 | `notice` | ← Server | Operational notice, forwarded to the operator's configured `[Alerts]` transports |
 | `ack` | Both | Acknowledgment |
 
+**Request kinds.** One `inference` message carries chat, image, embedding and
+transcription requests alike. A hub that says which sets `operation` to the
+OpenAI path after `/v1/` (`chat/completions`, `images/generations`,
+`embeddings`, `audio/transcriptions`); without it the node decides from the
+model's models.json `category`, then from the request's shape
+(`internal/computing/operations.go`). Image and transcription usage arrives as
+`input_tokens`/`output_tokens` and is copied to the chat names billing reads —
+otherwise an image is charged as zero tokens.
+
+Transcription has no plain endpoint on a ChatGPT-subscription backend, so the
+node answers it through a realtime session (`transcribe.go`): enable input
+transcription, append the audio, commit, and take the transcript event —
+without asking the model to reply, which roughly triples the tokens. WAV is
+decoded in Go; other formats need `ffmpeg` on PATH and are refused, with that
+reason, without it. Responses and uploads are large, so the WebSocket read
+limit is 64 MB on both ends; at 1 MB one image response or upload dropped the
+whole connection.
+
 The hub reads `model_declarations` in place of `model_hashes` whenever both
 are present, so a field that is only in `model_hashes` never reaches it. Each
 declaration carries the weight hash from the model's manifest and a
