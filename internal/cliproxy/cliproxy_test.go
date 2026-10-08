@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -311,5 +312,64 @@ func TestSnapshotOfMissingDirIsEmptyNotAnError(t *testing.T) {
 	// The first login on a fresh machine creates the directory.
 	if got := Snapshot(filepath.Join(t.TempDir(), "nope")); len(got) != 0 {
 		t.Errorf("Snapshot of a missing dir = %v, want empty", got)
+	}
+}
+
+func TestPlanPruneDisablesADeadCredentialOnlyWhenAnotherWorks(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	live := Credential{File: "codex-a-plus.json", Provider: "codex", Expires: now.Add(6 * 24 * time.Hour)}
+	dead := Credential{File: "codex-b-prolite.json", Provider: "codex", Expires: now.Add(-900 * time.Hour)}
+	justExpired := Credential{File: "codex-c.json", Provider: "codex", Expires: now.Add(-time.Hour)}
+	lonelyDead := Credential{File: "claude-d.json", Provider: "claude", Expires: now.Add(-900 * time.Hour)}
+
+	got := PlanPrune([]Credential{live, dead, justExpired, lonelyDead}, now)
+	if len(got) != 1 || got[0].File != dead.File {
+		t.Fatalf("prune = %v, want only %s", got, dead.File)
+	}
+
+	// With no working credential left for the provider, nothing is pruned:
+	// the last entry is what tells the operator a login is needed.
+	if got := PlanPrune([]Credential{dead, lonelyDead}, now); len(got) != 0 {
+		t.Errorf("prune with no healthy codex credential = %v, want none", got)
+	}
+	// A disabled credential is not a working one to fail over to.
+	off := live
+	off.Disabled = true
+	if got := PlanPrune([]Credential{off, dead}, now); len(got) != 0 {
+		t.Errorf("prune with only a disabled peer = %v, want none", got)
+	}
+}
+
+func TestDisablePreservesEveryOtherFieldAndMode(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"access_token":"at-secret","refresh_token":"rt-secret","email":"b@example.com","type":"codex","expired":"2026-08-31T06:00:15Z","disabled":false,"extra":{"n":1}}`
+	writeFile(t, dir, "codex-b.json", body)
+
+	if err := Disable(dir, "codex-b.json"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "codex-b.json"))
+	var got, want map[string]any
+	_ = json.Unmarshal(data, &got)
+	_ = json.Unmarshal([]byte(body), &want)
+	want["disabled"] = true
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("after Disable:\n got  %v\n want %v", got, want)
+	}
+	if info, _ := os.Stat(filepath.Join(dir, "codex-b.json")); info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600 kept", info.Mode().Perm())
+	}
+	creds, err := ReadCredentials(dir)
+	if err != nil || len(creds) != 1 || creds[0].State != StateDisabled {
+		t.Errorf("ReadCredentials after Disable = %+v, %v", creds, err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("temp file left behind: %d entries", len(entries))
+	}
+}
+
+func TestDisableRefusesAPathOutsideTheAuthDir(t *testing.T) {
+	if err := Disable(t.TempDir(), "../config.json"); err == nil {
+		t.Error("a file name with a path component must be refused")
 	}
 }
