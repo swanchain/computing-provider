@@ -408,3 +408,90 @@ func normalizeEndpoint(endpoint string) string {
 	e = strings.ReplaceAll(e, "://localhost", "://127.0.0.1")
 	return e
 }
+
+// StaleAfter is how long past its expiry a credential must sit before it is
+// judged dead. CLIProxyAPI refreshes a login well ahead of expiry, on a cycle
+// of minutes, so a working credential is never expired for long; one that
+// stays expired for a day is one the proxy can no longer refresh — in practice
+// a revoked refresh token, which only a new login fixes.
+const StaleAfter = 24 * time.Hour
+
+// IsStale reports whether a credential looks dead: enabled, readable, and
+// expired for longer than StaleAfter.
+func IsStale(c Credential, now time.Time) bool {
+	return !c.Disabled && c.Err == "" && !c.Expires.IsZero() && now.Sub(c.Expires) > StaleAfter
+}
+
+// PlanPrune names the credentials to take out of rotation: the stale ones of
+// any provider that still has at least one credential that is not.
+//
+// A dead login left enabled is not harmless. The proxy keeps trying to refresh
+// it and may still hand it requests, and it hides the fact that the provider
+// has less failover than the directory suggests. But the last credential of a
+// provider is never pruned, however dead it looks: with nothing to fail over
+// to, disabling it changes no outcome and removes the one entry that tells the
+// operator a login is needed.
+func PlanPrune(creds []Credential, now time.Time) []Credential {
+	healthy := map[string]int{}
+	for _, c := range creds {
+		if !c.Disabled && c.Err == "" && !IsStale(c, now) {
+			healthy[c.Provider]++
+		}
+	}
+	var prune []Credential
+	for _, c := range creds {
+		if IsStale(c, now) && healthy[c.Provider] > 0 {
+			prune = append(prune, c)
+		}
+	}
+	return prune
+}
+
+// Disable sets `"disabled": true` in one credential file, which CLIProxyAPI
+// honours: the credential leaves rotation and is no longer refreshed. Logging
+// in again rewrites the file and brings it back.
+//
+// The file holds tokens. They are carried through as raw JSON and never
+// decoded, so they do not enter this program as strings any more than the
+// read path lets them. The write is atomic because the proxy watches the
+// directory and reloads on change.
+func Disable(authDir, file string) error {
+	if file != filepath.Base(file) || !strings.HasSuffix(file, ".json") {
+		return fmt.Errorf("not a credential file name: %q", file)
+	}
+	path := filepath.Join(ExpandPath(authDir), file)
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("%s: not valid JSON: %w", file, err)
+	}
+	fields["disabled"] = json.RawMessage("true")
+	out, err := json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+file+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(out); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}

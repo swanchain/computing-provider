@@ -24,11 +24,85 @@ var cliproxyCmd = &cli.Command{
 OpenAI-compatible endpoint this provider can serve from.
 
 It is a separate program, so these commands drive it rather than replacing it:
-'status' reports what it holds and whether those models actually serve, and
-'login' runs its OAuth flow.`,
+'status' reports what it holds and whether those models actually serve,
+'login' runs its OAuth flow, and 'prune' takes dead logins out of rotation.`,
 	Subcommands: []*cli.Command{
 		cliproxyStatusCmd,
 		cliproxyLoginCmd,
+		cliproxyPruneCmd,
+	},
+}
+
+var cliproxyPruneCmd = &cli.Command{
+	Name:  "prune",
+	Usage: "Disable credentials the proxy can no longer refresh, while another for the same provider works",
+	Description: `A credential still expired a day after its expiry is one CLIProxyAPI has
+stopped being able to refresh — usually a revoked refresh token, which only a
+new login fixes. Left enabled, the proxy keeps retrying it, and the directory
+suggests more failover than there is.
+
+prune sets "disabled": true on each such credential, but only while another
+credential for the same provider still works: the last one is never touched,
+since disabling it changes nothing and hides that a login is needed. Nothing is
+deleted; 'cliproxy login' for that account brings it back.
+
+Safe to run from cron. Exits 0 whether or not anything was pruned.`,
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:  "auth-dir",
+			Usage: "Directory holding CLIProxyAPI credentials",
+			Value: cliproxy.DefaultAuthDir,
+		},
+		&cli.StringFlag{
+			Name:  "config",
+			Usage: "CLIProxyAPI config.yaml to read auth-dir from (overrides --auth-dir)",
+		},
+		&cli.BoolFlag{
+			Name:  "dry-run",
+			Usage: "Report what would be disabled without changing anything",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		authDir := cctx.String("auth-dir")
+		if configPath := cctx.String("config"); configPath != "" {
+			fromConfig, err := cliproxy.AuthDirFromConfig(configPath)
+			if err != nil {
+				return fmt.Errorf("read auth-dir from %s: %w", configPath, err)
+			}
+			authDir = fromConfig
+		}
+		creds, err := cliproxy.ReadCredentials(authDir)
+		if err != nil {
+			return fmt.Errorf("read credentials from %s: %w", cliproxy.ExpandPath(authDir), err)
+		}
+
+		now := time.Now().UTC()
+		prune := cliproxy.PlanPrune(creds, now)
+		if len(prune) == 0 {
+			fmt.Println("Nothing to prune.")
+			for _, c := range creds {
+				if cliproxy.IsStale(c, now) {
+					fmt.Printf("  kept %s %s: expired %s ago but the only %s credential left — log it in again\n",
+						c.Provider, c.Email, now.Sub(c.Expires).Round(time.Hour), c.Provider)
+				}
+			}
+			return nil
+		}
+		for _, c := range prune {
+			ago := now.Sub(c.Expires).Round(time.Hour)
+			if cctx.Bool("dry-run") {
+				fmt.Printf("would disable %s %s (%s): expired %s ago\n", c.Provider, c.Email, c.File, ago)
+				continue
+			}
+			if err := cliproxy.Disable(authDir, c.File); err != nil {
+				return fmt.Errorf("disable %s: %w", c.File, err)
+			}
+			color.Yellow("disabled %s %s (%s): expired %s ago", c.Provider, c.Email, c.File, ago)
+		}
+		if !cctx.Bool("dry-run") {
+			fmt.Println("Log an account in again with 'computing-provider cliproxy login' to bring it back.")
+		}
+		return nil
 	},
 }
 
