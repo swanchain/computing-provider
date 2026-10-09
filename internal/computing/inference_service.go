@@ -384,6 +384,9 @@ func (s *InferenceService) Start() error {
 	// Sample the model servers' token counters, the only record of work sent
 	// to them directly rather than through this node.
 	s.usageSampler = NewBackendUsageSampler(s.modelEndpoints)
+	if cfg := conf.GetConfig(); cfg != nil {
+		s.usageSampler.managementKey = cfg.Inference.CLIProxyManagementKey
+	}
 	if err := s.usageSampler.Start(); err != nil {
 		logs.GetLogger().Warnf("Failed to start backend usage sampler: %v", err)
 		s.usageSampler = nil

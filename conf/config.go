@@ -308,6 +308,10 @@ type Inference struct {
 	// Local clients sent there are recorded as source "local" instead of being
 	// load the node cannot see. 0 means the default; -1 turns it off.
 	LocalGatewayPort int `toml:"LocalGatewayPort,omitempty"`
+	// CLIProxyManagementKey is CLIProxyAPI's management key (management
+	// secret-key, in plaintext). CLIProxyAPI has no /metrics, so without it
+	// work sent straight to the proxy cannot be measured as direct usage.
+	CLIProxyManagementKey string `toml:"CLIProxyManagementKey,omitempty"`
 }
 
 // DefaultLocalGatewayPort is the local gateway's port when none is configured.
