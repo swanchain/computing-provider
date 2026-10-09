@@ -405,3 +405,59 @@ func TestDirectSkipsThePartlyMeasuredBucket(t *testing.T) {
 		t.Errorf("hour 1 direct = %d, want 300 (no carry from the unmeasured part of hour 0)", got)
 	}
 }
+
+// CLIProxyAPI answers /metrics with 404; with a management key the sampler
+// drains its usage queue into a running total, so two samples read as a
+// cumulative counter.
+func TestBackendUsageReadsCLIProxyQueue(t *testing.T) {
+	queue := []string{
+		`[{"tokens":{"input_tokens":100,"output_tokens":7}},{"tokens":{"input_tokens":50,"output_tokens":3}}]`,
+		`[{"tokens":{"input_tokens":20,"output_tokens":5}}]`,
+	}
+	statsOn := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer mk" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v0/management/usage-statistics-enabled":
+			fmt.Fprintf(w, `{"usage-statistics-enabled":%v}`, statsOn)
+		case "/v0/management/usage-queue":
+			if len(queue) == 0 {
+				fmt.Fprint(w, `[]`)
+				return
+			}
+			fmt.Fprint(w, queue[0])
+			queue = queue[1:]
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b := NewBackendUsageSampler(nil)
+	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("without a key: err = %v, want unmeasured", err)
+	}
+	b.managementKey = "mk"
+	p, g, err := b.read(srv.URL, "")
+	if err != nil || p != 150 || g != 10 {
+		t.Fatalf("first read = %v/%v, %v; want 150/10", p, g, err)
+	}
+	if p, g, _ = b.read(srv.URL, ""); p != 170 || g != 15 {
+		t.Errorf("second read = %v/%v, want the running total 170/15", p, g)
+	}
+	statsOn = false
+	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "usage statistics are off") {
+		t.Errorf("stats off: err = %v, want it reported rather than read as idle", err)
+	}
+	b.managementKey = "wrong"
+	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "rejected the management key") {
+		t.Errorf("wrong key: err = %v", err)
+	}
+}

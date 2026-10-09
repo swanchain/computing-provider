@@ -739,6 +739,13 @@ report cache hits as missing work. llama.cpp answers `/metrics` with 501 unless
 started with `--metrics`, which `models serve` now always passes; an endpoint
 that cannot be read is listed as unmeasured, never as zero.
 
+CLIProxyAPI has no `/metrics`. With `[Inference] CLIProxyManagementKey` set to
+its management `secret-key`, the sampler drains its usage queue each minute into
+a running total instead, which then reads like any other counter. The proxy
+needs `usage-statistics-enabled: true` (checked: off would read as idle) and a
+`redis-usage-queue-retention-seconds` of a few minutes, since the default 60 is
+the sample interval.
+
 `source` says where a request *entered*, not who *originated* it. A hub request
 carries no marker distinguishing customer traffic from the marketplace's own
 verification — `InferencePayload` has only `endpoint_id`, `model_id`, `request`

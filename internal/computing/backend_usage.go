@@ -3,6 +3,7 @@ package computing
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,11 +118,17 @@ const (
 type BackendUsageSampler struct {
 	endpoints func() map[string]endpointInfo
 	client    *http.Client
+	// managementKey reads CLIProxyAPI's usage queue on an endpoint with no
+	// /metrics; empty leaves such endpoints unmeasured.
+	managementKey string
 
 	mu     sync.Mutex
 	status map[string]BackendEndpointStatus
-	stop   chan struct{}
-	done   chan struct{}
+	// queueTotals are the running token counts drained from each CLIProxyAPI
+	// endpoint's usage queue, which reports requests rather than totals.
+	queueTotals map[string]queueTotal
+	stop        chan struct{}
+	done        chan struct{}
 }
 
 // endpointInfo is what the sampler needs to know about one endpoint.
@@ -135,6 +142,8 @@ func NewBackendUsageSampler(endpoints func() map[string]endpointInfo) *BackendUs
 		endpoints: endpoints,
 		client:    &http.Client{Timeout: 10 * time.Second},
 		status:    make(map[string]BackendEndpointStatus),
+
+		queueTotals: make(map[string]queueTotal),
 	}
 }
 
@@ -239,6 +248,8 @@ func (b *BackendUsageSampler) read(endpoint, apiKey string) (prompt, generated f
 	switch {
 	case resp.StatusCode == http.StatusNotImplemented:
 		return 0, 0, fmt.Errorf("metrics disabled (HTTP 501) — llama.cpp needs --metrics")
+	case resp.StatusCode == http.StatusNotFound && b.managementKey != "":
+		return b.readUsageQueue(ctx, endpoint)
 	case resp.StatusCode != http.StatusOK:
 		return 0, 0, fmt.Errorf("no metrics endpoint (HTTP %d)", resp.StatusCode)
 	}
@@ -247,6 +258,103 @@ func (b *BackendUsageSampler) read(endpoint, apiKey string) (prompt, generated f
 		return 0, 0, fmt.Errorf("metrics carry no token counters this node can read")
 	}
 	return prompt, generated, nil
+}
+
+// CLIProxyAPI, which fronts subscription-backed models, has no /metrics. Its
+// management API instead keeps a queue with one record per request, each
+// carrying the tokens it used, and popping a record removes it. Draining the
+// queue every sample and adding it to a running total turns it into the same
+// cumulative counter the engines expose, so the rest of the direct-usage
+// arithmetic is unchanged. The total lives in memory: after a daemon restart
+// it starts again from zero, which counterDeltas already reads as a restart.
+//
+// Two settings on the CLIProxyAPI side matter. usage-statistics-enabled must
+// be true, or the queue stays empty and every endpoint would read as idle —
+// so it is checked, not assumed. And the queue drops records older than
+// redis-usage-queue-retention-seconds (default 60), which is close to the
+// sample interval; a few minutes of retention keeps a slow sample from losing
+// requests. A management panel subscribed to the live usage feed receives
+// records in place of the queue, so this undercounts while one is open.
+
+type queueTotal struct{ prompt, generated float64 }
+
+// usageQueuePage is how many records one request pops; the sampler keeps
+// popping until a page comes back short.
+const (
+	usageQueuePage     = 500
+	usageQueueMaxPages = 20
+)
+
+type usageQueueRecord struct {
+	Tokens struct {
+		Input  float64 `json:"input_tokens"`
+		Output float64 `json:"output_tokens"`
+	} `json:"tokens"`
+}
+
+func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint string) (prompt, generated float64, err error) {
+	base := strings.TrimRight(endpoint, "/") + "/v0/management/"
+	var enabled struct {
+		Enabled *bool `json:"usage-statistics-enabled"`
+	}
+	if err := b.management(ctx, base+"usage-statistics-enabled", &enabled); err != nil {
+		return 0, 0, err
+	}
+	if enabled.Enabled == nil || !*enabled.Enabled {
+		return 0, 0, fmt.Errorf("CLIProxyAPI usage statistics are off — set usage-statistics-enabled: true in its config")
+	}
+	for page := 0; page < usageQueueMaxPages; page++ {
+		var records []usageQueueRecord
+		if err := b.management(ctx, fmt.Sprintf("%susage-queue?count=%d", base, usageQueuePage), &records); err != nil {
+			return 0, 0, err
+		}
+		// Popped records are gone from the queue, so they are added to the
+		// total before anything else can fail.
+		var in, out float64
+		for _, r := range records {
+			in += r.Tokens.Input
+			out += r.Tokens.Output
+		}
+		b.mu.Lock()
+		t := b.queueTotals[endpoint]
+		t.prompt += in
+		t.generated += out
+		b.queueTotals[endpoint] = t
+		b.mu.Unlock()
+		if len(records) < usageQueuePage {
+			break
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	t := b.queueTotals[endpoint]
+	return t.prompt, t.generated, nil
+}
+
+// management GETs a CLIProxyAPI management route and decodes its JSON.
+func (b *BackendUsageSampler) management(ctx context.Context, url string, into any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.managementKey)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("unreachable: %v", err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return fmt.Errorf("CLIProxyAPI rejected the management key (HTTP %d)", resp.StatusCode)
+	case resp.StatusCode == http.StatusNotFound:
+		return fmt.Errorf("no metrics endpoint and no CLIProxyAPI management API (HTTP 404)")
+	case resp.StatusCode != http.StatusOK:
+		return fmt.Errorf("CLIProxyAPI management API answered HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(into); err != nil {
+		return fmt.Errorf("unreadable CLIProxyAPI usage: %v", err)
+	}
+	return nil
 }
 
 // Status reports every endpoint and whether it is measured.
