@@ -65,6 +65,8 @@ export interface ModelStatus {
   /** That backend's last reachability check: healthy, unreachable or unknown. */
   local_health?: string;
   local_error?: string;
+  /** Served to the local gateway only; never offered to the hub. */
+  local_only?: boolean;
 }
 
 export interface EmailSettings {

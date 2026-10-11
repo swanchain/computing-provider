@@ -40,6 +40,7 @@ func TestProxyAccountsReport(t *testing.T) {
 	s := NewInferenceService("test-node", t.TempDir())
 	s.modelMappings["openai/sol"] = ModelMapping{Endpoint: proxy.URL, LocalEndpoint: "http://127.0.0.1:1"}
 	s.modelMappings["org/llama"] = ModelMapping{Endpoint: llama.URL}
+	s.modelMappings["anthropic/private"] = ModelMapping{Endpoint: "http://127.0.0.1:1", LocalEndpoint: "http://127.0.0.1:1", LocalOnly: true}
 	s.usageSampler = NewBackendUsageSampler(nil)
 
 	if r := s.ProxyAccounts(context.Background()); len(r.Instances) != 0 || r.Note == "" {
@@ -56,7 +57,7 @@ func TestProxyAccountsReport(t *testing.T) {
 		case llama.URL:
 			t.Errorf("a model server answering 404 was reported as a proxy")
 		case "http://127.0.0.1:1":
-			if r.Instances[i].Error == "" || r.Instances[i].Roles[0] != "local" {
+			if r.Instances[i].Error == "" || len(r.Instances[i].Roles) != 1 || r.Instances[i].Roles[0] != "local" {
 				t.Errorf("an unreachable local proxy should be listed with its error: %+v", r.Instances[i])
 			}
 		}

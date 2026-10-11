@@ -271,10 +271,16 @@ export function ProxyRoutingPanel({ models }: { models: ModelStatus[] }) {
                 <tr key={m.id}>
                   <td className="break-all px-4 py-2 font-mono text-slate-200">{m.id}</td>
                   <td className="px-4 py-2 text-slate-300">
-                    <span className="font-mono">{m.endpoint}</span>{' '}
-                    <span className={m.health_string === 'healthy' ? 'text-green-300' : 'text-red-300'}>
-                      {m.health_string === 'healthy' ? '✓' : '✗'} {m.health_string}
-                    </span>
+                    {m.local_only ? (
+                      <span className="text-slate-400">○ not offered — local only</span>
+                    ) : (
+                      <>
+                        <span className="font-mono">{m.endpoint}</span>{' '}
+                        <span className={m.health_string === 'healthy' ? 'text-green-300' : 'text-red-300'}>
+                          {m.health_string === 'healthy' ? '✓' : '✗'} {m.health_string}
+                        </span>
+                      </>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-slate-300" title={m.local_error || undefined}>
                     <span className="font-mono">{m.local_endpoint}</span>{' '}

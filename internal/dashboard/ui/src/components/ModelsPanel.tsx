@@ -197,7 +197,17 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                   )}
                 </div>
                 <div className="min-w-0">
-                  <div className="break-words font-medium text-slate-200">{model.id}</div>
+                  <div className="break-words font-medium text-slate-200">
+                    {model.id}
+                    {model.local_only && (
+                      <span
+                        className="ml-2 rounded bg-slate-600/60 px-1.5 py-0.5 text-[11px] font-normal text-slate-300"
+                        title="Served to the local gateway only; never offered to Swan Inference"
+                      >
+                        local only
+                      </span>
+                    )}
+                  </div>
                   <div className="mt-0.5 break-all text-xs text-slate-400">
                     {model.endpoint} • {model.category}
                     {model.gpu_memory > 0 && ` • ${(model.gpu_memory / 1024).toFixed(1)}GB VRAM`}
