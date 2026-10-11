@@ -139,3 +139,78 @@ func TestUsageSeriesSplitsDirectUsageByBackend(t *testing.T) {
 		t.Errorf("direct = %+v, want 200 in / 0 out: only the internal proxy saw unrecorded work", d)
 	}
 }
+
+// A local-only model is served by the local gateway and nothing else: it is
+// left out of every registration, a hub or warmup request for it is refused,
+// and the health checker never spends a completion on it.
+func TestLocalOnlyModelNeverReachesTheHub(t *testing.T) {
+	var backendHits int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendHits++
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer backend.Close()
+
+	s := NewInferenceService("test-node", t.TempDir())
+	s.registry = NewModelRegistry("", nil)
+	ready := func(id string, localOnly bool) *RegisteredModel {
+		return &RegisteredModel{ID: id, Endpoint: backend.URL, Enabled: true, LocalOnly: localOnly,
+			State: ModelStateReady, Health: ModelHealthHealthy}
+	}
+	s.registry.models["org/public"] = ready("org/public", false)
+	s.registry.models["anthropic/private"] = ready("anthropic/private", true)
+	s.modelMappings["org/public"] = ModelMapping{Endpoint: backend.URL}
+	s.modelMappings["anthropic/private"] = ModelMapping{Endpoint: backend.URL, LocalOnly: true}
+	s.client = &InferenceClient{metrics: NewInferenceMetrics()}
+
+	// The hot-reload path re-registers whatever is ready.
+	s.updateClientModels()
+	if got := s.client.ModelList(); len(got) != 1 || got[0] != "org/public" {
+		t.Errorf("registered %v, want only org/public", got)
+	}
+	// The startup path sends config.toml's list, which may name it too.
+	s.client.SetModelList([]string{"org/public", "anthropic/private"})
+	s.client.SetModelList(s.withoutLocalOnly(s.client.ModelList()))
+	if got := s.client.ModelList(); len(got) != 1 {
+		t.Errorf("startup list %v still carries the local-only model", got)
+	}
+
+	req := json.RawMessage(`{"model":"anthropic/private","messages":[{"role":"user","content":"hi"}]}`)
+	if _, err := s.handleInference(context.Background(), InferencePayload{ModelID: "anthropic/private", Request: req}); err == nil {
+		t.Error("a hub request for a local-only model was served")
+	}
+	if res := s.handleStreamingInference(context.Background(), "r1", InferencePayload{ModelID: "anthropic/private", Request: req, Stream: true},
+		func([]byte, bool) error { return nil }); res == nil || res.Error == nil {
+		t.Error("a streaming hub request for a local-only model was served")
+	}
+	if _, err := s.handleWarmup(WarmupPayload{ModelID: "anthropic/private"}); err == nil {
+		t.Error("a warmup for a local-only model was sent")
+	}
+	if backendHits != 0 {
+		t.Fatalf("the backend was called %d times by hub-side paths", backendHits)
+	}
+
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+	resp, err := http.Post(gw.URL+"/v1/chat/completions", "application/json", strings.NewReader(string(req)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || backendHits != 1 {
+		t.Errorf("local gateway: status %d, backend hits %d; want it served locally", resp.StatusCode, backendHits)
+	}
+
+	h := NewModelHealthChecker(DefaultHealthCheckConfig())
+	h.RegisterModel("anthropic/private", backend.URL, "", "", "text-generation")
+	h.SetProbeExempt("anthropic/private", true)
+	if h.chatCompatible("anthropic/private") {
+		t.Error("a local-only model would be sent deep-check completions")
+	}
+	// The periodic rotation picks its own candidates; it must skip it too.
+	for i := 0; i < 3*DefaultHealthCheckConfig().DeepCheckEvery; i++ {
+		if id := h.pickDeepCheckModel(backend.URL, []string{"anthropic/private"}); id != "" {
+			t.Fatalf("rotation picked %s for a deep check", id)
+		}
+	}
+}

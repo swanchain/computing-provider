@@ -40,6 +40,7 @@ func TestProxyAccountsReport(t *testing.T) {
 	s := NewInferenceService("test-node", t.TempDir())
 	s.modelMappings["openai/sol"] = ModelMapping{Endpoint: proxy.URL, LocalEndpoint: "http://127.0.0.1:1"}
 	s.modelMappings["org/llama"] = ModelMapping{Endpoint: llama.URL}
+	s.modelMappings["anthropic/private"] = ModelMapping{Endpoint: "http://127.0.0.1:1", LocalEndpoint: "http://127.0.0.1:1", LocalOnly: true}
 	s.usageSampler = NewBackendUsageSampler(nil)
 
 	if r := s.ProxyAccounts(context.Background()); len(r.Instances) != 0 || r.Note == "" {
@@ -56,7 +57,7 @@ func TestProxyAccountsReport(t *testing.T) {
 		case llama.URL:
 			t.Errorf("a model server answering 404 was reported as a proxy")
 		case "http://127.0.0.1:1":
-			if r.Instances[i].Error == "" || r.Instances[i].Roles[0] != "local" {
+			if r.Instances[i].Error == "" || len(r.Instances[i].Roles) != 1 || r.Instances[i].Roles[0] != "local" {
 				t.Errorf("an unreachable local proxy should be listed with its error: %+v", r.Instances[i])
 			}
 		}
@@ -80,5 +81,30 @@ func TestProxyAccountsReport(t *testing.T) {
 	}
 	if a.Expires == nil || !a.Expires.Equal(time.Date(2026, 10, 14, 23, 44, 0, 0, time.UTC)) {
 		t.Errorf("expires = %v, want the credential file's", a.Expires)
+	}
+}
+
+// A Claude login's file name carries an ID and the account, not a plan; that
+// must not be shown as one.
+func TestProxyAccountsNoPlanFromAccountName(t *testing.T) {
+	dir := t.TempDir()
+	cred := filepath.Join(dir, "claude-bce0ac99-b@example.com.json")
+	if err := os.WriteFile(cred, []byte(`{"email":"b@example.com","type":"claude","expired":"2026-10-12T01:53:34Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"files":[{"account":"b@example.com","provider":"claude","status":"active","path":%q,"quota":{"signals":{}}}]}`, cred)
+	}))
+	defer proxy.Close()
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["anthropic/m"] = ModelMapping{Endpoint: proxy.URL}
+	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.managementKey = "mk"
+	r := s.ProxyAccounts(context.Background())
+	if len(r.Instances) != 1 || len(r.Instances[0].Accounts) != 1 {
+		t.Fatalf("report = %+v", r)
+	}
+	if p := r.Instances[0].Accounts[0].Plan; p != "" {
+		t.Errorf("plan = %q, want none rather than the file name", p)
 	}
 }

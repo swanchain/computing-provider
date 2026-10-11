@@ -130,6 +130,7 @@ type ModelHealthChecker struct {
 	deepClient     *http.Client
 	stopCh         chan struct{}
 	running        bool
+	probeExempt    map[string]bool // models never sent a deep check
 	onStatusChange func(modelID string, oldHealth, newHealth ModelHealth)
 	// recordRequest, when set, receives every engine probe. Probes are real
 	// completions against the backend, so they consume the same capacity as
@@ -502,7 +503,7 @@ func (h *ModelHealthChecker) pickDeepCheckModel(endpoint string, modelIDs []stri
 	// cycle and some models would be probed far more often than others.
 	candidates := make([]string, 0, len(modelIDs))
 	for _, id := range modelIDs {
-		if selfcheck.ChatCompatible(h.categories[id]) {
+		if selfcheck.ChatCompatible(h.categories[id]) && !h.probeExempt[id] {
 			candidates = append(candidates, id)
 			continue
 		}
@@ -539,11 +540,30 @@ func (h *ModelHealthChecker) deepCheckEnabled() bool {
 }
 
 // chatCompatible reports whether this model can answer a chat completion.
+// A probe-exempt model is treated as one that cannot, so no deep check is
+// ever spent on it.
 func (h *ModelHealthChecker) chatCompatible(modelID string) bool {
 	h.mu.RLock()
 	category := h.categories[modelID]
+	exempt := h.probeExempt[modelID]
 	h.mu.RUnlock()
-	return selfcheck.ChatCompatible(category)
+	return !exempt && selfcheck.ChatCompatible(category)
+}
+
+// SetProbeExempt excludes a model from deep checks. Local-only models are:
+// each check is a real completion, and on a metered backend the operator has
+// reserved for their own use it spends that reservation on the node itself.
+func (h *ModelHealthChecker) SetProbeExempt(modelID string, exempt bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.probeExempt == nil {
+		h.probeExempt = map[string]bool{}
+	}
+	if exempt {
+		h.probeExempt[modelID] = true
+	} else {
+		delete(h.probeExempt, modelID)
+	}
 }
 
 // deepCheckModel runs a real one-token completion and reports an error only

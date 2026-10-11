@@ -258,6 +258,36 @@ func (s *InferenceService) resolveGatewayEndpoint(modelID string) (endpoint, loc
 	return s.resolveModelEndpoint(modelID)
 }
 
+// withoutLocalOnly drops local-only models from a list bound for the hub.
+func (s *InferenceService) withoutLocalOnly(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !s.isLocalOnly(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (s *InferenceService) isLocalOnly(modelID string) bool {
+	if s.registry != nil {
+		if m, ok := s.registry.GetModel(modelID); ok {
+			return m.LocalOnly
+		}
+	}
+	return s.modelMappings[modelID].LocalOnly
+}
+
+// refuseLocalOnly answers a hub request for a local-only model. The hub has
+// no business sending one — it is never registered — but a stale routing
+// table or an older registration must not turn into served work.
+func (s *InferenceService) refuseLocalOnly(modelID string) *ModelServerError {
+	if !s.isLocalOnly(modelID) {
+		return nil
+	}
+	return &ModelServerError{StatusCode: 404, Message: fmt.Sprintf("model %s is not offered by this provider", modelID)}
+}
+
 func writeLocalError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

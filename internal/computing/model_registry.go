@@ -40,29 +40,30 @@ func (s ModelState) String() string {
 
 // RegisteredModel represents a fully configured model in the registry
 type RegisteredModel struct {
-	ID            string      `json:"id"`
-	Container     string      `json:"container"`
-	Endpoint      string      `json:"endpoint"`
-	GPUMemory     int         `json:"gpu_memory"`
-	Category      string      `json:"category"`
-	LocalModel    string      `json:"local_model,omitempty"`    // Actual model name for local inference server
-	Format        string      `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
-	Quantization  string      `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
-	APIKey        string      `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
-	ContextLength int         `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
-	LocalEndpoint string      `json:"local_endpoint,omitempty"` // Local gateway backend, when it differs from Endpoint
-	LocalAPIKey   string      `json:"-"`                        // Never exposed, like APIKey
+	ID            string `json:"id"`
+	Container     string `json:"container"`
+	Endpoint      string `json:"endpoint"`
+	GPUMemory     int    `json:"gpu_memory"`
+	Category      string `json:"category"`
+	LocalModel    string `json:"local_model,omitempty"`    // Actual model name for local inference server
+	Format        string `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
+	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
+	APIKey        string `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
+	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
+	LocalEndpoint string `json:"local_endpoint,omitempty"` // Local gateway backend, when it differs from Endpoint
+	LocalAPIKey   string `json:"-"`                        // Never exposed, like APIKey
+	LocalOnly     bool   `json:"local_only,omitempty"`     // Served to the local gateway only, never to the hub
 	// LocalHealth and LocalError report LocalEndpoint's last reachability
 	// check. They are filled in when the model list is served, not kept here.
-	LocalHealth string `json:"local_health,omitempty"`
-	LocalError  string `json:"local_error,omitempty"`
-	State         ModelState  `json:"state"`
-	StateString   string      `json:"state_string"`
-	Health        ModelHealth `json:"health"`
-	HealthString  string      `json:"health_string"`
-	LoadedAt      time.Time   `json:"loaded_at,omitempty"`
-	UpdatedAt     time.Time   `json:"updated_at"`
-	Enabled       bool        `json:"enabled"`
+	LocalHealth  string      `json:"local_health,omitempty"`
+	LocalError   string      `json:"local_error,omitempty"`
+	State        ModelState  `json:"state"`
+	StateString  string      `json:"state_string"`
+	Health       ModelHealth `json:"health"`
+	HealthString string      `json:"health_string"`
+	LoadedAt     time.Time   `json:"loaded_at,omitempty"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	Enabled      bool        `json:"enabled"`
 }
 
 // ModelRegistry manages the lifecycle of model configurations
@@ -220,7 +221,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.APIKey != mapping.APIKey ||
 				existingModel.ContextLength != mapping.ContextLength ||
 				existingModel.LocalEndpoint != mapping.LocalEndpoint ||
-				existingModel.LocalAPIKey != mapping.LocalAPIKey {
+				existingModel.LocalAPIKey != mapping.LocalAPIKey ||
+				existingModel.LocalOnly != mapping.LocalOnly {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
@@ -233,10 +235,12 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.ContextLength = mapping.ContextLength
 				existingModel.LocalEndpoint = mapping.LocalEndpoint
 				existingModel.LocalAPIKey = mapping.LocalAPIKey
+				existingModel.LocalOnly = mapping.LocalOnly
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
 				if r.healthChecker != nil {
+					r.healthChecker.SetProbeExempt(modelID, mapping.LocalOnly)
 					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 				}
 
@@ -267,6 +271,7 @@ func (r *ModelRegistry) loadConfig() error {
 				ContextLength: mapping.ContextLength,
 				LocalEndpoint: mapping.LocalEndpoint,
 				LocalAPIKey:   mapping.LocalAPIKey,
+				LocalOnly:     mapping.LocalOnly,
 				State:         ModelStateLoading,
 				StateString:   ModelStateLoading.String(),
 				Health:        ModelHealthUnknown,
@@ -279,6 +284,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 			// Register with health checker
 			if r.healthChecker != nil {
+				r.healthChecker.SetProbeExempt(modelID, mapping.LocalOnly)
 				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 			}
 

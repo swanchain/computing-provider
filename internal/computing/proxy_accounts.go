@@ -127,6 +127,15 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		roles[ep][role], models[ep][model] = true, true
 	}
 	for id, m := range s.modelMappings {
+		// A local-only model's endpoint never sees hub traffic; it is the
+		// local gateway's backend whichever field names it.
+		if m.LocalOnly {
+			note(m.Endpoint, "local", id)
+			if m.LocalEndpoint != "" {
+				note(m.LocalEndpoint, "local", id)
+			}
+			continue
+		}
 		note(m.Endpoint, "hub", id)
 		if local := splitLocalEndpoint(m); local != "" {
 			note(local, "local", id)
@@ -175,7 +184,9 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 					}
 				}
 				if c, ok := creds[dir][filepath.Base(f.Path)]; ok {
-					if a.Plan == "" {
+					// The file-name fallback is only a plan when it is not
+					// just the account repeated, as for Claude logins.
+					if a.Plan == "" && !strings.Contains(c.Plan, "@") {
 						a.Plan = c.Plan
 					}
 					if !c.Expires.IsZero() {

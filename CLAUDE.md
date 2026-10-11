@@ -738,6 +738,14 @@ no completion, since a completion would spend the quota being protected) and
 shown per model as `local_health`; its counters are sampled for direct usage
 too, each compared only with the recorded requests that went to it.
 
+`"local_only": true` keeps a model to the gateway entirely: it is dropped from
+every registration (the startup list from config.toml and the re-registration
+after a models.json reload, which sends every ready model and ignores
+config.toml), a hub inference or warmup request for it is refused with 404,
+the health checker sends it no deep-check completion, and the self-check
+ignores it. Leaving a model out of config.toml is not enough on its own — the
+first hot reload registers it.
+
 **Direct usage.** Anything that still calls a model server directly can only
 be seen in the server's own counters, so the daemon samples each endpoint's
 `/metrics` every minute (`backend_usage_samples`) and reports generated tokens
