@@ -18,6 +18,7 @@ import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
 import { HubModelsPanel } from './components/HubModelsPanel';
+import { ProxyAccountsPanel } from './components/ProxyAccountsPanel';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { RequestHistoryPanel } from './components/RequestHistoryPanel';
@@ -295,6 +296,7 @@ function App() {
                     onUnlock={() => setShowAuthDialog(true)}
                   />
                   <HubModelsPanel />
+                  <ProxyAccountsPanel />
                   <RequestManagementPanel
                     data={requestMgmt}
                     loading={requestMgmtLoading}

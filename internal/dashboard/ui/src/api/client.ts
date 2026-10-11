@@ -16,8 +16,7 @@ import type {
   LogSettings,
   RequestLimitSettings,
   DashboardModel,
-  SettingsSaveResult,
-} from '../types';
+  SettingsSaveResult, ProxyAccountsReport } from '../types';
 
 const API_BASE = '/api/v1/computing/inference';
 const TOKEN_KEY = 'computing-provider-control-token';
@@ -128,6 +127,9 @@ export const api = {
 
   // Swan Inference's own view of this provider's models
   getHubModels: () => fetchJson<HubModelView>('/hub/models'),
+
+  // The accounts behind each CLIProxyAPI instance
+  getProxyAccounts: () => fetchJson<ProxyAccountsReport>('/proxy-accounts'),
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {

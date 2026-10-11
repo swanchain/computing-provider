@@ -463,3 +463,51 @@ export interface MachineUsage {
   /** Tokens per bucket, aligned with the series' points. */
   points: UsageTotals[];
 }
+
+/** One of a subscription's usage windows, as the upstream last reported it. */
+export interface ProxyQuotaWindow {
+  label: string;
+  window_minutes: number;
+  used_percent: number;
+  reset_at?: string;
+}
+
+export interface ProxyCooldown {
+  model?: string;
+  reason?: string;
+  retry_at: string;
+}
+
+export interface ProxyAccount {
+  account: string;
+  provider?: string;
+  plan?: string;
+  status: string;
+  status_message?: string;
+  disabled: boolean;
+  unavailable: boolean;
+  /** Stored access token expiry; the proxy refreshes before it. */
+  expires?: string;
+  success: number;
+  failed: number;
+  windows: ProxyQuotaWindow[];
+  quota_observed_at?: string;
+  cooldowns: ProxyCooldown[];
+}
+
+export interface ProxyInstance {
+  endpoint: string;
+  /** "hub" when models route there, "local" when the local gateway uses it. */
+  roles: string[];
+  models: string[];
+  accounts: ProxyAccount[];
+  error?: string;
+  tokens_in_24h: number;
+  tokens_out_24h: number;
+  measured_24h: boolean;
+}
+
+export interface ProxyAccountsReport {
+  instances: ProxyInstance[];
+  note?: string;
+}

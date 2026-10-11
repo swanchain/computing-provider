@@ -858,6 +858,7 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `GET /models/:model_id/health` — model health details
 - `GET /models/:model_id/metrics` — per-model detailed metrics
 - `GET /health` — all models health
+- `GET /proxy-accounts` — each CLIProxyAPI instance among the models' endpoints and local_endpoints (needs `CLIProxyManagementKey`): its role (`hub` / `local`), accounts with plan, status, usage windows (percent used and reset, as the upstream last reported them), cooldowns and stored-token expiry, and 24h tokens from its usage counters
 - `POST /models/:model_id/enable` — enable a model
 - `POST /models/:model_id/disable` — disable a model
 - `POST /models/:model_id/healthcheck` — force health check
