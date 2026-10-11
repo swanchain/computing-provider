@@ -28,9 +28,8 @@ interface EarningsChartProps {
    */
   onColours?: (colours: ModelColourMap) => void;
   /**
-   * The models this node serves. Earnings are the provider account's, across
-   * every machine, so a model missing from this list was earned elsewhere and
-   * is labelled that way rather than looking like this node's work.
+   * Optional model list used to distinguish other-machine earnings when this
+   * component is used with provider-wide data elsewhere.
    */
   localModels?: string[];
 }
@@ -145,7 +144,7 @@ export function EarningsChart({ models, onColours, localModels, window_ }: Earni
   const local = useMemo(() => (localModels && localModels.length ? new Set(localModels) : undefined), [localModels]);
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error, lastUpdated } = usePolling(
-    useCallback(() => api.getEarningsHistory(window_), [window_]),
+    useCallback(() => api.getEarningsHistory(window_, 'node'), [window_]),
     60_000,
   );
 
@@ -270,12 +269,18 @@ export function EarningsChart({ models, onColours, localModels, window_ }: Earni
     return entries;
   }, [points, colours]);
 
+  // Older inference APIs ignore scope=node and return provider-wide history.
+  // Never show that response beneath a node-only label.
+  if (data && data.source !== 'local') {
+    return <div className="rounded-xl border border-amber-800/60 bg-amber-950/20 p-4 text-sm text-amber-200">Node-only earnings are unavailable from this API version.</div>;
+  }
+
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         <div>
           <h3 className="text-sm font-medium text-slate-300">
-            Earnings over time <span className="font-normal text-slate-500">· whole provider account, all machines</span>
+            Earnings over time <span className="font-normal text-slate-500">· this node only · estimated</span>
           </h3>
           <p className="text-xs text-slate-400">
             {loading && !data
@@ -292,7 +297,7 @@ export function EarningsChart({ models, onColours, localModels, window_ }: Earni
         </div>
       </div>
 
-      <p className="px-4 pt-3 text-xs text-slate-400">{lastUpdated ? `Fetched ${lastUpdated.toLocaleTimeString()}` : 'Loading platform earnings…'} · all machines</p>
+      <p className="px-4 pt-3 text-xs text-slate-400">{lastUpdated ? `Fetched ${lastUpdated.toLocaleTimeString()}` : 'Loading node earnings…'} · this node only</p>
       {loading && !data ? <p role="status" className="px-4 py-6 text-sm text-slate-400">Loading earnings for this period…</p> : error && !data ? (
         <p className="px-4 py-6 text-sm text-amber-300">Could not load earnings history: {error.message}</p>
       ) : points.length === 0 ? (

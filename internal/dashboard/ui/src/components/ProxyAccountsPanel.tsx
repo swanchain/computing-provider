@@ -47,7 +47,7 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
         {a.cooldowns.map((c, i) => {
           const listed = !c.model || modelIds.some((id) => id === c.model || id.split('/').slice(1).join('/') === c.model);
           return <li key={i}><p className="break-words">{c.model || 'All models'} · {c.reason === 'quota' ? 'quota blocked' : c.reason?.replace(/_/g, ' ') || 'temporarily restricted'}</p>
-            {!listed && <p className="mt-1 text-xs text-slate-300">No matching configured model ID. Check configured models in the connection details.</p>}
+            {!listed && <p className="mt-1 text-xs text-slate-300">No matching configured model ID. Check the configured models listed above.</p>}
             <p className="mt-1 text-xs text-slate-400">Proxy retry: {dateLabel(c.retry_at)}</p></li>;
         })}
       </ul>
@@ -76,12 +76,12 @@ function Instance({ inst }: { inst: ProxyInstance }) {
       <h3 className="text-lg font-semibold text-white">{title}</h3>
       <p className="mt-1 text-sm text-slate-300">{hub && local ? 'Serves hub requests and your own clients.' : hub ? 'Serves requests routed by Swan Inference.' : 'Serves your own clients through the client gateway.'}</p>
       <p className="mt-3 text-sm text-slate-300">{enabled.length} enabled account{enabled.length === 1 ? '' : 's'} · {inst.models.length} configured models</p>
-      <details className="mt-2 text-sm text-slate-400">
-        <summary className="min-h-10 cursor-pointer py-2 focus-visible:outline focus-visible:outline-sky-400">Connection and configured models</summary>
-        <p className="break-all font-mono text-xs">{inst.endpoint}</p>
-        <ul className="mt-2 space-y-1 text-xs">{inst.models.map((id) => <li className="break-words" key={id}>{id}</li>)}</ul>
-      </details>
-      <p className="mt-2 text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? count(inst.tokens_in_24h) + ' input / ' + count(inst.tokens_out_24h) + ' output tokens' : 'token usage not measured yet'}</p>
+      <div className="mt-4 border-t border-slate-700 pt-4 text-sm">
+        <p className="font-medium text-slate-200">Connection and configured models</p>
+        <p className="mt-2 break-all font-mono text-xs text-sky-200">{inst.endpoint}</p>
+        {inst.models.length ? <ul className="mt-3 grid gap-x-4 gap-y-1 text-xs text-slate-300 sm:grid-cols-2">{inst.models.map((id) => <li className="break-words font-mono" key={id}>{id}</li>)}</ul> : <p className="mt-2 text-xs text-slate-400">No models configured.</p>}
+        <p className="mt-4 text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? count(inst.tokens_in_24h) + ' input / ' + count(inst.tokens_out_24h) + ' output tokens' : 'token usage not measured yet'}</p>
+      </div>
     </div>
     {inst.error ? <p role="alert" className="break-words p-5 text-sm text-amber-200">Account status unavailable: {inst.error}</p> : <>
       {!inst.accounts.length && <p className="p-5 text-sm text-amber-200">No accounts configured. Requests through this proxy will fail.</p>}

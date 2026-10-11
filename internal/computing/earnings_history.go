@@ -189,6 +189,17 @@ func blendedRate(metrics *InferenceMetricsData, rates map[string]ModelPrice) (in
 // served between a bucket's start and its last restart, which on a node that
 // restarts a dozen times a week is most of it.
 func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration) *EarningsSeries {
+	return calculateEarningsHistory(ctx, snapshots, metrics, prices, duration, bucket, false)
+}
+
+// CalculateNodeEarningsHistory uses only this node's served-token counters.
+// Provider-wide earnings samples in the stored history must not be mixed into
+// a chart labelled as this node's earnings.
+func CalculateNodeEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration) *EarningsSeries {
+	return calculateEarningsHistory(ctx, snapshots, metrics, prices, duration, bucket, true)
+}
+
+func calculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoint, metrics *InferenceMetricsData, prices priceLookup, duration string, bucket time.Duration, nodeOnly bool) *EarningsSeries {
 	out := &EarningsSeries{
 		Points: []EarningsPoint{}, Currency: "USD", Duration: duration,
 		BucketSeconds: int(bucket / time.Second), Source: EarningsSourceLocal,
@@ -245,7 +256,7 @@ func CalculateEarningsHistory(ctx context.Context, snapshots []HistoricalDataPoi
 		// never resets, so differencing consecutive samples gives what it says
 		// was earned in between — no local rate arithmetic involved.
 		authoritative := false
-		if s.PlatformEarningsUSD != nil {
+		if !nodeOnly && s.PlatformEarningsUSD != nil {
 			if prevPlatform != nil {
 				delta := *s.PlatformEarningsUSD - *prevPlatform
 				// A decrease is a correction or a payout on the platform side,
