@@ -132,8 +132,8 @@ function inOut(s: Pick<Segment, 'tokensIn' | 'tokensOut' | 'inIsFloor'>) {
 interface UsageChartProps {
   report: UsePollingResult<UsageSeries>;
   window_: string;
-  scope: 'node' | 'all';
-  setScope: (scope: 'node' | 'all') => void;
+  scope?: 'node' | 'all';
+  setScope?: (scope: 'node' | 'all') => void;
   /** Lifetime per-model earnings, the fallback ranking before `colours` arrives. */
   models?: ModelEarnings[];
   /** The earnings chart's colour map; used as-is so a model matches in both. */
@@ -144,10 +144,9 @@ interface UsageChartProps {
   peers?: string[];
 }
 
-export function UsageChart({ models, colours: shared, nodeName, peers, report, window_, scope, setScope }: UsageChartProps) {
+export function UsageChart({ models, colours: shared, nodeName, peers, report, window_, scope = 'node', setScope }: UsageChartProps) {
   const hasPeers = (peers?.length ?? 0) > 0;
-  // All machines by default when there are any: that is the scope the earnings
-  // chart beside it reports, so the two can be read against each other.
+  // The overview supplies no peers, so its usage is always this node's.
   const effectiveScope = hasPeers ? scope : 'node';
   const [view, setView] = useState<'model' | 'source' | 'machine'>('source');
   const [hovered, setHovered] = useState<number | null>(null);
@@ -323,7 +322,7 @@ export function UsageChart({ models, colours: shared, nodeName, peers, report, w
                   key={sc}
                   type="button"
                   onClick={() => {
-                    setScope(sc);
+                    setScope?.(sc);
                     if (sc === 'node' && view === 'machine') setView('model');
                   }}
                   aria-pressed={scope === sc}
@@ -471,7 +470,7 @@ export function UsageChart({ models, colours: shared, nodeName, peers, report, w
           <p className="leading-5">
             {effectiveScope === 'all'
               ? 'Provider account · reporting machines only.'
-              : 'This node only. Earnings cover the whole provider account.'}
+              : 'This node only. The earnings chart uses this node’s stored history and shows an estimate, not a payout.'}
           </p>
           <details>
             <summary className="min-h-10 cursor-pointer py-2">How usage is measured · input estimates</summary>

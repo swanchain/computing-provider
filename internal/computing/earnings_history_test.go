@@ -44,6 +44,22 @@ func TestHistoryDiffsCumulativeCounters(t *testing.T) {
 	}
 }
 
+func TestNodeHistoryExcludesProviderWideEarningsSamples(t *testing.T) {
+	first, second := 100.0, 125.0
+	samples := []HistoricalDataPoint{pt(0, 0, 0), pt(60, 1_000_000, 0)}
+	samples[0].PlatformEarningsUSD = &first
+	samples[1].PlatformEarningsUSD = &second
+	prices := fakePrices{rates: map[string]ModelPrice{"org/a": {ProviderInputPrice: 1}}}
+	node := CalculateNodeEarningsHistory(context.Background(), samples, oneModel(1_000_000, 0), prices, "24h", 0)
+	provider := CalculateEarningsHistory(context.Background(), samples, oneModel(1_000_000, 0), prices, "24h", 0)
+	if node.TotalUSD != 1 || node.AuthoritativePoints != 0 || node.Source != EarningsSourceLocal {
+		t.Errorf("node history includes provider-wide earnings: %+v", node)
+	}
+	if provider.TotalUSD != 25 || provider.AuthoritativePoints != 1 {
+		t.Errorf("default provider history changed: %+v", provider)
+	}
+}
+
 // Counters reset on restart — 17 times in a week of real history — so a
 // decrease is a restart, not negative earnings. Getting this wrong subtracts a
 // whole process's traffic from the chart.

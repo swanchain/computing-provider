@@ -119,7 +119,8 @@ export const api = {
 
   // Earnings
   getEarnings: () => fetchJson<Earnings>('/earnings'),
-  getEarningsHistory: (duration: string) => fetchJson<EarningsSeries>(`/earnings/history?duration=${duration}`),
+  getEarningsHistory: (duration: string, scope: 'node' | 'all' = 'node') =>
+    fetchJson<EarningsSeries>(`/earnings/history?duration=${duration}${scope === 'node' ? '&scope=node' : ''}`),
 
   // Usage by source, including work that bypassed the node
   getUsageHistory: (duration: string, scope: 'node' | 'all' = 'node') =>

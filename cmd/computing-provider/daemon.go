@@ -512,8 +512,9 @@ func runDaemon(cctx *cli.Context) error {
 	// Windows longer than the retained local history report what they cover.
 	router.GET("/inference/earnings/history", func(c *gin.Context) {
 		durationStr := c.DefaultQuery("duration", "24h")
+		nodeOnly := c.Query("scope") == "node"
 		var platformErr string
-		if span, bucketSpan, ok := computing.PlatformSpans(durationStr); ok && c.Query("source") != computing.EarningsSourceLocal {
+		if span, bucketSpan, ok := computing.PlatformSpans(durationStr); ok && !nodeOnly && c.Query("source") != computing.EarningsSourceLocal {
 			h, err := providerStats.EarningsHistory(c.Request.Context(), span, bucketSpan)
 			if err == nil {
 				c.JSON(200, computing.PlatformSeries(h, durationStr))
@@ -551,8 +552,11 @@ func runDaemon(cctx *cli.Context) error {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-		series := computing.CalculateEarningsHistory(
-			c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr, bucket)
+		calculate := computing.CalculateEarningsHistory
+		if nodeOnly {
+			calculate = computing.CalculateNodeEarningsHistory
+		}
+		series := calculate(c.Request.Context(), points, inferenceService.GetMetrics(), modelPrices, durationStr, bucket)
 		series.PlatformError = platformErr
 		c.JSON(200, series)
 	})
