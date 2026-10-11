@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
-import { api } from '../api/client';
-import { usePolling } from '../hooks/usePolling';
+import type { UsePollingResult } from '../hooks/usePolling';
 import { OTHER_COLOUR, OTHER_LABEL, SERIES_COLOURS, buildModelColours, colourFor, type ModelColourMap } from '../lib/modelPalette';
-import type { ModelEarnings, UsageSource, UsageTotals } from '../types';
+import type { ModelEarnings, UsageSeries, UsageSource, UsageTotals } from '../types';
 
 /**
  * What the GPUs did, by where the work came from.
@@ -22,9 +21,8 @@ import type { ModelEarnings, UsageSource, UsageTotals } from '../types';
  * Direct input is a floor, not an estimate: a model server's prompt counter
  * skips cache hits, so the gap to what the node recorded can only be larger.
  *
- * Two views of the same bars. By model is the default and uses the earnings
- * chart's colours, so a model reads the same in both; by source is how paid
- * work is told apart from everything else.
+ * By source is the default, separating hub and local work. The model view
+ * shares colours with earnings so models read consistently across both charts.
  */
 
 interface Series {
@@ -37,7 +35,7 @@ interface Series {
 
 // Colour carries meaning here, not identity: blue is the only paid series.
 const SERIES: Series[] = [
-  { key: 'hub', label: 'Hub (paid)', colour: SERIES_COLOURS[0], sources: ['hub'], title: 'Routed by Swan Inference — the only traffic that earns' },
+  { key: 'hub', label: 'Hub traffic', colour: SERIES_COLOURS[0], sources: ['hub'], title: 'Routed by Swan Inference; eligible for platform earnings' },
   { key: 'local', label: 'Local gateway', colour: SERIES_COLOURS[1], sources: ['local'], title: 'Your own clients, sent through the node’s local gateway' },
   { key: 'direct', label: 'Direct to backend', colour: SERIES_COLOURS[2], sources: ['direct'], title: 'Served by a model server without passing through the node; input is a lower bound' },
   { key: 'probes', label: 'Probes', colour: OTHER_COLOUR, sources: ['health', 'selfcheck'], title: 'This node’s own health and audit checks' },
@@ -132,6 +130,10 @@ function inOut(s: Pick<Segment, 'tokensIn' | 'tokensOut' | 'inIsFloor'>) {
 }
 
 interface UsageChartProps {
+  report: UsePollingResult<UsageSeries>;
+  window_: string;
+  scope: 'node' | 'all';
+  setScope: (scope: 'node' | 'all') => void;
   /** Lifetime per-model earnings, the fallback ranking before `colours` arrives. */
   models?: ModelEarnings[];
   /** The earnings chart's colour map; used as-is so a model matches in both. */
@@ -142,19 +144,14 @@ interface UsageChartProps {
   peers?: string[];
 }
 
-export function UsageChart({ models, colours: shared, nodeName, peers }: UsageChartProps) {
+export function UsageChart({ models, colours: shared, nodeName, peers, report, window_, scope, setScope }: UsageChartProps) {
   const hasPeers = (peers?.length ?? 0) > 0;
   // All machines by default when there are any: that is the scope the earnings
   // chart beside it reports, so the two can be read against each other.
-  const [scope, setScope] = useState<'node' | 'all'>('all');
   const effectiveScope = hasPeers ? scope : 'node';
-  const [window_, setWindow] = useState<string>('24h');
-  const [view, setView] = useState<'model' | 'source' | 'machine'>('model');
+  const [view, setView] = useState<'model' | 'source' | 'machine'>('source');
   const [hovered, setHovered] = useState<number | null>(null);
-  const { data, loading, error } = usePolling(
-    useCallback(() => api.getUsageHistory(window_, effectiveScope), [window_, effectiveScope]),
-    60_000,
-  );
+  const { data, loading, error, lastUpdated } = report;
 
   const points = useMemo(() => data?.points ?? [], [data?.points]);
   const bucketSeconds = data?.bucket_seconds ?? 3600;
@@ -354,25 +351,15 @@ export function UsageChart({ models, colours: shared, nodeName, peers }: UsageCh
               </button>
             ))}
           </div>
-          <div className="flex gap-1" role="group" aria-label="Time window">
-            {WINDOWS.map((w) => (
-              <button
-                key={w.id}
-                type="button"
-                onClick={() => setWindow(w.id)}
-                aria-pressed={window_ === w.id}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                  window_ === w.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                }`}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
-      {error && !data ? (
+      <p className="px-4 pt-3 text-xs text-slate-400">{lastUpdated ? `Fetched ${lastUpdated.toLocaleTimeString()}` : 'Loading usage…'} · {WINDOWS.find((w) => w.id === window_)?.label}
+        {error && data && <span className="text-amber-200"> · Refresh failed; showing previous data</span>}
+      </p>
+      {machines.some((m) => m.error) && <p role="status" className="mx-4 mt-3 rounded-lg border border-amber-800/60 bg-amber-950/30 p-3 text-sm text-amber-200">Partial usage: {machines.filter((m) => !m.error).length} of {machines.length} machines reporting. Missing machines are excluded from totals.</p>}
+
+      {loading && !data ? <p role="status" className="px-4 py-6 text-sm text-slate-400">Loading usage for this period…</p> : error && !data ? (
         <p className="px-4 py-6 text-sm text-amber-300">Could not load usage: {error.message}</p>
       ) : points.length === 0 ? (
         <p className="px-4 py-6 text-sm text-slate-400">No usage recorded for this window yet.</p>
@@ -481,24 +468,29 @@ export function UsageChart({ models, colours: shared, nodeName, peers }: UsageCh
       <div className="flex items-start gap-2 border-t border-slate-800 px-4 py-3 text-xs text-slate-400">
         <AlertCircle aria-hidden="true" size={14} className="mt-px shrink-0" />
         <div className="space-y-1">
-          <p>
+          <p className="leading-5">
             {effectiveScope === 'all'
-              ? 'Covers every machine of this provider, the same scope as the earnings beside it.'
-              : 'Counts only this machine; the earnings beside it are for the whole provider account, so models served on another machine appear there and not here.'}{' '}
+              ? 'Provider account · reporting machines only.'
+              : 'This node only. Earnings cover the whole provider account.'}
+          </p>
+          <details>
+            <summary className="min-h-10 cursor-pointer py-2">How usage is measured · input estimates</summary>
+            <p className="leading-5">
             Bars are total tokens: output solid, input light. Direct input (≥) is a floor — the model server’s
-            prompt counter skips cache hits, so the real figure can only be higher. Only hub traffic is paid.
+            prompt counter skips cache hits, so the real figure can only be higher. Only hub traffic is eligible for platform earnings.
             {data?.local_gateway && (
               <>
                 {' '}Point local clients at <span className="font-mono text-slate-300">{data.local_gateway}</span> to
                 record them as local rather than direct.
               </>
             )}
-          </p>
-          {machines.filter((m) => m.error).map((m) => (
-            <p key={m.name} className="text-amber-300/90">
-              Usage from <span className="font-mono">{m.name}</span> could not be read ({m.error}); it is missing from these
-              bars, not idle.
             </p>
+          </details>
+          {machines.filter((m) => m.error).map((m) => (
+            <details key={m.name} className="text-amber-200">
+              <summary className="cursor-pointer py-2">{m.name}: usage unavailable · technical details</summary>
+              <p className="break-words">{m.error}</p>
+            </details>
           ))}
           {unmeasured.length > 0 && (
             <p className="text-amber-300/90">

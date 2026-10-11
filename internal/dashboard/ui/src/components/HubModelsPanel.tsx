@@ -1,8 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { api } from '../api/client';
-import { usePolling } from '../hooks/usePolling';
-import type { HubModel } from '../types';
+import type { UsePollingResult } from '../hooks/usePolling';
+import type { HubModel, HubModelView } from '../types';
 
 /**
  * Swan Inference's own record of this provider's models.
@@ -14,8 +13,6 @@ import type { HubModel } from '../types';
  * offering to credit the work to, and a failure that happened before a
  * request was billed is visible only on the platform's side.
  */
-
-const HUB_POLL_MS = 120_000; // the backend caches the platform's answer for two minutes
 
 function formatCount(v: number) {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
@@ -59,14 +56,14 @@ function Status({ m }: { m: HubModel }) {
   if (m.offered) {
     // Held as offered by the platform, but not in this node's register list —
     // another machine on the same key, or a stale offering.
-    return <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300">◐ offered elsewhere</span>;
+    return <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-300">Listed by platform · not registered on this node</span>;
   }
   return <span className="rounded bg-slate-700/60 px-1.5 py-0.5 text-[11px] text-slate-400">○ history</span>;
 }
 
-export function HubModelsPanel() {
+export function HubModelsPanel({ report }: { report: UsePollingResult<HubModelView> }) {
   const [showHistory, setShowHistory] = useState(false);
-  const { data, loading, error } = usePolling(useCallback(() => api.getHubModels(), []), HUB_POLL_MS);
+  const { data, loading, error, lastUpdated } = report;
 
   const models = data?.models ?? [];
   const offered = models.filter((m) => m.offered);
@@ -75,13 +72,15 @@ export function HubModelsPanel() {
   const notListed = data?.not_listed ?? [];
 
   return (
-    <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+    <div id="platform-models" className="min-w-0 scroll-mt-4 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="border-b border-slate-800 px-4 py-3">
-        <h3 className="text-sm font-medium text-slate-300">Swan Inference’s view</h3>
+        <h3 className="text-sm font-medium text-slate-300">Platform model listings</h3>
         <p className="text-xs text-slate-400">
           What the platform holds for this provider and how each offering has served recently.
         </p>
+        <p className="mt-1 text-xs text-slate-400">{lastUpdated ? `Fetched ${lastUpdated.toLocaleTimeString()} · platform cache up to 2 minutes` : 'Checking platform listings…'}</p>
       </div>
+      {error && data && <p role="status" className="px-4 py-3 text-sm text-amber-200">Refresh failed. Showing previously fetched listings.</p>}
 
       {notListed.length > 0 && (
         <div role="alert" className="flex items-start gap-2 border-b border-slate-800 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">

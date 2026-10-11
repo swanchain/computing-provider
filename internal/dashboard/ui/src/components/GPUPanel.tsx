@@ -67,7 +67,7 @@ export function GPUPanel({ gpus, loading, error }: GPUPanelProps) {
         {gpus.map((g) => (
           <div key={g.index} className="border border-slate-700 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="min-w-0 truncate text-sm font-medium text-slate-200" title={g.name}>{g.name}</span>
+              <span className="min-w-0 text-sm font-medium text-slate-200"><span className="block text-xs text-slate-400">GPU {g.index}</span>{g.name}</span>
               <div className="flex items-center gap-1 text-sm">
                 <Thermometer aria-hidden="true" size={14} className={g.temperature_c >= 90 ? 'text-red-300' : g.temperature_c >= 85 ? 'text-amber-300' : 'text-slate-300'} />
                 <span className={g.temperature_c >= 90 ? 'text-red-300' : g.temperature_c >= 85 ? 'text-amber-300' : 'text-slate-300'}>
@@ -93,7 +93,7 @@ export function GPUPanel({ gpus, loading, error }: GPUPanelProps) {
               {g.memory_total_mb > 0 && (
                 <div>
                   <div className="mb-1 flex justify-between text-xs text-slate-300">
-                    <span>Memory</span>
+                    <span>VRAM</span>
                     <span>{(g.memory_used_mb / 1024).toFixed(1)} / {(g.memory_total_mb / 1024).toFixed(1)} GB</span>
                   </div>
                   <ProgressBar

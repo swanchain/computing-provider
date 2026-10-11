@@ -45,6 +45,11 @@ export function OperationalSummary({ status, metrics, models, dataIssues, loadin
     severity = 'critical';
     messages.push(`${models.summary.unhealthy} unhealthy model${models.summary.unhealthy === 1 ? '' : 's'}`);
   }
+  const localDown = models?.models.filter((m) => m.local_health === 'unreachable').length ?? 0;
+  if (localDown) {
+    severity = 'critical';
+    messages.push(`${localDown} local model routes unreachable`);
+  }
   if (models && models.summary.total === 0) {
     severity = 'critical';
     messages.push('No models configured');
@@ -67,7 +72,7 @@ export function OperationalSummary({ status, metrics, models, dataIssues, loadin
   const visual = {
     healthy: {
       Icon: CheckCircle2,
-      title: 'All operational signals look healthy',
+      title: 'Node service checks passing',
       copy: models ? `${models.summary.ready} of ${models.summary.total} models ready` : 'Waiting for model status',
       className: 'border-emerald-800/70 bg-emerald-950/30',
       iconClass: 'text-emerald-300',
@@ -103,10 +108,10 @@ export function OperationalSummary({ status, metrics, models, dataIssues, loadin
     <div
       role={severity === 'critical' ? 'alert' : 'status'}
       title={detail}
-      className={`flex min-w-0 max-w-full items-center gap-2 rounded-lg border px-3 py-1.5 ${visual.className}`}
+      className={`flex min-w-0 max-w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-1.5 ${visual.className}`}
     >
       <Icon aria-hidden="true" size={16} className={`shrink-0 ${visual.iconClass}`} />
-      <p className={`min-w-0 truncate text-sm font-medium ${visual.titleClass}`}>
+      <p className={`min-w-0 text-sm font-medium ${visual.titleClass}`}>
         {visual.title}
         {visual.copy && <span className="ml-2 font-normal text-slate-300">{visual.copy}</span>}
       </p>

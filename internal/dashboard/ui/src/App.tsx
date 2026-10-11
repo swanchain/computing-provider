@@ -9,7 +9,7 @@ import {
   Server,
   Settings2,
 } from 'lucide-react';
-import { usePolling } from './hooks/usePolling';
+import { refreshDashboard, usePolling } from './hooks/usePolling';
 import { api } from './api/client';
 import { EarningsChart } from './components/EarningsChart';
 import { UsageChart } from './components/UsageChart';
@@ -19,7 +19,8 @@ import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
 import { HubModelsPanel } from './components/HubModelsPanel';
-import { ProxyAccountsPanel, ProxyAlert, ProxyRoutingPanel } from './components/ProxyAccountsPanel';
+import { ProxyAccountsPanel, ProxyRoutingPanel } from './components/ProxyAccountsPanel';
+import { OverviewAttention } from './components/OverviewAttention';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { RequestHistoryPanel } from './components/RequestHistoryPanel';
@@ -53,13 +54,15 @@ function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
+  const [chartWindow, setChartWindow] = useState('24h');
+  const [usageScope, setUsageScope] = useState<'node' | 'all'>('all');
+  const [showPerformance, setShowPerformance] = useState(false);
 
   const {
     data: metrics,
     error: metricsError,
     loading: metricsLoading,
     refreshing: metricsRefreshing,
-    refetch: refetchMetrics,
   } = usePolling(useCallback(() => api.getMetrics(), []), POLL_INTERVAL);
 
   const {
@@ -68,7 +71,6 @@ function App() {
     loading: statusLoading,
     refreshing: statusRefreshing,
     lastUpdated: statusLastUpdated,
-    refetch: refetchStatus,
   } = usePolling(useCallback(() => api.getStatus(), []), POLL_INTERVAL);
 
   const {
@@ -76,7 +78,6 @@ function App() {
     error: earningsError,
     loading: earningsLoading,
     refreshing: earningsRefreshing,
-    refetch: refetchEarnings,
   } = usePolling(useCallback(() => api.getEarnings(), []), POLL_INTERVAL);
 
   const {
@@ -92,8 +93,12 @@ function App() {
     error: requestMgmtError,
     loading: requestMgmtLoading,
     refreshing: requestMgmtRefreshing,
-    refetch: refetchRequestMgmt,
   } = usePolling(useCallback(() => api.getRequestManagement(), []), POLL_INTERVAL);
+
+  const hubReport = usePolling(useCallback(() => api.getHubModels(), []), 120_000);
+  const proxyReport = usePolling(useCallback(() => api.getProxyAccounts(), []), 60_000);
+  const effectiveUsageScope = status?.peers?.length ? usageScope : 'node';
+  const usageReport = usePolling(useCallback(() => api.getUsageHistory(chartWindow, effectiveUsageScope), [chartWindow, effectiveUsageScope]), 60_000);
 
   useEffect(() => {
     if (!api.hasAccessToken()) return;
@@ -115,11 +120,7 @@ function App() {
   }, []);
 
   const handleRefreshAll = () => {
-    refetchMetrics();
-    refetchStatus();
-    refetchModels();
-    refetchRequestMgmt();
-    refetchEarnings();
+    refreshDashboard();
   };
 
   const handleLock = () => {
@@ -145,7 +146,9 @@ function App() {
     if (view === 'settings' && !authenticated) setShowAuthDialog(true);
   };
 
-  const refreshing = metricsRefreshing || statusRefreshing || earningsRefreshing || modelsRefreshing || requestMgmtRefreshing;
+  const refreshing = metricsRefreshing || statusRefreshing || earningsRefreshing || modelsRefreshing || requestMgmtRefreshing || proxyReport.refreshing || hubReport.refreshing || usageReport.refreshing;
+  const hubProxyModels = new Set(proxyReport.data?.instances.filter((inst) => inst.roles.includes('hub')).flatMap((inst) => inst.models));
+  const directHubModels = status?.registered_models?.filter((id) => !hubProxyModels.has(id)).length ?? 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -237,12 +240,11 @@ function App() {
       <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
         {activeView === 'overview' && (
           <div className="space-y-6">
-            <ProxyAlert onOpen={() => handleViewChange('proxies')} />
             <section aria-labelledby="provider-health-heading">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                 <div className="min-w-0">
                   <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider overview</h2>
-                  <p className="mt-1 text-sm text-slate-300">Current service health, traffic, and earnings.</p>
+                  <p className="mt-1 text-sm text-slate-300">This node’s service status and your provider account’s activity.</p>
                 </div>
                 <OperationalSummary
                   status={status}
@@ -258,6 +260,11 @@ function App() {
                   ]}
                 />
               </div>
+              <div className="mb-4 flex flex-wrap gap-3 text-sm">
+                <span className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">{status?.registered_models?.length ?? '—'} registered to hub</span>
+                <span className="rounded-lg border border-sky-800/60 bg-sky-950/20 px-3 py-2 text-sky-200">{models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</span>
+              </div>
+              <div className="mb-5"><OverviewAttention hub={hubReport} usage={usageReport} proxies={proxyReport} onProxies={() => handleViewChange('proxies')} /></div>
               <MetricsPanel
                 metrics={metrics}
                 loading={metricsLoading}
@@ -268,25 +275,14 @@ function App() {
               />
             </section>
 
-            <section aria-labelledby="earnings-heading">
-              <div className="mb-3">
-                <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
-                <p className="mt-1 text-sm text-slate-300">What the GPUs served, by model or source, beside what Swan Inference paid for.</p>
-              </div>
-              <div className="grid items-start gap-6 lg:grid-cols-2">
-                <UsageChart models={earnings?.models} colours={modelColours} nodeName={status?.node_name} peers={status?.peers} />
-                <EarningsChart models={earnings?.models} onColours={setModelColours} localModels={status?.registered_models} />
-              </div>
-            </section>
-
             <section aria-labelledby="operations-heading">
               <div className="mb-3">
-                <h2 id="operations-heading" className="text-xl font-semibold text-white">Operations</h2>
-                <p className="mt-1 text-sm text-slate-400">Model readiness and local resource pressure.</p>
+                <h2 id="operations-heading" className="text-xl font-semibold text-white">This node</h2>
+                <p className="mt-1 text-sm text-slate-400">Model endpoint readiness and GPU capacity. Subscription accounts are in Proxies.</p>
               </div>
-              <div className="grid items-start gap-6 lg:grid-cols-2">
-                <div className="min-w-0 space-y-6">
+              <div className="grid items-start gap-5 lg:grid-cols-2">
                   <ModelsPanel
+                    compact
                     models={models?.models ?? []}
                     healthLog={models?.health_log}
                     prices={models?.prices ?? {}}
@@ -298,28 +294,37 @@ function App() {
                     authenticated={authenticated}
                     onUnlock={() => setShowAuthDialog(true)}
                   />
-                  <HubModelsPanel />
-                  <RequestManagementPanel
-                    data={requestMgmt}
-                    loading={requestMgmtLoading}
-                    error={requestMgmtError}
-                    onOpenSettings={() => handleViewChange('settings')}
-                  />
-                </div>
-                <div className="min-w-0 space-y-6">
-                  <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
-                  <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
-                </div>
+
+                <GPUPanel gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
               </div>
             </section>
 
-            <section aria-labelledby="performance-heading">
+            <section aria-labelledby="earnings-heading">
               <div className="mb-3">
-                <h2 id="performance-heading" className="text-xl font-semibold text-white">Performance</h2>
-                <p className="mt-1 text-sm text-slate-300">Persistent trends that remain available after navigation or restart.</p>
+                <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
+                <p className="mt-1 text-sm text-slate-300">Tokens served and platform earnings over the same period. Earnings cover the whole provider account.</p>
+                <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Usage and earnings time range">
+                  {[['24h', '24 hours'], ['7d', '7 days'], ['30d', '30 days']].map(([value, label]) => <button key={value} type="button" aria-pressed={chartWindow === value} onClick={() => setChartWindow(value)} className={`min-h-11 rounded-lg border px-4 text-sm focus-visible:outline focus-visible:outline-sky-400 ${chartWindow === value ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{label}</button>)}
+                </div>
               </div>
-              <HistoricalChart />
+              <div className="grid items-start gap-6 lg:grid-cols-2">
+                <UsageChart report={usageReport} window_={chartWindow} scope={usageScope} setScope={setUsageScope} models={earnings?.models} colours={modelColours} nodeName={status?.node_name} peers={status?.peers} />
+                <EarningsChart window_={chartWindow} models={earnings?.models} onColours={setModelColours} localModels={status?.registered_models} />
+              </div>
             </section>
+
+            <section aria-label="Platform listings and session activity" className="grid items-start gap-5 lg:grid-cols-2">
+              <HubModelsPanel report={hubReport} />
+              <div className="min-w-0 space-y-5">
+                <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
+                <RequestManagementPanel data={requestMgmt} loading={requestMgmtLoading} error={requestMgmtError} onOpenSettings={() => handleViewChange('settings')} />
+              </div>
+            </section>
+
+            <details className="rounded-xl border border-slate-800 bg-slate-900/60" onToggle={(event) => setShowPerformance(event.currentTarget.open)}>
+              <summary className="min-h-12 cursor-pointer px-5 py-4 font-semibold text-white focus-visible:outline focus-visible:outline-sky-400">Performance history <span className="ml-2 text-sm font-normal text-slate-400">Latency, success rate, and throughput</span></summary>
+              {showPerformance && <div className="border-t border-slate-800 p-3"><HistoricalChart /></div>}
+            </details>
 
           </div>
         )}
@@ -331,11 +336,18 @@ function App() {
             <div>
               <h2 id="proxies-heading" className="text-xl font-semibold text-white">Proxies</h2>
               <p className="mt-1 text-sm text-slate-300">
-                The CLIProxyAPI instances behind subscription-backed models: their accounts, usage windows and routing.
+                Subscription accounts for hub traffic and your own clients. Sign-in, usage limits, and routing are shown separately.
               </p>
             </div>
-            <ProxyAccountsPanel />
-            <ProxyRoutingPanel models={models?.models ?? []} />
+            <div className="rounded-xl border border-sky-800/50 bg-sky-950/20 p-4 text-sm text-slate-300">
+              <p>{status?.registered_models?.length ?? '—'} models registered to hub · {models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</p>
+              <p className="mt-2">Client gateway: <span className="break-all font-mono text-sky-200">{usageReport.data?.local_gateway || 'not reported'}</span></p>
+              <p className="mt-1 text-xs text-slate-400">Used by clients on this provider machine. Proxy backend addresses appear in connection details.</p>
+              {proxyReport.data && !proxyReport.data.note && !proxyReport.error && directHubModels > 0 && <p className="mt-2 text-xs text-slate-400">{directHubModels} hub-registered models use model servers outside these proxies.</p>}
+            </div>
+            <ProxyAccountsPanel report={proxyReport} />
+            {modelsError && <p role="status" className="text-sm text-amber-200">Model routes could not be refreshed.{models ? ' Showing previous routes.' : ''}</p>}
+            {models ? <ProxyRoutingPanel models={models.models} /> : <p className="text-sm text-slate-400">{modelsLoading ? 'Loading model routes…' : 'Model routes unavailable.'}</p>}
           </section>
         )}
 

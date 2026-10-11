@@ -19,13 +19,13 @@ const colorClasses = {
 
 export function StatusCard({ title, value, subtitle, icon, color = 'blue' }: StatusCardProps) {
   return (
-    <div className="min-w-0 rounded-xl border border-slate-700 bg-slate-900 p-3 sm:p-4">
+    <div className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900 p-4 sm:p-5">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="truncate text-xs text-slate-300 sm:text-sm">{title}</span>
+        <span className="text-xs font-medium text-slate-300 sm:text-sm">{title}</span>
         {icon && <span aria-hidden="true" className={colorClasses[color]}>{icon}</span>}
       </div>
-      <div className={`truncate text-lg font-bold sm:text-2xl ${colorClasses[color]}`} title={String(value)}>{value}</div>
-      {subtitle && <div className="mt-1 truncate text-[11px] text-slate-400 sm:text-xs" title={subtitle}>{subtitle}</div>}
+      <div className={`break-words text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl ${colorClasses[color]}`}>{value}</div>
+      {subtitle && <div className="mt-1 text-xs leading-5 text-slate-400">{subtitle}</div>}
     </div>
   );
 }
