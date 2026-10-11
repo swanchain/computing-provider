@@ -74,6 +74,16 @@ function WindowBar({ w }: { w: ProxyQuotaWindow }) {
   );
 }
 
+/**
+ * A cooldown on one model is not the account cooling down: a plan that does
+ * not include a model, or has spent that model's quota, holds back that model
+ * alone while the rest serve normally. Only one with no model, or the proxy
+ * marking the whole account unavailable, makes the account itself unusable.
+ */
+function accountWideCooldown(a: ProxyAccount) {
+  return a.unavailable || a.cooldowns.some((c) => !c.model);
+}
+
 function AccountStatus({ a }: { a: ProxyAccount }) {
   const expired = isPast(a.expires);
   if (a.disabled) {
@@ -82,10 +92,16 @@ function AccountStatus({ a }: { a: ProxyAccount }) {
   if (expired) {
     return <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[11px] text-red-300">✗ token expired</span>;
   }
-  if (a.cooldowns.length > 0 || a.unavailable) {
+  if (accountWideCooldown(a)) {
     return <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-300">⚠ cooling down</span>;
   }
-  return <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-300">✓ {a.status || 'active'}</span>;
+  const held = a.cooldowns.length;
+  return (
+    <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-300">
+      ✓ {a.status || 'active'}
+      {held > 0 && <span className="text-amber-300"> · {held} model{held === 1 ? '' : 's'} held back</span>}
+    </span>
+  );
 }
 
 function Account({ a }: { a: ProxyAccount }) {
@@ -109,7 +125,11 @@ function Account({ a }: { a: ProxyAccount }) {
         </div>
       )}
       {!a.disabled && a.windows.length === 0 && (
-        <p className="mt-1.5 text-slate-500">No usage reported yet — it appears after the account serves a request.</p>
+        <p className="mt-1.5 text-slate-500">
+          {a.provider === 'codex'
+            ? 'No usage reported yet — it appears after the account serves a request.'
+            : 'This provider does not report usage windows to the proxy.'}
+        </p>
       )}
 
       {a.cooldowns.length > 0 && (
@@ -129,10 +149,14 @@ function Account({ a }: { a: ProxyAccount }) {
         </span>
         {a.expires && !a.disabled && (
           <span className={expired ? 'text-red-300' : undefined}>
-            {expired ? `✗ token expired ${formatIn(a.expires)} — refreshing has stopped; log in again` : `token refreshes before ${new Date(a.expires).toLocaleDateString()}`}
+            {expired
+              ? `✗ token expired ${formatIn(a.expires)} — refreshing has stopped; log in again`
+              : `access token renews automatically before ${new Date(a.expires).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`}
           </span>
         )}
-        {a.quota_observed_at && <span className="text-slate-500">usage as of {formatIn(a.quota_observed_at)}</span>}
+        {a.quota_observed_at && a.windows.length > 0 && (
+          <span className="text-slate-500">usage as of {formatIn(a.quota_observed_at)}</span>
+        )}
       </div>
     </li>
   );
@@ -189,7 +213,7 @@ function proxyIssues(report: ProxyAccountsReport | null | undefined): string[] {
     for (const a of inst.accounts) {
       if (a.disabled) continue;
       if (isPast(a.expires)) out.push(`${a.account}: token expired`);
-      else if (a.cooldowns.length > 0 || a.unavailable) out.push(`${a.account}: cooling down`);
+      else if (accountWideCooldown(a)) out.push(`${a.account}: cooling down`);
       for (const w of a.windows) {
         if (w.used_percent >= 90) out.push(`${a.account}: ${w.label} window ${w.used_percent.toFixed(0)}% used`);
       }

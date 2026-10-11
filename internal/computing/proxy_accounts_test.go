@@ -82,3 +82,28 @@ func TestProxyAccountsReport(t *testing.T) {
 		t.Errorf("expires = %v, want the credential file's", a.Expires)
 	}
 }
+
+// A Claude login's file name carries an ID and the account, not a plan; that
+// must not be shown as one.
+func TestProxyAccountsNoPlanFromAccountName(t *testing.T) {
+	dir := t.TempDir()
+	cred := filepath.Join(dir, "claude-bce0ac99-b@example.com.json")
+	if err := os.WriteFile(cred, []byte(`{"email":"b@example.com","type":"claude","expired":"2026-10-12T01:53:34Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"files":[{"account":"b@example.com","provider":"claude","status":"active","path":%q,"quota":{"signals":{}}}]}`, cred)
+	}))
+	defer proxy.Close()
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["anthropic/m"] = ModelMapping{Endpoint: proxy.URL}
+	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.managementKey = "mk"
+	r := s.ProxyAccounts(context.Background())
+	if len(r.Instances) != 1 || len(r.Instances[0].Accounts) != 1 {
+		t.Fatalf("report = %+v", r)
+	}
+	if p := r.Instances[0].Accounts[0].Plan; p != "" {
+		t.Errorf("plan = %q, want none rather than the file name", p)
+	}
+}

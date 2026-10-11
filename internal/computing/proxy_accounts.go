@@ -175,7 +175,9 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 					}
 				}
 				if c, ok := creds[dir][filepath.Base(f.Path)]; ok {
-					if a.Plan == "" {
+					// The file-name fallback is only a plan when it is not
+					// just the account repeated, as for Claude logins.
+					if a.Plan == "" && !strings.Contains(c.Plan, "@") {
 						a.Plan = c.Plan
 					}
 					if !c.Expires.IsZero() {
