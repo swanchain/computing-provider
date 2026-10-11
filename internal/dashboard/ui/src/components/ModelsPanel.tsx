@@ -199,25 +199,12 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                 <div className="min-w-0">
                   <div className="break-words font-medium text-slate-200">{model.id}</div>
                   <div className="mt-0.5 break-all text-xs text-slate-400">
-                    {model.local_endpoint && <span className="text-slate-500">hub → </span>}
                     {model.endpoint} • {model.category}
                     {model.gpu_memory > 0 && ` • ${(model.gpu_memory / 1024).toFixed(1)}GB VRAM`}
                   </div>
-                  {model.local_endpoint && (
-                    <div className="mt-0.5 break-all text-xs text-slate-400" title={model.local_error || undefined}>
-                      <span className="text-slate-500">local → </span>
-                      {model.local_endpoint} •{' '}
-                      <span
-                        className={
-                          model.local_health === 'healthy'
-                            ? 'text-green-300'
-                            : model.local_health === 'unreachable'
-                              ? 'text-red-300'
-                              : 'text-slate-400'
-                        }
-                      >
-                        {model.local_health === 'healthy' ? '✓ reachable' : model.local_health === 'unreachable' ? `✗ ${model.local_error || 'unreachable'}` : '… not checked yet'}
-                      </span>
+                  {localDown(model) && (
+                    <div className="mt-0.5 break-all text-xs text-red-300" title={model.local_error || undefined}>
+                      ✗ local gateway backend {model.local_endpoint} unreachable — see Proxies
                     </div>
                   )}
                   <div className="text-xs text-slate-400 mt-0.5">

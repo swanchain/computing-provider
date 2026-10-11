@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { api } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
-import type { ProxyAccount, ProxyInstance, ProxyQuotaWindow } from '../types';
+import type { ModelStatus, ProxyAccount, ProxyAccountsReport, ProxyInstance, ProxyQuotaWindow } from '../types';
 
 /**
  * The subscription accounts behind each CLIProxyAPI instance.
@@ -173,12 +173,108 @@ function Instance({ inst }: { inst: ProxyInstance }) {
   );
 }
 
-export function ProxyAccountsPanel() {
-  const { data, loading, error } = usePolling(useCallback(() => api.getProxyAccounts(), []), PROXY_POLL_MS);
-  const instances = data?.instances ?? [];
+function useProxyAccounts() {
+  return usePolling(useCallback(() => api.getProxyAccounts(), []), PROXY_POLL_MS);
+}
 
-  // Nothing to show on a node that fronts no proxy.
-  if (data && instances.length === 0 && !data.note) return null;
+/** What needs the operator's attention, one line each; empty when nothing does. */
+function proxyIssues(report: ProxyAccountsReport | null | undefined): string[] {
+  const out: string[] = [];
+  for (const inst of report?.instances ?? []) {
+    if (inst.error) {
+      out.push(`${inst.endpoint} could not be read`);
+      continue;
+    }
+    if (inst.accounts.length === 0) out.push(`${inst.endpoint} has no accounts`);
+    for (const a of inst.accounts) {
+      if (a.disabled) continue;
+      if (isPast(a.expires)) out.push(`${a.account}: token expired`);
+      else if (a.cooldowns.length > 0 || a.unavailable) out.push(`${a.account}: cooling down`);
+      for (const w of a.windows) {
+        if (w.used_percent >= 90) out.push(`${a.account}: ${w.label} window ${w.used_percent.toFixed(0)}% used`);
+      }
+    }
+  }
+  return out;
+}
+
+/** A one-line warning for the overview, shown only when an account needs attention. */
+export function ProxyAlert({ onOpen }: { onOpen: () => void }) {
+  const { data } = useProxyAccounts();
+  const issues = proxyIssues(data);
+  if (issues.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+      <span>⚠ Proxy accounts need attention: {issues.join('; ')}</span>
+      <button type="button" onClick={onOpen} className="rounded border border-amber-400/40 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/20">
+        Open Proxies
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Which backend each proxied model uses for routed and for local work. Only
+ * models with a separate local backend are listed; the rest use one backend
+ * for both, shown on the Overview.
+ */
+export function ProxyRoutingPanel({ models }: { models: ModelStatus[] }) {
+  const split = models.filter((m) => m.local_endpoint).sort((a, b) => a.id.localeCompare(b.id));
+  return (
+    <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+      <div className="border-b border-slate-800 px-4 py-3">
+        <h3 className="text-sm font-medium text-slate-300">Model routing</h3>
+        <p className="text-xs text-slate-400">
+          Hub requests go to the model’s endpoint; requests to the local gateway (127.0.0.1:9088) go to its local backend.
+        </p>
+      </div>
+      {split.length === 0 ? (
+        <p className="px-4 py-6 text-sm text-slate-400">
+          No model has a separate local backend. Set <span className="font-mono">local_endpoint</span> in models.json to give one.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="text-slate-400">
+              <tr className="border-b border-slate-800">
+                <th scope="col" className="px-4 py-2 font-medium">Model</th>
+                <th scope="col" className="px-4 py-2 font-medium">Hub traffic</th>
+                <th scope="col" className="px-4 py-2 font-medium">Local gateway</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800">
+              {split.map((m) => (
+                <tr key={m.id}>
+                  <td className="break-all px-4 py-2 font-mono text-slate-200">{m.id}</td>
+                  <td className="px-4 py-2 text-slate-300">
+                    <span className="font-mono">{m.endpoint}</span>{' '}
+                    <span className={m.health_string === 'healthy' ? 'text-green-300' : 'text-red-300'}>
+                      {m.health_string === 'healthy' ? '✓' : '✗'} {m.health_string}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 text-slate-300" title={m.local_error || undefined}>
+                    <span className="font-mono">{m.local_endpoint}</span>{' '}
+                    <span
+                      className={
+                        m.local_health === 'healthy' ? 'text-green-300' : m.local_health === 'unreachable' ? 'text-red-300' : 'text-slate-400'
+                      }
+                    >
+                      {m.local_health === 'healthy' ? '✓ reachable' : m.local_health === 'unreachable' ? `✗ ${m.local_error || 'unreachable'}` : '… not checked yet'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ProxyAccountsPanel() {
+  const { data, loading, error } = useProxyAccounts();
+  const instances = data?.instances ?? [];
 
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
@@ -195,7 +291,11 @@ export function ProxyAccountsPanel() {
       ) : data?.note ? (
         <p className="px-4 py-6 text-sm text-slate-400">{data.note}</p>
       ) : (
-        instances.map((inst) => <Instance key={inst.endpoint} inst={inst} />)
+        instances.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-slate-400">None of this node’s models is served through a CLIProxyAPI instance.</p>
+        ) : (
+          instances.map((inst) => <Instance key={inst.endpoint} inst={inst} />)
+        )
       )}
     </div>
   );
