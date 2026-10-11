@@ -125,8 +125,10 @@ type BackendUsageSampler struct {
 	mu     sync.Mutex
 	status map[string]BackendEndpointStatus
 	// queueTotals are the running token counts drained from each CLIProxyAPI
-	// endpoint's usage queue, which reports requests rather than totals.
-	queueTotals map[string]queueTotal
+	// endpoint's usage queue, which reports requests rather than totals, per
+	// endpoint and model ID; queueStart is each endpoint's first read.
+	queueTotals map[string]map[string]queueTotal
+	queueStart  map[string]time.Time
 	stop        chan struct{}
 	done        chan struct{}
 }
@@ -135,6 +137,24 @@ type BackendUsageSampler struct {
 type endpointInfo struct {
 	Models []string
 	APIKey string
+	// Names maps the name the server knows a model by (its local_model, or
+	// the model ID itself) to the model ID, for counters reported per model.
+	Names map[string]string
+}
+
+// A sample's Endpoint is the endpoint URL, or for counters kept per model
+// the URL, perModelSep and the model ID, so a proxy fronting many models can
+// say which of them did the work.
+const perModelSep = "#"
+
+func perModelKey(endpoint, model string) string { return endpoint + perModelSep + model }
+
+// counterReading is one cumulative counter read from an endpoint.
+type counterReading struct {
+	Key               string
+	Prompt, Generated float64
+	// At, when set, dates the reading earlier than the sample: a baseline.
+	At time.Time
 }
 
 func NewBackendUsageSampler(endpoints func() map[string]endpointInfo) *BackendUsageSampler {
@@ -143,7 +163,8 @@ func NewBackendUsageSampler(endpoints func() map[string]endpointInfo) *BackendUs
 		client:    &http.Client{Timeout: 10 * time.Second},
 		status:    make(map[string]BackendEndpointStatus),
 
-		queueTotals: make(map[string]queueTotal),
+		queueTotals: make(map[string]map[string]queueTotal),
+		queueStart:  make(map[string]time.Time),
 	}
 }
 
@@ -203,12 +224,18 @@ func (b *BackendUsageSampler) sampleAll() {
 	var rows []BackendUsageSample
 	for ep, info := range eps {
 		st := BackendEndpointStatus{Endpoint: ep, Models: info.Models}
-		prompt, gen, err := b.read(ep, info.APIKey)
+		readings, err := b.read(ep, info, now)
 		if err != nil {
 			st.Reason = err.Error()
 		} else {
 			st.Measured, st.LastRead = true, now
-			rows = append(rows, BackendUsageSample{Endpoint: ep, Time: now, Prompt: prompt, Generated: gen})
+			for _, r := range readings {
+				at := now
+				if !r.At.IsZero() {
+					at = r.At
+				}
+				rows = append(rows, BackendUsageSample{Endpoint: r.Key, Time: at, Prompt: r.Prompt, Generated: r.Generated})
+			}
 		}
 		b.mu.Lock()
 		b.status[ep] = st
@@ -230,34 +257,34 @@ func (b *BackendUsageSampler) sampleAll() {
 	}
 }
 
-func (b *BackendUsageSampler) read(endpoint, apiKey string) (prompt, generated float64, err error) {
+func (b *BackendUsageSampler) read(endpoint string, info endpointInfo, now time.Time) ([]counterReading, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/metrics", nil)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	if info.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+info.APIKey)
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
-		return 0, 0, fmt.Errorf("unreachable: %v", err)
+		return nil, fmt.Errorf("unreachable: %v", err)
 	}
 	defer resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotImplemented:
-		return 0, 0, fmt.Errorf("metrics disabled (HTTP 501) — llama.cpp needs --metrics")
+		return nil, fmt.Errorf("metrics disabled (HTTP 501) — llama.cpp needs --metrics")
 	case resp.StatusCode == http.StatusNotFound && b.managementKey != "":
-		return b.readUsageQueue(ctx, endpoint)
+		return b.readUsageQueue(ctx, endpoint, info, now)
 	case resp.StatusCode != http.StatusOK:
-		return 0, 0, fmt.Errorf("no metrics endpoint (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("no metrics endpoint (HTTP %d)", resp.StatusCode)
 	}
 	prompt, generated, ok := parseBackendCounters(resp.Body)
 	if !ok {
-		return 0, 0, fmt.Errorf("metrics carry no token counters this node can read")
+		return nil, fmt.Errorf("metrics carry no token counters this node can read")
 	}
-	return prompt, generated, nil
+	return []counterReading{{Key: endpoint, Prompt: prompt, Generated: generated}}, nil
 }
 
 // CLIProxyAPI, which fronts subscription-backed models, has no /metrics. Its
@@ -267,6 +294,14 @@ func (b *BackendUsageSampler) read(endpoint, apiKey string) (prompt, generated f
 // cumulative counter the engines expose, so the rest of the direct-usage
 // arithmetic is unchanged. The total lives in memory: after a daemon restart
 // it starts again from zero, which counterDeltas already reads as a restart.
+//
+// Each record names the model the client asked for, so the totals are kept
+// per model: one proxy serves many models at very different rates, and a
+// total for all of them can be neither attributed nor priced. Every model the
+// node maps to the endpoint is written every sample, zero or not, so each
+// has a baseline from the first read. A name the node does not serve is kept
+// under that name, with a zero baseline dated to the first read, which is
+// when its total really was zero.
 //
 // Two settings on the CLIProxyAPI side matter. usage-statistics-enabled must
 // be true, or the queue stays empty and every endpoint would read as idle —
@@ -286,49 +321,105 @@ const (
 )
 
 type usageQueueRecord struct {
+	Alias  string `json:"alias"`
+	Model  string `json:"model"`
 	Tokens struct {
 		Input  float64 `json:"input_tokens"`
 		Output float64 `json:"output_tokens"`
 	} `json:"tokens"`
 }
 
-func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint string) (prompt, generated float64, err error) {
+func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint string, info endpointInfo, now time.Time) ([]counterReading, error) {
 	base := strings.TrimRight(endpoint, "/") + "/v0/management/"
 	var enabled struct {
 		Enabled *bool `json:"usage-statistics-enabled"`
 	}
 	if err := b.management(ctx, base+"usage-statistics-enabled", &enabled); err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	if enabled.Enabled == nil || !*enabled.Enabled {
-		return 0, 0, fmt.Errorf("CLIProxyAPI usage statistics are off — set usage-statistics-enabled: true in its config")
+		return nil, fmt.Errorf("CLIProxyAPI usage statistics are off — set usage-statistics-enabled: true in its config")
 	}
+	b.mu.Lock()
+	if b.queueTotals[endpoint] == nil {
+		b.queueTotals[endpoint] = map[string]queueTotal{}
+		b.queueStart[endpoint] = now
+	}
+	b.mu.Unlock()
+	var seen []string
 	for page := 0; page < usageQueueMaxPages; page++ {
 		var records []usageQueueRecord
 		if err := b.management(ctx, fmt.Sprintf("%susage-queue?count=%d", base, usageQueuePage), &records); err != nil {
-			return 0, 0, err
+			return nil, err
 		}
 		// Popped records are gone from the queue, so they are added to the
-		// total before anything else can fail.
-		var in, out float64
-		for _, r := range records {
-			in += r.Tokens.Input
-			out += r.Tokens.Output
-		}
+		// totals before anything else can fail.
 		b.mu.Lock()
-		t := b.queueTotals[endpoint]
-		t.prompt += in
-		t.generated += out
-		b.queueTotals[endpoint] = t
+		totals := b.queueTotals[endpoint]
+		for _, r := range records {
+			model := queueRecordModel(r, info.Names)
+			t, known := totals[model]
+			if !known {
+				seen = append(seen, model)
+			}
+			t.prompt += r.Tokens.Input
+			t.generated += r.Tokens.Output
+			totals[model] = t
+		}
 		b.mu.Unlock()
 		if len(records) < usageQueuePage {
 			break
 		}
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	t := b.queueTotals[endpoint]
-	return t.prompt, t.generated, nil
+	totals, start := b.queueTotals[endpoint], b.queueStart[endpoint]
+	var out []counterReading
+	if start.Before(now) {
+		for _, m := range seen {
+			if !containsString(info.Models, m) {
+				out = append(out, counterReading{Key: perModelKey(endpoint, m), At: start})
+			}
+		}
+	}
+	names := append([]string(nil), info.Models...)
+	for m := range totals {
+		if !containsString(names, m) {
+			names = append(names, m)
+		}
+	}
+	sort.Strings(names)
+	for _, m := range names {
+		t := totals[m]
+		out = append(out, counterReading{Key: perModelKey(endpoint, m), Prompt: t.prompt, Generated: t.generated})
+	}
+	return out, nil
+}
+
+// queueRecordModel is the model ID a usage record belongs to: the name the
+// client asked for, mapped back to the node's model ID when it serves it.
+func queueRecordModel(r usageQueueRecord, names map[string]string) string {
+	name := strings.TrimSpace(r.Alias)
+	if name == "" {
+		name = strings.TrimSpace(r.Model)
+	}
+	if id, ok := names[name]; ok {
+		return id
+	}
+	if name == "" {
+		return "unknown"
+	}
+	return name
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // management GETs a CLIProxyAPI management route and decodes its JSON.

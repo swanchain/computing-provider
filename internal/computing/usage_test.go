@@ -407,12 +407,12 @@ func TestDirectSkipsThePartlyMeasuredBucket(t *testing.T) {
 }
 
 // CLIProxyAPI answers /metrics with 404; with a management key the sampler
-// drains its usage queue into a running total, so two samples read as a
-// cumulative counter.
+// drains its usage queue into running totals per model, so successive samples
+// read as cumulative counters a proxy's models can be priced by.
 func TestBackendUsageReadsCLIProxyQueue(t *testing.T) {
 	queue := []string{
-		`[{"tokens":{"input_tokens":100,"output_tokens":7}},{"tokens":{"input_tokens":50,"output_tokens":3}}]`,
-		`[{"tokens":{"input_tokens":20,"output_tokens":5}}]`,
+		`[{"alias":"gpt-5.6-sol","tokens":{"input_tokens":100,"output_tokens":7}},{"alias":"gpt-5.6-luna","tokens":{"input_tokens":50,"output_tokens":3}}]`,
+		`[{"alias":"gpt-5.6-sol","tokens":{"input_tokens":20,"output_tokens":5}},{"alias":"gpt-9","tokens":{"input_tokens":4,"output_tokens":1}}]`,
 	}
 	statsOn := true
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -440,24 +440,99 @@ func TestBackendUsageReadsCLIProxyQueue(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	info := endpointInfo{
+		Models: []string{"openai/gpt-5.6-luna", "openai/gpt-5.6-sol", "openai/gpt-6-sol"},
+		Names:  map[string]string{"gpt-5.6-sol": "openai/gpt-5.6-sol", "gpt-5.6-luna": "openai/gpt-5.6-luna", "gpt-6-sol": "openai/gpt-6-sol"},
+	}
+	asMap := func(rs []counterReading) map[string]counterReading {
+		m := map[string]counterReading{}
+		for _, r := range rs {
+			if r.At.IsZero() {
+				m[strings.TrimPrefix(r.Key, srv.URL+perModelSep)] = r
+			} else {
+				m["baseline:"+strings.TrimPrefix(r.Key, srv.URL+perModelSep)] = r
+			}
+		}
+		return m
+	}
+	t0 := time.Now()
+
 	b := NewBackendUsageSampler(nil)
-	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+	if _, err := b.read(srv.URL, info, t0); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("without a key: err = %v, want unmeasured", err)
 	}
 	b.managementKey = "mk"
-	p, g, err := b.read(srv.URL, "")
-	if err != nil || p != 150 || g != 10 {
-		t.Fatalf("first read = %v/%v, %v; want 150/10", p, g, err)
+	rs, err := b.read(srv.URL, info, t0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if p, g, _ = b.read(srv.URL, ""); p != 170 || g != 15 {
-		t.Errorf("second read = %v/%v, want the running total 170/15", p, g)
+	got := asMap(rs)
+	if r := got["openai/gpt-5.6-sol"]; r.Prompt != 100 || r.Generated != 7 {
+		t.Errorf("sol = %+v, want 100/7 attributed through its local name", r)
 	}
+	if r := got["openai/gpt-5.6-luna"]; r.Prompt != 50 || r.Generated != 3 {
+		t.Errorf("luna = %+v, want 50/3", r)
+	}
+	if r, ok := got["openai/gpt-6-sol"]; !ok || r.Prompt != 0 {
+		t.Errorf("an idle served model must still get a zero reading as its baseline: %+v, %v", r, ok)
+	}
+
+	rs, _ = b.read(srv.URL, info, t0.Add(time.Minute))
+	got = asMap(rs)
+	if r := got["openai/gpt-5.6-sol"]; r.Prompt != 120 || r.Generated != 12 {
+		t.Errorf("second sol = %+v, want the running total 120/12", r)
+	}
+	if r := got["gpt-9"]; r.Prompt != 4 || r.Generated != 1 {
+		t.Errorf("a model the node does not serve is kept under its own name: %+v", r)
+	}
+	if r, ok := got["baseline:gpt-9"]; !ok || r.Prompt != 0 || !r.At.Equal(t0) {
+		t.Errorf("a newly seen model needs a zero baseline at the first read: %+v, %v", r, ok)
+	}
+
 	statsOn = false
-	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "usage statistics are off") {
+	if _, err := b.read(srv.URL, info, t0); err == nil || !strings.Contains(err.Error(), "usage statistics are off") {
 		t.Errorf("stats off: err = %v, want it reported rather than read as idle", err)
 	}
 	b.managementKey = "wrong"
-	if _, _, err := b.read(srv.URL, ""); err == nil || !strings.Contains(err.Error(), "rejected the management key") {
+	if _, err := b.read(srv.URL, info, t0); err == nil || !strings.Contains(err.Error(), "rejected the management key") {
 		t.Errorf("wrong key: err = %v", err)
+	}
+}
+
+// Per-model counters on a proxy endpoint put direct usage under each model,
+// not under one label naming them all.
+func TestUsageSeriesAttributesProxyUsagePerModel(t *testing.T) {
+	from := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
+	ep := "http://p"
+	samples := map[string][]BackendUsageSample{
+		perModelKey(ep, "openai/gpt-5.6-sol"): {
+			{Time: from.Add(-30 * time.Minute)},
+			{Time: from.Add(30 * time.Minute), Prompt: 1000, Generated: 40},
+		},
+		perModelKey(ep, "openai/gpt-5.6-luna"): {
+			{Time: from.Add(-30 * time.Minute)},
+			{Time: from.Add(30 * time.Minute), Prompt: 500, Generated: 9},
+		},
+	}
+	records := []usageRecord{{Model: "openai/gpt-5.6-sol", Source: "local", StartTime: from.Add(10 * time.Minute), TokensIn: 600, TokensOut: 30}}
+	models := map[string][]string{
+		ep:                                     {"openai/gpt-5.6-luna", "openai/gpt-5.6-sol"},
+		perModelKey(ep, "openai/gpt-5.6-sol"):  {"openai/gpt-5.6-sol"},
+		perModelKey(ep, "openai/gpt-5.6-luna"): {"openai/gpt-5.6-luna"},
+	}
+	s := BuildUsageSeries(records, samples, models, from, from.Add(time.Hour), time.Hour, "24h")
+	direct := map[string]UsageTotals{}
+	for _, p := range s.Points {
+		for m, bySource := range p.Models {
+			if u, ok := bySource[SourceDirect]; ok {
+				direct[m] = u
+			}
+		}
+	}
+	if u := direct["openai/gpt-5.6-sol"]; u.TokensIn != 400 || u.TokensOut != 10 {
+		t.Errorf("sol direct = %+v, want 400/10 (proxy minus what the node recorded)", u)
+	}
+	if u := direct["openai/gpt-5.6-luna"]; u.TokensIn != 500 || u.TokensOut != 9 {
+		t.Errorf("luna direct = %+v, want 500/9", u)
 	}
 }
