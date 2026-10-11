@@ -33,12 +33,20 @@ interface Series {
   title: string;
 }
 
-// Colour carries meaning here, not identity: blue is the only paid series.
+// Brighter source colours keep the dominant input portions legible on the dark chart.
+// Blue is the only paid series; model colours remain shared with the earnings chart.
+const SOURCE_COLOURS = {
+  hub: '#60a5fa',
+  local: '#fbbf24',
+  direct: '#f472b6',
+  probes: '#94a3b8',
+} as const;
+
 const SERIES: Series[] = [
-  { key: 'hub', label: 'Hub traffic', colour: SERIES_COLOURS[0], sources: ['hub'], title: 'Routed by Swan Inference; eligible for platform earnings' },
-  { key: 'local', label: 'Local gateway', colour: SERIES_COLOURS[1], sources: ['local'], title: 'Your own clients, sent through the node’s local gateway' },
-  { key: 'direct', label: 'Direct to backend', colour: SERIES_COLOURS[2], sources: ['direct'], title: 'Served by a model server without passing through the node; input is a lower bound' },
-  { key: 'probes', label: 'Probes', colour: OTHER_COLOUR, sources: ['health', 'selfcheck'], title: 'This node’s own health and audit checks' },
+  { key: 'hub', label: 'Hub traffic', colour: SOURCE_COLOURS.hub, sources: ['hub'], title: 'Routed by Swan Inference; eligible for platform earnings' },
+  { key: 'local', label: 'Local gateway', colour: SOURCE_COLOURS.local, sources: ['local'], title: 'Your own clients, sent through the node’s local gateway' },
+  { key: 'direct', label: 'Direct to backend', colour: SOURCE_COLOURS.direct, sources: ['direct'], title: 'Served by a model server without passing through the node; input is a lower bound' },
+  { key: 'probes', label: 'Probes', colour: SOURCE_COLOURS.probes, sources: ['health', 'selfcheck'], title: 'This node’s own health and audit checks' },
 ];
 
 const SOURCE_SHORT: Record<string, string> = {
@@ -49,8 +57,10 @@ const SOURCE_SHORT: Record<string, string> = {
   selfcheck: 'probes',
 };
 
-/** The input share of a segment is drawn in its colour at this opacity. */
-const INPUT_OPACITY = 0.35;
+/** A lighter opaque tint avoids losing large input portions against the dark surface. */
+function inputColour(colour: string): string {
+  return `color-mix(in srgb, ${colour} 65%, white)`;
+}
 
 const WINDOWS = [
   { id: '24h', label: '24 hours' },
@@ -419,14 +429,14 @@ export function UsageChart({ models, colours: shared, nodeName, peers, report, w
                           className={`flex w-full flex-col ${idx === segs.length - 1 ? 'overflow-hidden rounded-t' : ''}`}
                           style={{ height: `${(segTotal / t) * 100}%`, marginTop: idx === segs.length - 1 ? 0 : 2 }}
                         >
-                          {/* Output on top, solid; input below, light. */}
+                          {/* Output on top, solid; input below, lighter and equally legible. */}
                           <span
                             className="block w-full"
-                            style={{ height: `${(x.tokensOut / segTotal) * 100}%`, backgroundColor: x.colour, opacity: hovered === i ? 1 : 0.9 }}
+                            style={{ height: `${(x.tokensOut / segTotal) * 100}%`, backgroundColor: x.colour }}
                           />
                           <span
                             className="block w-full"
-                            style={{ height: `${(x.tokensIn / segTotal) * 100}%`, backgroundColor: x.colour, opacity: INPUT_OPACITY }}
+                            style={{ height: `${(x.tokensIn / segTotal) * 100}%`, backgroundColor: inputColour(x.colour) }}
                           />
                         </span>
                       );
@@ -455,9 +465,9 @@ export function UsageChart({ models, colours: shared, nodeName, peers, report, w
               </li>
             ))}
             <li className="flex items-center gap-1.5 text-slate-500">
-              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-sm bg-slate-300" />
+              <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: OTHER_COLOUR }} />
               output
-              <span aria-hidden="true" className="ml-2 h-2 w-2 shrink-0 rounded-sm bg-slate-300" style={{ opacity: INPUT_OPACITY }} />
+              <span aria-hidden="true" className="ml-2 h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: inputColour(OTHER_COLOUR) }} />
               input
             </li>
           </ul>
