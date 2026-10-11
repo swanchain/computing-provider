@@ -189,6 +189,24 @@ type usageRecord struct {
 // for every endpoint with counter samples. samples are per endpoint, oldest
 // first, and should include one reading before `from` as a baseline.
 func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSample, endpointModels map[string][]string, from, to time.Time, bucket time.Duration, duration string) UsageSeries {
+	return buildUsageSeries(records, samples, endpointModels, nil, from, to, bucket, duration)
+}
+
+// Which recorded requests a backend counter is compared against. A model
+// with a local_endpoint is served by two backends: local-gateway requests go
+// to that one, and everything else — hub work and this node's probes — to
+// its endpoint. Subtracting all of the model's recorded work from either
+// counter would hide the other backend's share of real direct usage.
+const (
+	recordedAll    = ""
+	recordedLocal  = "local"
+	recordedRouted = "routed"
+)
+
+// buildUsageSeries is BuildUsageSeries with classOf saying, per sample key
+// and model, which of the model's recorded requests that counter covers; nil
+// means all of them.
+func buildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSample, endpointModels map[string][]string, classOf func(key, model string) string, from, to time.Time, bucket time.Duration, duration string) UsageSeries {
 	bucketOf := func(t time.Time) time.Time { return t.UTC().Truncate(bucket) }
 	s := UsageSeries{
 		Duration:      duration,
@@ -221,6 +239,8 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 	// node's own work on an endpoint is not direct usage.
 	recordedOut := map[string]map[time.Time]int64{}
 	recordedIn := map[string]map[time.Time]int64{}
+	localOut := map[string]map[time.Time]int64{}
+	localIn := map[string]map[time.Time]int64{}
 	for _, r := range records {
 		b := bucketOf(r.StartTime)
 		i, ok := index[b]
@@ -238,6 +258,27 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 		}
 		recordedOut[r.Model][b] += r.TokensOut
 		recordedIn[r.Model][b] += r.TokensIn
+		if source == string(SourceLocal) {
+			if localOut[r.Model] == nil {
+				localOut[r.Model] = map[time.Time]int64{}
+				localIn[r.Model] = map[time.Time]int64{}
+			}
+			localOut[r.Model][b] += r.TokensOut
+			localIn[r.Model][b] += r.TokensIn
+		}
+	}
+	recorded := func(key, model string, b time.Time) (in, out int64) {
+		class := recordedAll
+		if classOf != nil {
+			class = classOf(key, model)
+		}
+		switch class {
+		case recordedLocal:
+			return localIn[model][b], localOut[model][b]
+		case recordedRouted:
+			return recordedIn[model][b] - localIn[model][b], recordedOut[model][b] - localOut[model][b]
+		}
+		return recordedIn[model][b], recordedOut[model][b]
 	}
 
 	endpoints := make([]string, 0, len(samples))
@@ -274,8 +315,9 @@ func BuildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 			}
 			var recOut, recIn int64
 			for _, m := range models {
-				recOut += recordedOut[m][b]
-				recIn += recordedIn[m][b]
+				in, out := recorded(ep, m, b)
+				recOut += out
+				recIn += in
 			}
 			var u UsageTotals
 			own := int64(generated[b]) - recOut
@@ -350,7 +392,7 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 		}
 	}
 
-	series := BuildUsageSeries(records, samples, endpointModels, from, to, bucket, duration)
+	series := buildUsageSeries(records, samples, endpointModels, usageClassOf(s.modelMappings), from, to, bucket, duration)
 	series.Endpoints = s.usageSampler.Status()
 	if series.Endpoints == nil {
 		series.Endpoints = []BackendEndpointStatus{}
@@ -358,27 +400,65 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 	return series, nil
 }
 
+// splitLocalEndpoint is a model's local_endpoint when it names a backend
+// apart from its endpoint, and "" otherwise.
+func splitLocalEndpoint(m ModelMapping) string {
+	local := strings.TrimRight(m.LocalEndpoint, "/")
+	if local == "" || local == strings.TrimRight(m.Endpoint, "/") {
+		return ""
+	}
+	return local
+}
+
+// usageClassOf says which recorded requests each sample key's counter covers
+// for a model served from two backends.
+func usageClassOf(mappings map[string]ModelMapping) func(key, model string) string {
+	return func(key, model string) string {
+		m, ok := mappings[model]
+		if !ok {
+			return recordedAll
+		}
+		local := splitLocalEndpoint(m)
+		if local == "" {
+			return recordedAll
+		}
+		ep, _, _ := strings.Cut(key, perModelSep)
+		if ep == local {
+			return recordedLocal
+		}
+		return recordedRouted
+	}
+}
+
 // modelEndpoints groups the configured models by the endpoint serving them.
+// A model's local_endpoint is listed too, with its own key, so work sent
+// straight to the local gateway's backend is measured like any other.
 func (s *InferenceService) modelEndpoints() map[string]endpointInfo {
 	out := map[string]endpointInfo{}
-	for id, m := range s.modelMappings {
-		ep := strings.TrimRight(m.Endpoint, "/")
+	add := func(ep, apiKey, id, localModel string) {
+		ep = strings.TrimRight(ep, "/")
 		if ep == "" {
-			continue
+			return
 		}
 		info := out[ep]
 		info.Models = append(info.Models, id)
 		if info.APIKey == "" {
-			info.APIKey = m.APIKey
+			info.APIKey = apiKey
 		}
 		if info.Names == nil {
 			info.Names = map[string]string{}
 		}
 		info.Names[id] = id
-		if m.LocalModel != "" {
-			info.Names[m.LocalModel] = id
+		if localModel != "" {
+			info.Names[localModel] = id
 		}
 		out[ep] = info
+	}
+	for id, m := range s.modelMappings {
+		add(m.Endpoint, m.APIKey, id, m.LocalModel)
+		if split := splitLocalEndpoint(m); split != "" {
+			add(split, m.LocalAPIKey, id, m.LocalModel)
+		}
 	}
 	for ep, info := range out {
 		sort.Strings(info.Models)

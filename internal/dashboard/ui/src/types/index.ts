@@ -60,6 +60,11 @@ export interface ModelStatus {
   loaded_at: string;
   updated_at: string;
   enabled: boolean;
+  /** Where the local gateway sends this model, when it is not `endpoint`. */
+  local_endpoint?: string;
+  /** That backend's last reachability check: healthy, unreachable or unknown. */
+  local_health?: string;
+  local_error?: string;
 }
 
 export interface EmailSettings {

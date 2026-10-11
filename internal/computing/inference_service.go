@@ -64,6 +64,8 @@ func mappingFor(model *RegisteredModel) ModelMapping {
 		Quantization:  model.Quantization,
 		APIKey:        model.APIKey,
 		ContextLength: model.ContextLength,
+		LocalEndpoint: model.LocalEndpoint,
+		LocalAPIKey:   model.LocalAPIKey,
 	}
 }
 
@@ -78,6 +80,12 @@ type ModelMapping struct {
 	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: "q4_k_m", "q8_0", "w4a16", etc.
 	APIKey        string `json:"api_key,omitempty"`        // API key for authenticated model endpoints (e.g., vLLM --api-key)
 	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens); auto-detected from /v1/models when 0
+	// LocalEndpoint, when set, is where the local gateway sends this model's
+	// requests instead of Endpoint, with LocalAPIKey; hub traffic still goes
+	// to Endpoint. It lets local clients use a separate backend — a second
+	// proxy on its own account — without reconfiguring each client.
+	LocalEndpoint string `json:"local_endpoint,omitempty"`
+	LocalAPIKey   string `json:"local_api_key,omitempty"`
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -88,6 +96,7 @@ type InferenceService struct {
 	modelMappings      map[string]ModelMapping
 	registry           *ModelRegistry
 	healthChecker      *ModelHealthChecker
+	localChecker       *localBackendChecker
 	rateLimiter        *RateLimiter
 	concurrencyLimiter *ConcurrencyLimiter
 	retryPolicy        *RetryPolicy
@@ -383,6 +392,9 @@ func (s *InferenceService) Start() error {
 
 	// Sample the model servers' token counters, the only record of work sent
 	// to them directly rather than through this node.
+	s.localChecker = newLocalBackendChecker(s.localBackends)
+	s.localChecker.Start()
+
 	s.usageSampler = NewBackendUsageSampler(s.modelEndpoints)
 	if cfg := conf.GetConfig(); cfg != nil {
 		s.usageSampler.managementKey = cfg.Inference.CLIProxyManagementKey
@@ -434,6 +446,7 @@ func (s *InferenceService) Stop() {
 	if s.requestStore != nil {
 		s.requestStore.Stop()
 	}
+	s.localChecker.Stop()
 	if s.usageSampler != nil {
 		s.usageSampler.Stop()
 	}
@@ -1192,7 +1205,7 @@ func (s *InferenceService) GetAllModels() []*RegisteredModel {
 	if s.registry == nil {
 		return nil
 	}
-	return s.registry.GetAllModels()
+	return s.withLocalHealth(s.registry.GetAllModels())
 }
 
 // GetModelStatus returns the status of a specific model
@@ -1200,7 +1213,11 @@ func (s *InferenceService) GetModelStatus(modelID string) (*RegisteredModel, boo
 	if s.registry == nil {
 		return nil, false
 	}
-	return s.registry.GetModel(modelID)
+	m, ok := s.registry.GetModel(modelID)
+	if ok {
+		s.withLocalHealth([]*RegisteredModel{m})
+	}
+	return m, ok
 }
 
 // ModelHealthLog returns the rolling health record for a model, oldest first.

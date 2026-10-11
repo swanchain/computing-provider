@@ -50,6 +50,12 @@ type RegisteredModel struct {
 	Quantization  string      `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
 	APIKey        string      `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
 	ContextLength int         `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
+	LocalEndpoint string      `json:"local_endpoint,omitempty"` // Local gateway backend, when it differs from Endpoint
+	LocalAPIKey   string      `json:"-"`                        // Never exposed, like APIKey
+	// LocalHealth and LocalError report LocalEndpoint's last reachability
+	// check. They are filled in when the model list is served, not kept here.
+	LocalHealth string `json:"local_health,omitempty"`
+	LocalError  string `json:"local_error,omitempty"`
 	State         ModelState  `json:"state"`
 	StateString   string      `json:"state_string"`
 	Health        ModelHealth `json:"health"`
@@ -212,7 +218,9 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.Format != mapping.Format ||
 				existingModel.Quantization != mapping.Quantization ||
 				existingModel.APIKey != mapping.APIKey ||
-				existingModel.ContextLength != mapping.ContextLength {
+				existingModel.ContextLength != mapping.ContextLength ||
+				existingModel.LocalEndpoint != mapping.LocalEndpoint ||
+				existingModel.LocalAPIKey != mapping.LocalAPIKey {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
@@ -223,6 +231,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.Quantization = mapping.Quantization
 				existingModel.APIKey = mapping.APIKey
 				existingModel.ContextLength = mapping.ContextLength
+				existingModel.LocalEndpoint = mapping.LocalEndpoint
+				existingModel.LocalAPIKey = mapping.LocalAPIKey
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
@@ -255,6 +265,8 @@ func (r *ModelRegistry) loadConfig() error {
 				Quantization:  mapping.Quantization,
 				APIKey:        mapping.APIKey,
 				ContextLength: mapping.ContextLength,
+				LocalEndpoint: mapping.LocalEndpoint,
+				LocalAPIKey:   mapping.LocalAPIKey,
 				State:         ModelStateLoading,
 				StateString:   ModelStateLoading.String(),
 				Health:        ModelHealthUnknown,
@@ -540,6 +552,18 @@ func (r *ModelRegistry) GetModelAPIKey(modelID string) string {
 	}
 
 	return model.APIKey
+}
+
+// GetLocalBackend returns the backend the local gateway uses for a model,
+// when models.json gives it one apart from the hub's.
+func (r *ModelRegistry) GetLocalBackend(modelID string) (endpoint, apiKey string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	model, exists := r.models[modelID]
+	if !exists || model.LocalEndpoint == "" {
+		return "", "", false
+	}
+	return model.LocalEndpoint, model.LocalAPIKey, true
 }
 
 // EnableModel enables a model for serving
