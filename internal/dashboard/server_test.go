@@ -1,12 +1,27 @@
 package dashboard
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
+
+func TestEmbeddedFaviconIsAnIcon(t *testing.T) {
+	ui, err := fs.Sub(staticFiles, "ui/dist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	icon, err := fs.ReadFile(ui, "favicon.ico")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(icon) < 4 || icon[0] != 0 || icon[1] != 0 || icon[2] != 1 || icon[3] != 0 {
+		t.Fatal("embedded favicon is not a Windows icon")
+	}
+}
 
 func TestProxyAPIPreservesEncodedModelSlash(t *testing.T) {
 	requestURI := make(chan string, 1)
