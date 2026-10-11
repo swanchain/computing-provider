@@ -207,4 +207,10 @@ func TestLocalOnlyModelNeverReachesTheHub(t *testing.T) {
 	if h.chatCompatible("anthropic/private") {
 		t.Error("a local-only model would be sent deep-check completions")
 	}
+	// The periodic rotation picks its own candidates; it must skip it too.
+	for i := 0; i < 3*DefaultHealthCheckConfig().DeepCheckEvery; i++ {
+		if id := h.pickDeepCheckModel(backend.URL, []string{"anthropic/private"}); id != "" {
+			t.Fatalf("rotation picked %s for a deep check", id)
+		}
+	}
 }

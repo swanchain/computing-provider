@@ -503,7 +503,7 @@ func (h *ModelHealthChecker) pickDeepCheckModel(endpoint string, modelIDs []stri
 	// cycle and some models would be probed far more often than others.
 	candidates := make([]string, 0, len(modelIDs))
 	for _, id := range modelIDs {
-		if selfcheck.ChatCompatible(h.categories[id]) {
+		if selfcheck.ChatCompatible(h.categories[id]) && !h.probeExempt[id] {
 			candidates = append(candidates, id)
 			continue
 		}
