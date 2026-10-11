@@ -1,7 +1,7 @@
 # Computing Provider v2
 
 [![Discord](https://img.shields.io/discord/770382203782692945?label=Discord&logo=Discord)](https://discord.gg/Jd2BFSVCKw)
-[![Twitter Follow](https://img.shields.io/twitter/follow/swan_chain)](https://twitter.com/swan_chain)
+[![Follow @swan_chain on X](https://img.shields.io/badge/Follow-%40swan__chain-000000?logo=x&logoColor=white)](https://x.com/swan_chain)
 
 Turn your GPU into an AI inference endpoint and join the Swan Chain decentralized computing network.
 
@@ -9,6 +9,10 @@ Latest release: [v0.6.1](https://github.com/swanchain/computing-provider/release
 
 The built-in **Computing Provider** dashboard shows this node's usage and
 estimated earnings, model and GPU readiness, provider alerts, and proxy accounts.
+
+![Computing Provider v0.6.1 dashboard overview with usage, estimated earnings, model readiness, and GPU capacity](docs/images/dashboard.png)
+
+<sub>Illustrative dashboard with example values; your node's data appears when you run the provider.</sub>
 
 **No wallet needed. No blockchain registration. No public IP required.** The
 provider dials out to Swan Inference over a WebSocket, so it works behind NAT.
