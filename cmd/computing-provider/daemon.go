@@ -595,6 +595,12 @@ func runDaemon(cctx *cli.Context) error {
 	// registered list. A model this node registers that the platform does not
 	// hold as offered can still be sent requests, but is missing from the
 	// platform's offerings and may not be credited; nothing else shows it.
+	// The accounts behind each CLIProxyAPI instance: plan, usage windows,
+	// cooldowns and credential expiry, read from the proxies themselves.
+	router.GET("/inference/proxy-accounts", func(c *gin.Context) {
+		c.JSON(200, inferenceService.ProxyAccounts(c.Request.Context()))
+	})
+
 	router.GET("/inference/hub/models", func(c *gin.Context) {
 		platform, err := providerStats.Models(c.Request.Context())
 		if err != nil {

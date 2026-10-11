@@ -93,7 +93,7 @@ func (s *InferenceService) serveLocalModels(w http.ResponseWriter, r *http.Reque
 	ids := s.GetActiveModels()
 	sort.Strings(ids)
 	for _, id := range ids {
-		if _, _, _, mse := s.resolveModelEndpoint(id); mse != nil {
+		if _, _, _, mse := s.resolveGatewayEndpoint(id); mse != nil {
 			continue
 		}
 		out.Data = append(out.Data, model{ID: id, Object: "model", OwnedBy: "computing-provider"})
@@ -125,7 +125,7 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(head.Model)
+	endpoint, localModel, apiKey, mse := s.resolveGatewayEndpoint(head.Model)
 	if mse != nil {
 		writeLocalError(w, mse.StatusCode, mse.Message)
 		return
@@ -239,6 +239,25 @@ func (s *InferenceService) resolveModelEndpoint(modelID string) (endpoint, local
 	return mapping.Endpoint, mapping.LocalModel, mapping.APIKey, nil
 }
 
+// resolveGatewayEndpoint is resolveModelEndpoint for the local gateway: a
+// model with a local_endpoint is served from it, with its own key, so local
+// clients draw on a different backend from routed work. The hub path keeps
+// using resolveModelEndpoint. Health is the hub endpoint's and does not apply
+// here; a disabled model stays refused, since disabling is the operator's.
+func (s *InferenceService) resolveGatewayEndpoint(modelID string) (endpoint, localModel, apiKey string, mse *ModelServerError) {
+	if s.registry != nil {
+		if ep, key, ok := s.registry.GetLocalBackend(modelID); ok {
+			if _, disabled := s.disabledInRegistry(modelID); disabled {
+				return "", "", "", &ModelServerError{StatusCode: 503, Message: fmt.Sprintf("model %s is disabled on this provider", modelID)}
+			}
+			return ep, s.registry.GetLocalModelName(modelID), key, nil
+		}
+	} else if mapping, ok := s.modelMappings[modelID]; ok && mapping.LocalEndpoint != "" {
+		return mapping.LocalEndpoint, mapping.LocalModel, mapping.LocalAPIKey, nil
+	}
+	return s.resolveModelEndpoint(modelID)
+}
+
 func writeLocalError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -270,7 +289,7 @@ func (s *InferenceService) serveLocalImages(w http.ResponseWriter, r *http.Reque
 		writeLocalError(w, http.StatusBadRequest, "request must be JSON with a model field")
 		return
 	}
-	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(head.Model)
+	endpoint, localModel, apiKey, mse := s.resolveGatewayEndpoint(head.Model)
 	if mse != nil {
 		writeLocalError(w, mse.StatusCode, mse.Message)
 		return
@@ -325,7 +344,7 @@ func (s *InferenceService) serveLocalTranscription(w http.ResponseWriter, r *htt
 		writeLocalError(w, http.StatusBadRequest, "missing model field")
 		return
 	}
-	endpoint, localModel, apiKey, mse := s.resolveModelEndpoint(req.Model)
+	endpoint, localModel, apiKey, mse := s.resolveGatewayEndpoint(req.Model)
 	if mse != nil {
 		writeLocalError(w, mse.StatusCode, mse.Message)
 		return

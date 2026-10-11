@@ -729,6 +729,15 @@ concurrency limiters, which exist to protect routed work, and it feeds the
 request history only — never the aggregate counters earnings are priced from.
 Loopback only, since neither it nor the servers behind it authenticate.
 
+A model can give the gateway its own backend with `local_endpoint` (and
+`local_api_key`) in models.json — for example a second CLIProxyAPI on a
+separate account, so the operator's own tools do not spend the quota that
+routed work depends on. Hub requests and probes keep using `endpoint`. The
+gateway's backend is checked for reachability every minute (`GET /v1/models`,
+no completion, since a completion would spend the quota being protected) and
+shown per model as `local_health`; its counters are sampled for direct usage
+too, each compared only with the recorded requests that went to it.
+
 **Direct usage.** Anything that still calls a model server directly can only
 be seen in the server's own counters, so the daemon samples each endpoint's
 `/metrics` every minute (`backend_usage_samples`) and reports generated tokens
@@ -849,6 +858,7 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `GET /models/:model_id/health` — model health details
 - `GET /models/:model_id/metrics` — per-model detailed metrics
 - `GET /health` — all models health
+- `GET /proxy-accounts` — each CLIProxyAPI instance among the models' endpoints and local_endpoints (needs `CLIProxyManagementKey`): its role (`hub` / `local`), accounts with plan, status, usage windows (percent used and reset, as the upstream last reported them), cooldowns and stored-token expiry, and 24h tokens from its usage counters
 - `POST /models/:model_id/enable` — enable a model
 - `POST /models/:model_id/disable` — disable a model
 - `POST /models/:model_id/healthcheck` — force health check

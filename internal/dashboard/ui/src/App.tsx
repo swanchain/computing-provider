@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import {
+  KeyRound,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
@@ -18,6 +19,7 @@ import { MetricsPanel } from './components/MetricsPanel';
 import { GPUPanel } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
 import { HubModelsPanel } from './components/HubModelsPanel';
+import { ProxyAccountsPanel, ProxyAlert, ProxyRoutingPanel } from './components/ProxyAccountsPanel';
 import { RequestManagementPanel } from './components/RequestManagementPanel';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { RequestHistoryPanel } from './components/RequestHistoryPanel';
@@ -28,11 +30,12 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { OperationalSummary } from './components/OperationalSummary';
 
 const POLL_INTERVAL = 5000;
-type DashboardView = 'overview' | 'transactions' | 'settings';
+type DashboardView = 'overview' | 'transactions' | 'proxies' | 'settings';
 
 const views: Array<{ id: DashboardView; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'transactions', label: 'Requests', icon: ReceiptText },
+  { id: 'proxies', label: 'Proxies', icon: KeyRound },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -234,6 +237,7 @@ function App() {
       <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
         {activeView === 'overview' && (
           <div className="space-y-6">
+            <ProxyAlert onOpen={() => handleViewChange('proxies')} />
             <section aria-labelledby="provider-health-heading">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                 <div className="min-w-0">
@@ -321,6 +325,19 @@ function App() {
         )}
 
         {activeView === 'transactions' && <RequestHistoryPanel models={models?.models ?? []} />}
+
+        {activeView === 'proxies' && (
+          <section aria-labelledby="proxies-heading" className="space-y-6">
+            <div>
+              <h2 id="proxies-heading" className="text-xl font-semibold text-white">Proxies</h2>
+              <p className="mt-1 text-sm text-slate-300">
+                The CLIProxyAPI instances behind subscription-backed models: their accounts, usage windows and routing.
+              </p>
+            </div>
+            <ProxyAccountsPanel />
+            <ProxyRoutingPanel models={models?.models ?? []} />
+          </section>
+        )}
 
         {activeView === 'settings' && (
           <SettingsPanel

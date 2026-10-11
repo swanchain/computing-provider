@@ -131,7 +131,10 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
   }
 
   const isHealthy = (model: ModelStatus) => model.health_string === 'healthy';
-  const attentionModels = models.filter((model) => !model.enabled || !isHealthy(model));
+  // A model whose local backend is down is served to the hub but not to local
+  // clients, so it needs attention even while its hub endpoint is healthy.
+  const localDown = (model: ModelStatus) => model.local_health === 'unreachable';
+  const attentionModels = models.filter((model) => !model.enabled || !isHealthy(model) || localDown(model));
   const shownModels = compact && !showAll ? attentionModels : models;
   const readyCount = summary?.ready ?? models.filter((model) => model.enabled && isHealthy(model)).length;
   const unhealthyCount = summary?.unhealthy ?? models.filter((model) => model.enabled && !isHealthy(model)).length;
@@ -199,6 +202,11 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                     {model.endpoint} • {model.category}
                     {model.gpu_memory > 0 && ` • ${(model.gpu_memory / 1024).toFixed(1)}GB VRAM`}
                   </div>
+                  {localDown(model) && (
+                    <div className="mt-0.5 break-all text-xs text-red-300" title={model.local_error || undefined}>
+                      ✗ local gateway backend {model.local_endpoint} unreachable — see Proxies
+                    </div>
+                  )}
                   <div className="text-xs text-slate-400 mt-0.5">
                     {model.state_string} • {model.health_string}
                   </div>
