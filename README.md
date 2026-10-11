@@ -5,9 +5,10 @@
 
 Turn your GPU into an AI inference endpoint and join the Swan Chain decentralized computing network.
 
-![Provider Console overview: health cards, earnings over time, share by model, per-model status, and GPU utilisation](docs/images/dashboard.png)
+Latest release: [v0.6.1](https://github.com/swanchain/computing-provider/releases/tag/v0.6.1).
 
-<sub>The built-in dashboard — `computing-provider dashboard`. Model names, payout rates, and earnings figures are example values.</sub>
+The built-in **Computing Provider** dashboard shows this node's usage and
+estimated earnings, model and GPU readiness, provider alerts, and proxy accounts.
 
 **No wallet needed. No blockchain registration. No public IP required.** The
 provider dials out to Swan Inference over a WebSocket, so it works behind NAT.
@@ -251,9 +252,31 @@ and tuning in [configuration.md](docs/configuration.md#alerts).
 computing-provider dashboard    # http://localhost:3060
 ```
 
-Real-time metrics, earnings, model pricing, per-transaction token usage, GPU
-status, model management and request controls — the page shown at the top of
-this README.
+The dashboard has four tabs:
+
+| Tab | What it shows |
+|-----|---------------|
+| **Overview** | This node's usage and estimated earnings first, then model/GPU readiness, alerts, and a compact status summary |
+| **Requests** | Individual requests, sources, outcomes, latency, and token usage |
+| **Proxies** | Proxy connection addresses, configured models, last-24-hour token totals, account status and available subscription limits, and model routing |
+| **Settings** | Provider controls and configuration, after unlocking |
+
+Overview's 24-hour, 7-day, and 30-day charts cover **this node only**. Usage
+separates hub traffic, local-gateway clients, direct-to-backend work, and
+probes. Earnings are an **estimate** priced from this node's stored history at
+current rates, not the provider account's settled payout. The optional
+per-model session mix resets when the provider restarts. For account-wide paid
+earnings, use the [Swan Inference provider dashboard](https://inference.swanchain.io/dashboard).
+
+**Needs attention** flags mismatches such as hub-registered models missing from
+platform offerings. You can close the box and reopen its alerts; a new alert
+will show even if the previous set was dismissed.
+
+Proxies distinguishes backends serving hub traffic from those serving only
+local clients. Account quota bars appear only when the upstream reports them;
+Claude subscription usage is not reported through the proxy, so check
+[Claude usage](https://claude.ai/settings/usage) for those limits. The proxy's
+24-hour token totals are separate from subscription quota.
 
 It is read-only until you choose **Unlock controls** and paste the token from
 `$CP_PATH/dashboard.token`, an owner-only file generated on first run.
@@ -277,6 +300,12 @@ computing-provider cliproxy login --device   # re-authenticate; prints a code an
 
 `status` reads credential metadata only — never a token — and exits non-zero on
 an expired or disabled login, so it works as a cron check.
+
+For a model you want to serve only to your own clients, set `"local_only": true`
+in `models.json`. It remains available through this node's local gateway but is
+not registered with Swan Inference. Set `local_endpoint` if those clients
+should use a separate proxy/backend from hub requests. The dashboard labels
+these routes **local only** rather than counting them as hub offerings.
 
 **Use `--probe`.** A login can be unexpired, enabled, and still rejected by the
 subscription upstream, and the proxy answers `/v1/models` from a static list
@@ -305,6 +334,9 @@ curl http://localhost:8085/api/v1/computing/inference/metrics
 | `GET /inference/status` | Connection state, active models, what is registered upstream |
 | `GET /inference/metrics` | Request counts, latency, GPU stats |
 | `GET /inference/metrics/prometheus` | Prometheus format for Grafana |
+| `GET /inference/usage/history?duration=24h` | This node's usage history by source; also accepts `7d` and `30d` |
+| `GET /inference/earnings/history?duration=24h&scope=node` | This node's estimated earnings history; without `scope=node`, the API prefers provider-account history |
+| `GET /inference/proxy-accounts` | Proxy instances, configured models, account status and available quota windows |
 | `GET /inference/models` | List all models with status |
 | `GET /inference/health` | Health of every model |
 | `POST /inference/models/:id/enable` | Enable a model |
