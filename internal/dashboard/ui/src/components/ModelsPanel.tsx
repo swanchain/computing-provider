@@ -171,7 +171,7 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
         <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/20 px-4 py-5 text-center">
           <CheckCircle aria-hidden="true" size={24} className="mx-auto text-emerald-300" />
           <p className="mt-2 text-sm font-medium text-emerald-100">All configured endpoints report ready</p>
-          <p className="mt-1 text-xs text-slate-400">Account limits and platform listings are checked separately above.</p>
+          <p className="mt-1 text-xs text-slate-400">Account limits are in Proxies; platform listings appear below.</p>
         </div>
       ) : (
         <div className="space-y-3">

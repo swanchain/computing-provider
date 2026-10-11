@@ -49,6 +49,9 @@ func (s *Server) Start() error {
 	s.router.GET("/assets/*filepath", func(c *gin.Context) {
 		c.FileFromFS(c.Request.URL.Path, http.FS(staticFS))
 	})
+	s.router.GET("/favicon.ico", func(c *gin.Context) {
+		c.FileFromFS("/favicon.ico", http.FS(staticFS))
+	})
 
 	// Proxy API requests to the main server
 	s.router.Any("/api/*path", s.proxyAPI)

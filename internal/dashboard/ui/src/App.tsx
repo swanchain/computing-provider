@@ -55,7 +55,7 @@ function App() {
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [chartWindow, setChartWindow] = useState('24h');
-  const [showUsage, setShowUsage] = useState(false);
+  const [showMix, setShowMix] = useState(false);
   const [showPerformance, setShowPerformance] = useState(false);
 
   const {
@@ -158,7 +158,7 @@ function App() {
               <Server aria-hidden="true" size={24} />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-lg font-semibold tracking-tight text-white sm:text-xl">Provider Console</h1>
+              <h1 className="truncate text-lg font-semibold tracking-tight text-white sm:text-xl">Computing Provider</h1>
               <p className="text-xs text-slate-400">
                 Inference operations
                 {status?.version && (
@@ -238,48 +238,32 @@ function App() {
 
       <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
         {activeView === 'overview' && (
-          <div className="space-y-6">
-            <section aria-labelledby="provider-health-heading">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                <div className="min-w-0">
-                  <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider overview</h2>
-                  <p className="mt-1 text-sm text-slate-300">This node’s service status, model readiness, and account alerts.</p>
+          <div className="space-y-5">
+            <section aria-labelledby="earnings-heading">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 id="earnings-heading" className="text-xl font-semibold text-white">Usage and earnings</h2>
+                  <p className="mt-0.5 text-sm text-slate-400">This node · estimated earnings, not provider payouts</p>
                 </div>
-                <OperationalSummary
-                  status={status}
-                  metrics={metrics}
-                  models={models}
-                  loading={statusLoading || metricsLoading || modelsLoading}
-                  dataIssues={[
-                    { label: 'connection', error: statusError },
-                    { label: 'metrics', error: metricsError },
-                    { label: 'models', error: modelsError },
-                    { label: 'request controls', error: requestMgmtError },
-                    { label: 'earnings', error: earningsError },
-                  ]}
-                />
+                <div className="flex flex-wrap gap-1" role="group" aria-label="Usage and earnings time range">
+                  {[['24h', '24h'], ['7d', '7d'], ['30d', '30d']].map(([value, label]) => <button key={value} type="button" aria-pressed={chartWindow === value} onClick={() => setChartWindow(value)} className={`min-h-10 rounded-lg border px-3 text-sm focus-visible:outline focus-visible:outline-sky-400 ${chartWindow === value ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{label}</button>)}
+                </div>
               </div>
-              <div className="mb-4 flex flex-wrap gap-3 text-sm">
-                <span className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2">{status?.registered_models?.length ?? '—'} registered to hub</span>
-                <span className="rounded-lg border border-sky-800/60 bg-sky-950/20 px-3 py-2 text-sky-200">{models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</span>
+              <div className="grid items-start gap-4 lg:grid-cols-2">
+                <UsageChart report={usageReport} window_={chartWindow} models={earnings?.models} colours={modelColours} nodeName={status?.node_name} />
+                <EarningsChart window_={chartWindow} models={earnings?.models} onColours={setModelColours} />
               </div>
-              <div className="mb-5"><OverviewAttention hub={hubReport} usage={usageReport} proxies={proxyReport} onProxies={() => handleViewChange('proxies')} onUsage={() => { const heading = document.getElementById('earnings-heading'); const disclosure = heading?.closest('details'); if (disclosure) disclosure.open = true; heading?.scrollIntoView({ behavior: 'smooth' }); }} /></div>
-              <MetricsPanel
-                metrics={metrics}
-                loading={metricsLoading}
-                error={metricsError}
-                earnings={earnings}
-                earningsError={earningsError}
-                earningsLoading={earningsLoading}
-              />
+              <details className="mt-3 rounded-lg border border-slate-800 bg-slate-900/40" onToggle={(event) => setShowMix(event.currentTarget.open)}>
+                <summary className="min-h-10 cursor-pointer px-3 py-2 text-sm text-slate-300 focus-visible:outline focus-visible:outline-sky-400">Session mix by model <span className="ml-1 text-slate-500">· since restart</span></summary>
+                {showMix && <div className="border-t border-slate-800 p-3"><ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} /></div>}
+              </details>
             </section>
 
             <section aria-labelledby="operations-heading">
-              <div className="mb-3">
+              <div className="mb-2">
                 <h2 id="operations-heading" className="text-xl font-semibold text-white">This node</h2>
-                <p className="mt-1 text-sm text-slate-400">Model endpoint readiness and GPU capacity. Subscription accounts are in Proxies.</p>
               </div>
-              <div className="grid items-start gap-5 lg:grid-cols-2">
+              <div className="grid items-start gap-4 lg:grid-cols-2">
                   <ModelsPanel
                     compact
                     models={models?.models ?? []}
@@ -298,6 +282,38 @@ function App() {
               </div>
             </section>
 
+            <section aria-labelledby="provider-health-heading" className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 id="provider-health-heading" className="text-xl font-semibold text-white">Provider overview</h2>
+                <OperationalSummary
+                  status={status}
+                  metrics={metrics}
+                  models={models}
+                  loading={statusLoading || metricsLoading || modelsLoading}
+                  dataIssues={[
+                    { label: 'connection', error: statusError },
+                    { label: 'metrics', error: metricsError },
+                    { label: 'models', error: modelsError },
+                    { label: 'request controls', error: requestMgmtError },
+                    { label: 'earnings', error: earningsError },
+                  ]}
+                />
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                <span>{status?.registered_models?.length ?? '—'} registered to hub</span>
+                <span>{models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</span>
+              </div>
+              <OverviewAttention hub={hubReport} usage={usageReport} proxies={proxyReport} onProxies={() => handleViewChange('proxies')} onUsage={() => document.getElementById('earnings-heading')?.scrollIntoView({ behavior: 'smooth' })} />
+              <MetricsPanel
+                metrics={metrics}
+                loading={metricsLoading}
+                error={metricsError}
+                earnings={earnings}
+                earningsError={earningsError}
+                earningsLoading={earningsLoading}
+              />
+            </section>
+
             <section aria-label="Platform listings and request controls" className="grid items-start gap-5 lg:grid-cols-2">
               <HubModelsPanel report={hubReport} />
               <RequestManagementPanel data={requestMgmt} loading={requestMgmtLoading} error={requestMgmtError} onOpenSettings={() => handleViewChange('settings')} />
@@ -306,21 +322,6 @@ function App() {
             <details className="rounded-xl border border-slate-800 bg-slate-900/60" onToggle={(event) => setShowPerformance(event.currentTarget.open)}>
               <summary className="min-h-12 cursor-pointer px-5 py-4 font-semibold text-white focus-visible:outline focus-visible:outline-sky-400">Performance history <span className="ml-2 text-sm font-normal text-slate-400">Latency, success rate, and throughput</span></summary>
               {showPerformance && <div className="border-t border-slate-800 p-3"><HistoricalChart /></div>}
-            </details>
-
-            <details className="rounded-xl border border-slate-800 bg-slate-900/60" onToggle={(event) => setShowUsage(event.currentTarget.open)}>
-              <summary id="earnings-heading" className="min-h-12 cursor-pointer px-5 py-4 font-semibold text-white focus-visible:outline focus-visible:outline-sky-400">Usage and earnings <span className="ml-2 text-sm font-normal text-slate-400">This node · estimated earnings</span></summary>
-              {showUsage && <div className="space-y-5 border-t border-slate-800 p-4">
-                <p className="text-sm text-slate-300">Tokens served by this node and estimated earnings from its own history. These are not provider-account payout figures.</p>
-                <div className="flex flex-wrap gap-2" role="group" aria-label="Usage and earnings time range">
-                  {[['24h', '24 hours'], ['7d', '7 days'], ['30d', '30 days']].map(([value, label]) => <button key={value} type="button" aria-pressed={chartWindow === value} onClick={() => setChartWindow(value)} className={`min-h-11 rounded-lg border px-4 text-sm focus-visible:outline focus-visible:outline-sky-400 ${chartWindow === value ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}>{label}</button>)}
-                </div>
-                <div className="grid items-start gap-5 lg:grid-cols-2">
-                  <UsageChart report={usageReport} window_={chartWindow} models={earnings?.models} colours={modelColours} nodeName={status?.node_name} />
-                  <EarningsChart window_={chartWindow} models={earnings?.models} onColours={setModelColours} />
-                  <ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} />
-                </div>
-              </div>}
             </details>
 
           </div>
@@ -360,7 +361,7 @@ function App() {
 
       <footer className="mt-8 border-t border-slate-800 bg-slate-900 px-4 py-4 sm:px-6">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-          <span>Swan Chain Computing Provider</span>
+          <span>Computing Provider</span>
           <span>Core monitoring refreshes every {POLL_INTERVAL / 1000}s</span>
         </div>
       </footer>
