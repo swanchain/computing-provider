@@ -741,7 +741,10 @@ that cannot be read is listed as unmeasured, never as zero.
 
 CLIProxyAPI has no `/metrics`. With `[Inference] CLIProxyManagementKey` set to
 its management `secret-key`, the sampler drains its usage queue each minute into
-a running total instead, which then reads like any other counter. The proxy
+a running total instead, which then reads like any other counter. The totals
+are kept per model (from the name each record says the client asked for,
+mapped back through `local_model`), so direct usage on a proxy is shown and
+priced per model rather than as one sum for every model it fronts. The proxy
 needs `usage-statistics-enabled: true` (checked: off would read as idle) and a
 `redis-usage-queue-retention-seconds` of a few minutes, since the default 60 is
 the sample interval.

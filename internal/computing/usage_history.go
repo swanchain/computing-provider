@@ -325,6 +325,9 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 	endpointModels := map[string][]string{}
 	for ep, info := range s.modelEndpoints() {
 		endpointModels[ep] = info.Models
+		for _, m := range info.Models {
+			endpointModels[perModelKey(ep, m)] = []string{m}
+		}
 	}
 	if database != nil && s.usageSampler != nil {
 		// One bucket earlier than the window, so the first bucket has a
@@ -335,6 +338,15 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 		}
 		for _, r := range rows {
 			samples[r.Endpoint] = append(samples[r.Endpoint], r)
+			// A model counted per model that the node does not serve is
+			// shown under its own name.
+			if _, ok := endpointModels[r.Endpoint]; !ok {
+				if ep, model, found := strings.Cut(r.Endpoint, perModelSep); found {
+					if _, served := endpointModels[ep]; served {
+						endpointModels[r.Endpoint] = []string{model}
+					}
+				}
+			}
 		}
 	}
 
@@ -358,6 +370,13 @@ func (s *InferenceService) modelEndpoints() map[string]endpointInfo {
 		info.Models = append(info.Models, id)
 		if info.APIKey == "" {
 			info.APIKey = m.APIKey
+		}
+		if info.Names == nil {
+			info.Names = map[string]string{}
+		}
+		info.Names[id] = id
+		if m.LocalModel != "" {
+			info.Names[m.LocalModel] = id
 		}
 		out[ep] = info
 	}
