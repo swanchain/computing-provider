@@ -66,6 +66,7 @@ func mappingFor(model *RegisteredModel) ModelMapping {
 		ContextLength: model.ContextLength,
 		LocalEndpoint: model.LocalEndpoint,
 		LocalAPIKey:   model.LocalAPIKey,
+		LocalOnly:     model.LocalOnly,
 	}
 }
 
@@ -86,6 +87,11 @@ type ModelMapping struct {
 	// proxy on its own account — without reconfiguring each client.
 	LocalEndpoint string `json:"local_endpoint,omitempty"`
 	LocalAPIKey   string `json:"local_api_key,omitempty"`
+	// LocalOnly keeps a model to the local gateway: it is never registered
+	// with Swan Inference, a hub request for it is refused, and no probe
+	// completion is spent on it. For backends this node may use but must not
+	// offer — a subscription licensed to the operator alone, say.
+	LocalOnly bool `json:"local_only,omitempty"`
 }
 
 // InferenceService manages the Inference client and inference handling
@@ -203,7 +209,7 @@ func (s *InferenceService) updateClientModels() {
 	if s.client == nil || s.registry == nil {
 		return
 	}
-	models := s.registry.GetReadyModelIDs()
+	models := s.withoutLocalOnly(s.registry.GetReadyModelIDs())
 	if sameModelSet(s.client.ModelList(), models) {
 		return
 	}
@@ -280,6 +286,9 @@ func (s *InferenceService) Start() error {
 	workerAddr := s.nodeID
 
 	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
+	// config.toml's Models list is what the first registration sends; a
+	// local-only model in it must still never reach the hub.
+	s.client.SetModelList(s.withoutLocalOnly(s.client.ModelList()))
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 	s.client.SetWarmupHandler(s.handleWarmup)
@@ -461,6 +470,9 @@ func (s *InferenceService) Stop() {
 // handleInference processes inference requests from Inference service
 func (s *InferenceService) handleInference(ctx context.Context, payload InferencePayload) (*InferenceResponse, error) {
 	logs.GetLogger().Infof("Handling inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
+	if mse := s.refuseLocalOnly(payload.ModelID); mse != nil {
+		return nil, mse
+	}
 
 	// Enforce rate limit
 	if s.rateLimiter != nil && !s.rateLimiter.AllowModel(payload.ModelID) {
@@ -842,6 +854,9 @@ func (s *InferenceService) GetMetricsPrometheus() string {
 // handleStreamingInference processes streaming inference requests
 func (s *InferenceService) handleStreamingInference(ctx context.Context, requestID string, payload InferencePayload, sendChunk func(chunk []byte, done bool) error) *StreamResult {
 	logs.GetLogger().Infof("Handling streaming inference for model: %s, endpoint: %s", payload.ModelID, payload.EndpointID)
+	if mse := s.refuseLocalOnly(payload.ModelID); mse != nil {
+		return &StreamResult{Error: mse}
+	}
 
 	// Enforce rate limit
 	if s.rateLimiter != nil && !s.rateLimiter.AllowModel(payload.ModelID) {
@@ -969,6 +984,9 @@ func (s *InferenceService) warnUnknownContext(modelID string) {
 // handleWarmup processes model warmup requests from Swan Inference
 func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse, error) {
 	logs.GetLogger().Infof("Handling warmup for model: %s (type: %s)", payload.ModelID, payload.WarmupType)
+	if mse := s.refuseLocalOnly(payload.ModelID); mse != nil {
+		return nil, mse
+	}
 
 	// Try to get endpoint and local model name from registry first (preferred)
 	var endpoint string

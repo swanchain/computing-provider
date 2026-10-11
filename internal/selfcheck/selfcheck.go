@@ -192,6 +192,9 @@ type modelEntry struct {
 	LocalModel    string `json:"local_model"`
 	Category      string `json:"category"`
 	ContextLength int    `json:"context_length"`
+	// LocalOnly models serve the local gateway alone: they are not in
+	// config.toml, not registered, and not probed.
+	LocalOnly bool `json:"local_only"`
 }
 
 // servedName is the name the backend knows the model by, which differs from the
@@ -294,6 +297,11 @@ func (c *checker) checkModelsConfig() map[string]modelEntry {
 		return nil
 	}
 	c.add("models.json", StatusPass, fmt.Sprintf("%d models mapped", len(models)), "")
+	for id, m := range models {
+		if m.LocalOnly {
+			delete(models, id)
+		}
+	}
 
 	cfg := make(map[string]bool, len(c.opt.ConfigModels))
 	for _, m := range c.opt.ConfigModels {
