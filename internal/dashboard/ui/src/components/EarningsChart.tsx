@@ -14,6 +14,7 @@ import {
 import type { EarningsPoint, ModelEarnings, ModelEarningsPoint } from '../types';
 
 interface EarningsChartProps {
+  window_: string;
   /**
    * Lifetime per-model earnings, used only to decide which models get a colour.
    * Taken from the same source the donut ranks by, so the two agree and neither
@@ -140,11 +141,10 @@ function segmentsFor(point: EarningsPoint, colours: ReturnType<typeof buildModel
   return named;
 }
 
-export function EarningsChart({ models, onColours, localModels }: EarningsChartProps) {
+export function EarningsChart({ models, onColours, localModels, window_ }: EarningsChartProps) {
   const local = useMemo(() => (localModels && localModels.length ? new Set(localModels) : undefined), [localModels]);
-  const [window_, setWindow] = useState<string>('24h');
   const [hovered, setHovered] = useState<number | null>(null);
-  const { data, loading, error } = usePolling(
+  const { data, loading, error, lastUpdated } = usePolling(
     useCallback(() => api.getEarningsHistory(window_), [window_]),
     60_000,
   );
@@ -288,23 +288,12 @@ export function EarningsChart({ models, onColours, localModels }: EarningsChartP
           </p>
         </div>
         <div className="flex gap-1" role="group" aria-label="Time window">
-          {WINDOWS.map((w) => (
-            <button
-              key={w.id}
-              type="button"
-              onClick={() => setWindow(w.id)}
-              aria-pressed={window_ === w.id}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                window_ === w.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-              }`}
-            >
-              {w.label}
-            </button>
-          ))}
+          <span className="text-xs text-slate-400">{WINDOWS.find((w) => w.id === window_)?.label}</span>
         </div>
       </div>
 
-      {error && !data ? (
+      <p className="px-4 pt-3 text-xs text-slate-400">{lastUpdated ? `Fetched ${lastUpdated.toLocaleTimeString()}` : 'Loading platform earnings…'} · all machines</p>
+      {loading && !data ? <p role="status" className="px-4 py-6 text-sm text-slate-400">Loading earnings for this period…</p> : error && !data ? (
         <p className="px-4 py-6 text-sm text-amber-300">Could not load earnings history: {error.message}</p>
       ) : points.length === 0 ? (
         <p className="px-4 py-6 text-sm text-slate-400">No history for this window yet.</p>

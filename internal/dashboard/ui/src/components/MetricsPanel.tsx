@@ -40,9 +40,10 @@ export function MetricsPanel({ metrics, loading, error, earnings, earningsError,
     );
   }
 
-  const hasRequests = Boolean(metrics && metrics.total_requests > 0);
+  const completedRequests = metrics ? metrics.successful_requests + metrics.failed_requests : 0;
+  const hasRequests = completedRequests > 0;
   const successRate = hasRequests && metrics
-    ? ((metrics.successful_requests / metrics.total_requests) * 100).toFixed(1)
+    ? ((metrics.successful_requests / completedRequests) * 100).toFixed(1)
     : null;
   const platformUnavailable = Boolean(earnings?.platform?.unavailable);
   const earningsUnavailable = Boolean(earningsError) || (!earnings && !earningsLoading) || platformUnavailable;
@@ -60,23 +61,23 @@ export function MetricsPanel({ metrics, loading, error, earnings, earningsError,
         color={uptimeColor}
       />
       <StatusCard
-        title="Session success"
+        title="Node session success"
         value={successRate == null ? '--' : `${successRate}%`}
-        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `${metrics.failed_requests} failed of ${formatNumber(metrics.total_requests)}` : 'No requests served yet'}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `${metrics.failed_requests} failed / ${formatNumber(completedRequests)} completed · since restart` : 'No completed requests yet'}
         icon={<Activity aria-hidden="true" size={20} />}
         color={successColor}
       />
       <StatusCard
-        title="P95 latency"
+        title="Session P95 latency"
         value={metrics && hasRequests ? `${metrics.p95_latency_ms.toFixed(0)}ms` : '--'}
-        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `Average ${metrics.avg_latency_ms.toFixed(0)}ms · no SLA applied` : 'No requests served yet'}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : hasRequests ? `This node · average ${metrics.avg_latency_ms.toFixed(0)}ms` : 'No requests served yet'}
         icon={<Clock aria-hidden="true" size={20} />}
         color="blue"
       />
       <StatusCard
         title="Request rate"
         value={metrics ? `${metrics.requests_per_minute.toFixed(1)}/min` : '--'}
-        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : `${metrics.active_requests} active now`}
+        subtitle={!metrics ? (error ? 'Metrics API unavailable' : 'No data') : `This node · ${metrics.active_requests} active now`}
         icon={<Gauge aria-hidden="true" size={20} />}
         color="blue"
       />
@@ -86,7 +87,7 @@ export function MetricsPanel({ metrics, loading, error, earnings, earningsError,
         // Swan Inference publishes one figure: lifetime gross. There is no
         // paid/outstanding balance to show, so the subtitle says what the
         // number is rather than implying it is money waiting to be drawn.
-        subtitle={earningsLoading && !earnings ? 'Loading platform data' : earningsUnavailable ? 'Platform data unavailable' : 'authoritative platform total'}
+        subtitle={earningsLoading && !earnings ? 'Loading platform data' : earningsUnavailable ? 'Platform data unavailable' : 'Provider account · all machines'}
         icon={<Coins aria-hidden="true" size={20} />}
         color={earningsUnavailable ? 'gray' : 'green'}
       />

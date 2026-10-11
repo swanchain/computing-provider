@@ -58,7 +58,8 @@ export function ModelDistribution({ earnings, loading, error }: ModelDistributio
   return (
     <div className="min-w-0 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-        <h3 className="text-sm font-medium text-slate-300">Share by model</h3>
+        <div><h3 className="text-sm font-medium text-slate-300">Session mix by model</h3>
+          <p className="mt-1 text-xs text-slate-400">This node · since provider restart · earnings are estimated</p></div>
         <div className="flex gap-1" role="group" aria-label="Distribute by">
           {(['earnings', 'tokens'] as Metric[]).map((m) => (
             <button

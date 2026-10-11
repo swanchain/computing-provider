@@ -61,7 +61,7 @@ export function ConnectionStatus({ status, loading, error, lastUpdated }: Connec
         ) : status.connected ? (
           <>
             <Wifi aria-hidden="true" size={16} className="text-green-400" />
-            <span className="text-sm font-medium text-green-300">Connected</span>
+            <span className="text-sm font-medium text-green-300">Hub connected</span>
           </>
         ) : (
           <>
@@ -74,7 +74,7 @@ export function ConnectionStatus({ status, loading, error, lastUpdated }: Connec
       {!error && (
         <div className="ml-auto hidden text-xs text-slate-300 md:block">
           {updatedLabel(lastUpdated)}
-          {status.active_models?.length > 0 && ` · ${status.active_models.length} model${status.active_models.length > 1 ? 's' : ''}`}
+          {status.registered_models && ` · ${status.registered_models.length} registered`}
         </div>
       )}
     </div>
