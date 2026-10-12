@@ -124,7 +124,7 @@ func TestSummarizeProxyTokens24hByModel(t *testing.T) {
 		{Endpoint: perModelKey("http://proxyXone:8318", "wrong"), Time: start, Prompt: 1000, Generated: 1000},
 		{Endpoint: perModelKey("http://proxyXone:8318", "wrong"), Time: start.Add(time.Minute), Prompt: 2000, Generated: 2000},
 	}
-	in, out, measured, models := summarizeProxyTokens24h(endpoint, rows)
+	in, out, measured, models := summarizeProxyTokens24h(endpoint, rows, nil)
 	if !measured || in != 74 || out != 9 {
 		t.Fatalf("totals = %d/%d measured=%v, want 74/9 measured", in, out, measured)
 	}
@@ -132,5 +132,23 @@ func TestSummarizeProxyTokens24hByModel(t *testing.T) {
 		models[1].Model != "anthropic/haiku" || models[1].TokensIn24h != 20 || models[1].TokensOut24h != 3 ||
 		models[2].Model != "anthropic/opus" || models[2].Measured24h {
 		t.Fatalf("per-model usage = %+v", models)
+	}
+}
+
+func TestSummarizeProxyTokens24hMergesServedNames(t *testing.T) {
+	endpoint := "http://127.0.0.1:8318"
+	start := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	rows := []BackendUsageSample{
+		// Recorded under the served name before the model was configured...
+		{Endpoint: perModelKey(endpoint, "claude-haiku"), Time: start, Prompt: 0, Generated: 0},
+		{Endpoint: perModelKey(endpoint, "claude-haiku"), Time: start.Add(time.Minute), Prompt: 30, Generated: 4},
+		// ...and under the model ID afterwards: two counters, one model.
+		{Endpoint: perModelKey(endpoint, "anthropic/claude-haiku"), Time: start.Add(2 * time.Minute), Prompt: 0, Generated: 0},
+		{Endpoint: perModelKey(endpoint, "anthropic/claude-haiku"), Time: start.Add(3 * time.Minute), Prompt: 5, Generated: 1},
+	}
+	names := map[string]string{"anthropic/claude-haiku": "anthropic/claude-haiku", "claude-haiku": "anthropic/claude-haiku"}
+	in, out, _, models := summarizeProxyTokens24h(endpoint, rows, names)
+	if len(models) != 1 || models[0].Model != "anthropic/claude-haiku" || models[0].TokensIn24h != 35 || models[0].TokensOut24h != 5 || in != 35 || out != 5 {
+		t.Fatalf("models = %+v, totals %d/%d; want one anthropic/claude-haiku row with 35/5", models, in, out)
 	}
 }

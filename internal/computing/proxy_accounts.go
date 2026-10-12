@@ -158,6 +158,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 	}
 	sort.Strings(endpoints)
 
+	names := s.modelEndpoints()
 	creds := map[string]map[string]cliproxy.Credential{} // auth dir -> file -> credential
 	for _, ep := range endpoints {
 		var files authFilesResponse
@@ -208,7 +209,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 			}
 			inst.Accounts = append(inst.Accounts, a)
 		}
-		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h, inst.ModelUsage24h = proxyTokens24h(ep)
+		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h, inst.ModelUsage24h = proxyTokens24h(ep, names[ep].Names)
 		report.Instances = append(report.Instances, inst)
 	}
 	return report
@@ -248,7 +249,8 @@ func windowLabel(minutes int) string {
 }
 
 // proxyTokens24h sums an instance's per-model counters over the last day.
-func proxyTokens24h(endpoint string) (in, out int64, measured bool, models []ProxyModelUsage) {
+// names maps a served name (a model's local_model) to its model ID.
+func proxyTokens24h(endpoint string, names map[string]string) (in, out int64, measured bool, models []ProxyModelUsage) {
 	models = []ProxyModelUsage{}
 	database := db.NewDbService()
 	if database == nil {
@@ -260,10 +262,10 @@ func proxyTokens24h(endpoint string) (in, out int64, measured bool, models []Pro
 		Order("endpoint, time").Find(&rows).Error; err != nil {
 		return
 	}
-	return summarizeProxyTokens24h(endpoint, rows)
+	return summarizeProxyTokens24h(endpoint, rows, names)
 }
 
-func summarizeProxyTokens24h(endpoint string, rows []BackendUsageSample) (in, out int64, measured bool, models []ProxyModelUsage) {
+func summarizeProxyTokens24h(endpoint string, rows []BackendUsageSample, names map[string]string) (in, out int64, measured bool, models []ProxyModelUsage) {
 	models = []ProxyModelUsage{}
 	prefix := endpoint + perModelSep
 	byKey := map[string][]BackendUsageSample{}
@@ -276,20 +278,37 @@ func summarizeProxyTokens24h(endpoint string, rows []BackendUsageSample) (in, ou
 		byKey[r.Endpoint] = append(byKey[r.Endpoint], r)
 	}
 	whole := func(t time.Time) time.Time { return time.Time{} }
+	// A counter recorded under a served name rather than the model ID — work
+	// seen before the model was configured — is the same model, and would
+	// otherwise be listed twice. Each key is a separate counter, so deltas are
+	// taken per key and only then added together.
+	byModel := map[string]*ProxyModelUsage{}
 	for key, ss := range byKey {
 		model := strings.TrimPrefix(key, prefix)
 		if model == "" {
 			continue
 		}
-		row := ProxyModelUsage{Model: model, Measured24h: len(ss) >= 2}
-		if row.Measured24h {
-			row.TokensIn24h = int64(promptDeltas(ss, whole)[time.Time{}])
-			row.TokensOut24h = int64(generatedDeltas(ss, whole)[time.Time{}])
-			measured = true
-			in += row.TokensIn24h
-			out += row.TokensOut24h
+		if id, ok := names[model]; ok {
+			model = id
 		}
-		models = append(models, row)
+		row := byModel[model]
+		if row == nil {
+			row = &ProxyModelUsage{Model: model}
+			byModel[model] = row
+		}
+		if len(ss) >= 2 {
+			tin := int64(promptDeltas(ss, whole)[time.Time{}])
+			tout := int64(generatedDeltas(ss, whole)[time.Time{}])
+			row.Measured24h = true
+			row.TokensIn24h += tin
+			row.TokensOut24h += tout
+			measured = true
+			in += tin
+			out += tout
+		}
+	}
+	for _, row := range byModel {
+		models = append(models, *row)
 	}
 	sort.Slice(models, func(i, j int) bool {
 		iTotal := models[i].TokensIn24h + models[i].TokensOut24h
