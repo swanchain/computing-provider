@@ -262,7 +262,7 @@ The dashboard has four tabs:
 |-----|---------------|
 | **Overview** | This node's usage and estimated earnings first, then model/GPU readiness, alerts, and a compact status summary |
 | **Requests** | Individual requests, sources, outcomes, latency, and token usage |
-| **Proxies** | Proxy connection addresses, configured models, last-24-hour token totals, account status and available subscription limits, and model routing |
+| **Proxies** | A last-24-hour token pie chart per proxy (hub and local), then each proxy's accounts with status and subscription limits, and model routing |
 | **Settings** | Provider controls and configuration, after unlocking |
 
 Overview's 24-hour, 7-day, and 30-day charts cover **this node only**. Usage
@@ -277,7 +277,9 @@ platform offerings. You can close the box and reopen its alerts; a new alert
 will show even if the previous set was dismissed.
 
 Proxies distinguishes backends serving hub traffic from those serving only
-local clients. Account quota bars appear only when the upstream reports them;
+local clients, with one chart each: the four largest models by token share,
+the rest grouped as Other, and the full input/output list one click away.
+Account quota bars appear only when the upstream reports them;
 Claude subscription usage is not reported through the proxy, so check
 [Claude usage](https://claude.ai/settings/usage) for those limits. The proxy's
 24-hour token totals are separate from subscription quota.
@@ -305,11 +307,39 @@ computing-provider cliproxy login --device   # re-authenticate; prints a code an
 `status` reads credential metadata only — never a token — and exits non-zero on
 an expired or disabled login, so it works as a cron check.
 
-For a model you want to serve only to your own clients, set `"local_only": true`
-in `models.json`. It remains available through this node's local gateway but is
-not registered with Swan Inference. Set `local_endpoint` if those clients
-should use a separate proxy/backend from hub requests. The dashboard labels
-these routes **local only** rather than counting them as hub offerings.
+#### Separate accounts for hub and local use
+
+Run a second CLIProxyAPI on its own account and point the
+[local gateway](#local-gateway) at it, so your own tools never spend the quota
+that hub traffic depends on:
+
+```json
+{
+  "openai/gpt-5.5": {
+    "endpoint": "http://127.0.0.1:8317",
+    "local_endpoint": "http://127.0.0.1:8318",
+    "local_api_key": "<second proxy's key>",
+    "local_model": "gpt-5.5"
+  },
+  "anthropic/claude-sonnet-5-5": {
+    "endpoint": "http://127.0.0.1:8318",
+    "local_model": "claude-sonnet-5-5",
+    "local_only": true
+  }
+}
+```
+
+Hub requests and health probes use `endpoint`; the gateway uses
+`local_endpoint`. `"local_only": true` keeps a model off the hub entirely: it
+is never registered (not even by a `models.json` reload, which registers every
+ready model whatever `[Inference] Models` says), hub requests for it are
+refused, and it is never sent a probe completion. Leaving a model out of
+`config.toml` is **not** enough on its own.
+
+To see accounts, quota and per-model token use on the **Proxies** tab, set
+`[Inference] CLIProxyManagementKey` to the proxies' management `secret-key`,
+and in each proxy's `config.yaml` set `usage-statistics-enabled: true` and
+`redis-usage-queue-retention-seconds` to a few minutes.
 
 **Use `--probe`.** A login can be unexpired, enabled, and still rejected by the
 subscription upstream, and the proxy answers `/v1/models` from a static list
@@ -326,6 +356,34 @@ Live probe
 
 That credential is not expired. Re-authenticating will not help — check whether
 the account still has access.
+
+### Local gateway
+
+Your own clients — scripts, agents, benchmarks — can use the models this node
+serves through an OpenAI-compatible endpoint on `http://127.0.0.1:9088/v1`
+(`[Inference] LocalGatewayPort`; `-1` disables it). Requests are forwarded to
+the same backends, or a model's `local_endpoint`, and appear on the dashboard
+as `local` traffic, so the GPU time they take is visible rather than looking
+like an idle model. It is loopback only and does no authentication; any API
+key is accepted.
+
+| Route | |
+|---|---|
+| `POST /v1/chat/completions` | chat, streaming or not |
+| `POST /v1/images/generations` | image models |
+| `POST /v1/audio/transcriptions` | speech to text, standard multipart upload |
+| `GET /v1/models` | every model the gateway can reach, including `local_only` ones |
+
+```bash
+curl http://127.0.0.1:9088/v1/audio/transcriptions \
+  -F model=openai/gpt-4o-transcribe -F file=@recording.wav -F response_format=text
+```
+
+Transcription works with a ChatGPT-subscription proxy too: the node runs it
+through a realtime session, since those have no plain transcription endpoint.
+WAV is decoded directly; MP3, M4A and other formats need `ffmpeg` on `PATH`
+and are refused without it. Give a transcription model
+`"category": "transcription"` in `models.json`.
 
 ### REST API
 
