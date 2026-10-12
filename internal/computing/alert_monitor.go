@@ -34,6 +34,9 @@ type alertMonitor struct {
 	// model latched in the wrong state. Re-reading on the tick corrects that
 	// within a minute instead of waiting for the next transition.
 	health func() map[string]string
+	// localOnly reports models kept to the local gateway. Every hub request
+	// for one is refused on purpose, so its failures are not a broken model.
+	localOnly func(string) bool
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -162,6 +165,11 @@ func (a *alertMonitor) checkErrorRates() {
 		// A model that fails everything usually stops receiving traffic, so the
 		// window falls below the floor. Evaluate recovery before the floor or a
 		// fired incident never closes.
+		if a.localOnly != nil && a.localOnly(id) {
+			a.checkLocalOnlyRequests(id, total)
+			continue
+		}
+
 		belowFloor := total < int64(a.cfg.ErrorRateMinRequests)
 		var ratio float64
 		if total > 0 {
@@ -271,4 +279,23 @@ func (a *alertMonitor) onHealthChange(modelHealth map[string]string) {
 				alerts.SeverityInfo, map[string]string{"health": c.health})
 		}
 	}
+}
+
+// checkLocalOnlyRequests reports hub traffic for a local-only model once per
+// episode. Calling it "failing" sent the operator looking at a backend that
+// was fine; what needs fixing is that the hub still routes the model here.
+// Called with a.mu held.
+func (a *alertMonitor) checkLocalOnlyRequests(id string, total int64) {
+	if total == 0 {
+		a.rateFiring[id] = false
+		return
+	}
+	if a.rateFiring[id] {
+		return
+	}
+	a.rateFiring[id] = true
+	a.notifier.Fire(alerts.EventLocalOnlyRequested, id,
+		fmt.Sprintf("Swan Inference sent %d request(s) for %s, which is local_only and not registered — the node refused them. The hub is still routing this model here.",
+			total, id),
+		alerts.SeverityWarning, map[string]string{"refused": fmt.Sprintf("%d", total)})
 }

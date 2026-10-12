@@ -433,3 +433,31 @@ func TestRecoveryThroughDegradedStillCloses(t *testing.T) {
 		t.Fatalf("unhealthy=%d recovered=%d, want 1 and 1", unhealthy, recovered)
 	}
 }
+
+func TestErrorRateReportsLocalOnlyRefusalsSeparately(t *testing.T) {
+	url, events, done := capture(t)
+	defer done()
+
+	// The hub sent 64 requests for a local_only model and the node refused
+	// every one. That is a routing problem, not a failing backend.
+	data := &InferenceMetricsData{ModelMetrics: map[string]*ModelMetrics{
+		"lo": {ModelName: "lo", TotalRequests: 64, FailedReqs: 64},
+	}}
+	cfg := testCfg(url)
+	m := newAlertMonitor(alerts.New(cfg, "node1", "cp"), cfg, func() *InferenceMetricsData { return data }, func() bool { return true }, nil)
+	m.localOnly = func(id string) bool { return id == "lo" }
+
+	m.checkErrorRates()
+	got := events()
+	if len(got) != 1 || got[0].Event != alerts.EventLocalOnlyRequested || got[0].Severity != alerts.SeverityWarning {
+		t.Fatalf("want one warning %s event, got %+v", alerts.EventLocalOnlyRequested, got)
+	}
+
+	// Still being routed: no repeat. Traffic stops: no recovery notice either.
+	data.ModelMetrics["lo"] = &ModelMetrics{ModelName: "lo", TotalRequests: 80, FailedReqs: 80}
+	m.checkErrorRates()
+	m.checkErrorRates()
+	if got := events(); len(got) != 1 {
+		t.Fatalf("want no further events, got %+v", got)
+	}
+}
