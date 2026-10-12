@@ -192,6 +192,41 @@ func TestContextMismatchIsCaught(t *testing.T) {
 	}
 }
 
+// llama.cpp has no max_model_len; it reports meta.n_ctx, per slot. A server
+// started with -c 65536 --parallel 2 accepts 32768 per request.
+func TestContextReadsLlamaCppNCtx(t *testing.T) {
+	for _, tc := range []struct {
+		pinned int
+		want   Status
+	}{
+		{65536, StatusFail}, // advertised beyond what one request may use
+		{32768, StatusPass},
+		{24576, StatusPass}, // advertising less than served is safe
+	} {
+		dir := t.TempDir()
+		mux := http.NewServeMux()
+		mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": []map[string]interface{}{
+				{"id": "org/a", "owned_by": "llamacpp", "meta": map[string]int{"n_ctx": 32768, "n_ctx_train": 262144}},
+			}})
+		})
+		mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"choices": []map[string]interface{}{{}}})
+		})
+		be := httptest.NewServer(mux)
+		writeModels(t, dir, map[string]map[string]interface{}{
+			"org/a": {"endpoint": be.URL, "context_length": tc.pinned},
+		})
+		d := fakeDaemon(t, true, []string{"org/a"}, map[string]string{"org/a": "healthy"}, map[string]int64{"org/a": 1})
+
+		r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/a"}, LogDir: dir})
+		if res := find(t, r, "context window"); res.Status != tc.want {
+			t.Errorf("pinned %d: got %s %q, want %s", tc.pinned, res.Status, res.Message, tc.want)
+		}
+		be.Close()
+	}
+}
+
 func TestDisconnectedProviderFails(t *testing.T) {
 	dir := t.TempDir()
 	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
