@@ -39,6 +39,10 @@ const (
 	EventReconnected     = "reconnected"
 	EventModelErrorRate  = "model_error_rate"
 	EventErrorRateNormal = "model_error_rate_normal"
+	// The hub sent requests for a model kept to the local gateway. The node
+	// refuses them by design, so they are a routing problem on the hub's
+	// side, not a failing model.
+	EventLocalOnlyRequested = "local_only_model_requested"
 
 	// Serving changes. These fire whenever the set of models this node
 	// serves changes, whether an operator ran the command or the

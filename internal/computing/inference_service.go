@@ -343,6 +343,7 @@ func (s *InferenceService) Start() error {
 			}
 			return s.registry.GetAllModelHealthMap()
 		})
+	s.alertMonitor.localOnly = s.isLocalOnly
 	if notifier.Enabled() {
 		logs.GetLogger().Infof("Alerts enabled, posting to %s", alerts.RedactURL(config.Alerts.WebhookURL))
 	}
