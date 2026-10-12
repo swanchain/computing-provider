@@ -146,9 +146,6 @@ function App() {
   };
 
   const refreshing = metricsRefreshing || statusRefreshing || earningsRefreshing || modelsRefreshing || requestMgmtRefreshing || proxyReport.refreshing || hubReport.refreshing || usageReport.refreshing;
-  const hubProxyModels = new Set(proxyReport.data?.instances.filter((inst) => inst.roles.includes('hub')).flatMap((inst) => inst.models));
-  const directHubModels = status?.registered_models?.filter((id) => !hubProxyModels.has(id)).length ?? 0;
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="border-b border-slate-800 bg-slate-900/95">
@@ -331,17 +328,12 @@ function App() {
 
         {activeView === 'proxies' && (
           <section aria-labelledby="proxies-heading" className="space-y-6">
-            <div>
+            <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
               <h2 id="proxies-heading" className="text-xl font-semibold text-white">Proxies</h2>
-              <p className="mt-1 text-sm text-slate-300">
-                Subscription accounts for hub traffic and your own clients. Sign-in, usage limits, and routing are shown separately.
-              </p>
-            </div>
-            <div className="rounded-xl border border-sky-800/50 bg-sky-950/20 p-4 text-sm text-slate-300">
-              <p>{status?.registered_models?.length ?? '—'} models registered to hub · {models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</p>
-              <p className="mt-2">Client gateway: <span className="break-all font-mono text-sky-200">{usageReport.data?.local_gateway || 'not reported'}</span></p>
-              <p className="mt-1 text-xs text-slate-400">Used by clients on this provider machine. Proxy backend addresses appear in connection details.</p>
-              {proxyReport.data && !proxyReport.data.note && !proxyReport.error && directHubModels > 0 && <p className="mt-2 text-xs text-slate-400">{directHubModels} hub-registered models use model servers outside these proxies.</p>}
+              <div className="min-w-0 text-sm text-slate-300 sm:text-right">
+                <p>{status?.registered_models?.length ?? '—'} models registered to hub · {models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</p>
+                <p className="mt-1">Client gateway: <span className="break-all font-mono text-sky-200">{usageReport.data?.local_gateway || 'not reported'}</span></p>
+              </div>
             </div>
             <ProxyAccountsPanel report={proxyReport} />
             {modelsError && <p role="status" className="text-sm text-amber-200">Model routes could not be refreshed.{models ? ' Showing previous routes.' : ''}</p>}

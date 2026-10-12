@@ -507,6 +507,15 @@ export interface ProxyInstance {
   tokens_in_24h: number;
   tokens_out_24h: number;
   measured_24h: boolean;
+  /** Per-model proxy traffic from all clients; absent on older node versions. */
+  model_usage_24h?: ProxyModelUsage[];
+}
+
+export interface ProxyModelUsage {
+  model: string;
+  tokens_in_24h: number;
+  tokens_out_24h: number;
+  measured_24h: boolean;
 }
 
 export interface ProxyAccountsReport {
