@@ -79,12 +79,14 @@ function Instance({ inst }: { inst: ProxyInstance }) {
   const disabled = inst.accounts.filter((a) => a.disabled);
   return <section className="min-w-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-900/60">
     <div className="border-b border-slate-800 bg-slate-800/40 p-4 sm:p-5">
-      <h3 className="text-lg font-semibold text-white">{title}</h3>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h3 className="text-lg font-semibold text-white">{title}</h3>
+        <span className="break-all font-mono text-xs text-sky-200">{inst.endpoint}</span>
+      </div>
       <p className="mt-1 text-sm text-slate-300">{hub && local ? 'Serves hub requests and your own clients.' : hub ? 'Serves requests routed by Swan Inference.' : 'Serves your own clients through the client gateway.'}</p>
       <p className="mt-3 text-sm text-slate-300">{enabled.length} enabled account{enabled.length === 1 ? '' : 's'} · {inst.models.length} configured models</p>
       <div className="mt-4 border-t border-slate-700 pt-4 text-sm">
-        <p className="break-all font-mono text-xs text-sky-200">{inst.endpoint}</p>
-        <p className="mt-2 text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? compactCount(inst.tokens_in_24h) + ' input / ' + compactCount(inst.tokens_out_24h) + ' output tokens' : 'token usage not measured yet'}</p>
+        <p className="text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? compactCount(inst.tokens_in_24h) + ' input / ' + compactCount(inst.tokens_out_24h) + ' output tokens' : 'token usage not measured yet'}</p>
       </div>
     </div>
     {inst.error ? <p role="alert" className="break-words p-5 text-sm text-amber-200">Account status unavailable: {inst.error}</p> : <>
