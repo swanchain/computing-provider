@@ -442,8 +442,9 @@ func (c *checker) checkHealth() {
 }
 
 // checkContexts compares the context window each backend actually accepts with
-// what models.json pins. A mismatch shows up as customer requests rejected with
-// "exceeds the available context size" after the marketplace advertised more.
+// what models.json pins. Advertising more than the backend accepts shows up as
+// customer requests rejected with "exceeds the available context size".
+// Advertising less is safe — requests are only ever smaller than promised.
 func (c *checker) checkContexts(models map[string]modelEntry) {
 	if len(models) == 0 {
 		return
@@ -455,8 +456,8 @@ func (c *checker) checkContexts(models map[string]modelEntry) {
 			unknown = append(unknown, id)
 			continue
 		}
-		if m.ContextLength > 0 && m.ContextLength != actual {
-			mismatched = append(mismatched, fmt.Sprintf("%s: models.json says %d, backend serves %d", id, m.ContextLength, actual))
+		if m.ContextLength > actual {
+			mismatched = append(mismatched, fmt.Sprintf("%s: models.json says %d, backend accepts %d", id, m.ContextLength, actual))
 		}
 	}
 	sort.Strings(mismatched)
@@ -480,6 +481,11 @@ func (c *checker) backendContext(id string, m modelEntry) (int, bool) {
 		Data []struct {
 			ID          string `json:"id"`
 			MaxModelLen int    `json:"max_model_len"`
+			// llama.cpp reports the window in meta.n_ctx, and per slot: with
+			// --parallel 2 a -c 65536 server accepts 32768 per request.
+			Meta struct {
+				NCtx int `json:"n_ctx"`
+			} `json:"meta"`
 		} `json:"data"`
 	}
 	req, err := http.NewRequest("GET", strings.TrimRight(m.Endpoint, "/")+"/v1/models", nil)
@@ -497,18 +503,22 @@ func (c *checker) backendContext(id string, m modelEntry) (int, bool) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || len(out.Data) == 0 {
 		return 0, false
 	}
+	window := func(i int) int {
+		if out.Data[i].MaxModelLen > 0 {
+			return out.Data[i].MaxModelLen
+		}
+		return out.Data[i].Meta.NCtx
+	}
 	want := m.servedName(id)
-	for _, d := range out.Data {
+	for i, d := range out.Data {
 		if strings.EqualFold(d.ID, want) || strings.EqualFold(d.ID, id) {
-			if d.MaxModelLen > 0 {
-				return d.MaxModelLen, true
-			}
-			return 0, false
+			n := window(i)
+			return n, n > 0
 		}
 	}
 	// A single-model backend that names itself differently is still unambiguous.
-	if len(out.Data) == 1 && out.Data[0].MaxModelLen > 0 {
-		return out.Data[0].MaxModelLen, true
+	if len(out.Data) == 1 && window(0) > 0 {
+		return window(0), true
 	}
 	return 0, false
 }
