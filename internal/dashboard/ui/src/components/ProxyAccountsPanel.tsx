@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import type { UsePollingResult } from '../hooks/usePolling';
+import { MAX_COLOURED_MODELS, OTHER_COLOUR, OTHER_LABEL, SERIES_COLOURS } from '../lib/modelPalette';
 import { accountWideCooldown, isPast, providerName } from '../lib/proxyStatus';
 import type { ModelStatus, ProxyAccount, ProxyAccountsReport, ProxyInstance, ProxyQuotaWindow } from '../types';
 
@@ -51,7 +54,7 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
         {a.cooldowns.map((c, i) => {
           const listed = !c.model || modelIds.some((id) => id === c.model || id.split('/').slice(1).join('/') === c.model);
           return <li key={i}><p className="break-words">{c.model || 'All models'} · {c.reason === 'quota' ? 'quota blocked' : c.reason?.replace(/_/g, ' ') || 'temporarily restricted'}</p>
-            {!listed && <p className="mt-1 text-xs text-slate-300">No matching configured model ID. Check the configured models listed above.</p>}
+            {!listed && <p className="mt-1 text-xs text-slate-300">No matching configured model ID. Check the full model list under Token consumption.</p>}
             <p className="mt-1 text-xs text-slate-400">Proxy retry: {dateLabel(c.retry_at)}</p></li>;
         })}
       </ul>
@@ -68,42 +71,20 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
   </li>;
 }
 
-function Instance({ inst, wide }: { inst: ProxyInstance; wide: boolean }) {
+function Instance({ inst }: { inst: ProxyInstance }) {
   const hub = inst.roles.includes('hub');
   const local = inst.roles.includes('local');
   const title = hub && local ? 'Hub and local proxy' : hub ? 'Hub proxy' : 'Local proxy';
   const enabled = inst.accounts.filter((a) => !a.disabled);
   const disabled = inst.accounts.filter((a) => a.disabled);
-  const usage = new Map((inst.model_usage_24h ?? []).map((row) => [row.model, row]));
-  const configured = new Set(inst.models);
-  const modelIds = [...new Set([...inst.models, ...usage.keys()])].sort((a, b) => {
-    const aUsage = usage.get(a);
-    const bUsage = usage.get(b);
-    const aTotal = (aUsage?.tokens_in_24h ?? 0) + (aUsage?.tokens_out_24h ?? 0);
-    const bTotal = (bUsage?.tokens_in_24h ?? 0) + (bUsage?.tokens_out_24h ?? 0);
-    return bTotal - aTotal || a.localeCompare(b);
-  });
   return <section className="min-w-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-900/60">
     <div className="border-b border-slate-800 bg-slate-800/40 p-4 sm:p-5">
       <h3 className="text-lg font-semibold text-white">{title}</h3>
       <p className="mt-1 text-sm text-slate-300">{hub && local ? 'Serves hub requests and your own clients.' : hub ? 'Serves requests routed by Swan Inference.' : 'Serves your own clients through the client gateway.'}</p>
       <p className="mt-3 text-sm text-slate-300">{enabled.length} enabled account{enabled.length === 1 ? '' : 's'} · {inst.models.length} configured models</p>
       <div className="mt-4 border-t border-slate-700 pt-4 text-sm">
-        <p className="font-medium text-slate-200">Connection</p>
-        <p className="mt-2 break-all font-mono text-xs text-sky-200">{inst.endpoint}</p>
-        <div className="mt-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <h4 className="font-medium text-slate-200">Token consumption by model</h4>
-          <p className="text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? compactCount(inst.tokens_in_24h) + ' input / ' + compactCount(inst.tokens_out_24h) + ' output' : 'not measured yet'}</p>
-        </div>
-        <p className="mt-1 text-xs text-slate-400">All clients through this proxy · separate from subscription limits</p>
-        {inst.model_usage_24h === undefined && <p className="mt-3 text-xs text-slate-400">Per-model counts are available after updating this provider.</p>}
-        {modelIds.length ? <ul className={`mt-3 grid border-t border-slate-700/70 text-xs ${wide ? 'lg:grid-cols-2 lg:gap-x-6' : ''}`}>{modelIds.map((id) => {
-          const row = usage.get(id);
-          return <li className="min-w-0 border-b border-slate-700/70 py-2" key={id}>
-            <p className="break-all font-mono text-slate-200">{id}{!configured.has(id) && <span className="ml-2 font-sans text-slate-400">not configured here</span>}</p>
-            <p className="mt-1 text-slate-400">{row?.measured_24h ? <><span className="font-medium text-slate-200">{row.tokens_in_24h.toLocaleString()}</span> input · <span className="font-medium text-slate-200">{row.tokens_out_24h.toLocaleString()}</span> output · <span className="font-medium text-slate-200">{(row.tokens_in_24h + row.tokens_out_24h).toLocaleString()}</span> total tokens</> : 'Token usage not measured yet'}</p>
-          </li>;
-        })}</ul> : <p className="mt-3 text-xs text-slate-400">No models configured or observed.</p>}
+        <p className="break-all font-mono text-xs text-sky-200">{inst.endpoint}</p>
+        <p className="mt-2 text-xs text-slate-400">Last 24 hours · {inst.measured_24h ? compactCount(inst.tokens_in_24h) + ' input / ' + compactCount(inst.tokens_out_24h) + ' output tokens' : 'token usage not measured yet'}</p>
       </div>
     </div>
     {inst.error ? <p role="alert" className="break-words p-5 text-sm text-amber-200">Account status unavailable: {inst.error}</p> : <>
@@ -116,6 +97,87 @@ function Instance({ inst, wide }: { inst: ProxyInstance; wide: boolean }) {
       </details>}
     </>}
   </section>;
+}
+
+interface UsageRow { model: string; tokensIn: number; tokensOut: number; total: number; configured: boolean }
+
+function usageRows(inst: ProxyInstance): UsageRow[] {
+  const usage = new Map((inst.model_usage_24h ?? []).filter((r) => r.measured_24h).map((r) => [r.model, r]));
+  const configured = new Set(inst.models);
+  return [...new Set([...inst.models, ...usage.keys()])].map((model) => {
+    const r = usage.get(model);
+    const tokensIn = r?.tokens_in_24h ?? 0;
+    const tokensOut = r?.tokens_out_24h ?? 0;
+    return { model, tokensIn, tokensOut, total: tokensIn + tokensOut, configured: configured.has(model) };
+  }).sort((a, b) => b.total - a.total || a.model.localeCompare(b.model));
+}
+
+function UsagePie({ inst }: { inst: ProxyInstance }) {
+  const [active, setActive] = useState<string | null>(null);
+  const hub = inst.roles.includes('hub');
+  const local = inst.roles.includes('local');
+  const title = hub && local ? 'Hub and local proxy' : hub ? 'Hub proxy' : 'Local proxy';
+  const rows = usageRows(inst);
+  const used = rows.filter((r) => r.total > 0);
+  // Ranked within this proxy: the two proxies serve different mixes, and a
+  // shared ranking left most of one chart in Other. Past the palette's four
+  // hues the rest fold into Other, as on the earnings charts.
+  const colours = new Map<string, string>(used.slice(0, MAX_COLOURED_MODELS).map((r, i) => [r.model, SERIES_COLOURS[i]]));
+  const slices = used.filter((r) => colours.has(r.model)).map((r) => ({ name: r.model, value: r.total, fill: colours.get(r.model)! }));
+  const otherTotal = used.filter((r) => !colours.has(r.model)).reduce((s, r) => s + r.total, 0);
+  if (otherTotal > 0) slices.push({ name: OTHER_LABEL, value: otherTotal, fill: OTHER_COLOUR });
+  const total = used.reduce((s, r) => s + r.total, 0);
+  return <section className="min-w-0 rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+      <h3 className="text-base font-semibold text-white">{title}</h3>
+      <p className="text-xs text-slate-400">{inst.measured_24h ? compactCount(inst.tokens_in_24h) + ' in / ' + compactCount(inst.tokens_out_24h) + ' out' : 'not measured yet'}</p>
+    </div>
+    {inst.model_usage_24h === undefined ? <p className="mt-3 text-xs text-slate-400">Per-model counts are available after updating this provider.</p> : !total ? <p className="mt-3 text-sm text-slate-400">No tokens through this proxy in the last 24 hours.</p> :
+      <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center">
+        <div className="relative h-36 w-36 shrink-0 self-center">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={slices} dataKey="value" nameKey="name" innerRadius="60%" outerRadius="100%" paddingAngle={1} stroke="none" isAnimationActive={false}
+                onMouseEnter={(_, i) => setActive(slices[i]?.name ?? null)} onMouseLeave={() => setActive(null)}>
+                {slices.map((s) => <Cell key={s.name} fill={s.fill} opacity={active === null || active === s.name ? 1 : 0.35} />)}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-lg font-semibold tabular-nums text-white">{compactCount(total)}</span>
+            <span className="text-[11px] text-slate-400">tokens</span>
+          </div>
+        </div>
+        <ul className="min-w-0 flex-1 space-y-1">
+          {slices.map((s) => <li key={s.name} onMouseEnter={() => setActive(s.name)} onMouseLeave={() => setActive(null)}
+            className={'flex items-start gap-2 rounded px-1 py-0.5 text-xs ' + (active === s.name ? 'bg-slate-800' : '')}>
+            <span className="mt-0.5 block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: s.fill }} />
+            <span className="min-w-0 flex-1 break-all font-mono text-slate-300">{s.name === OTHER_LABEL ? OTHER_LABEL + ' (' + (used.length - slices.length + 1) + ' models)' : s.name}</span>
+            <span className="shrink-0 tabular-nums text-slate-300">{((s.value / total) * 100).toFixed(1)}%</span>
+            <span className="w-14 shrink-0 text-right tabular-nums text-slate-400">{compactCount(s.value)}</span>
+          </li>)}
+        </ul>
+      </div>}
+    {!!rows.length && <details className="mt-3 text-xs">
+      <summary className="min-h-10 cursor-pointer py-2 text-slate-400 focus-visible:outline focus-visible:outline-sky-400">All {rows.length} models · input / output</summary>
+      <table className="w-full border-t border-slate-800">
+        <tbody>{rows.map((r) => <tr key={r.model} className="border-b border-slate-800/70">
+          <td className="break-all py-1.5 pr-2 font-mono text-slate-300">{r.model}{!r.configured && <span className="ml-2 font-sans text-slate-400">not configured here</span>}</td>
+          <td className="whitespace-nowrap py-1.5 text-right tabular-nums text-slate-400">{r.total ? compactCount(r.tokensIn) + ' / ' + compactCount(r.tokensOut) : '—'}</td>
+        </tr>)}</tbody>
+      </table>
+    </details>}
+  </section>;
+}
+
+export function ProxyUsageCharts({ instances }: { instances: ProxyInstance[] }) {
+  return <div>
+    <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3">
+      <h3 className="text-base font-semibold text-white">Token consumption by model</h3>
+      <p className="text-xs text-slate-400">Last 24 hours · all clients through each proxy · separate from subscription limits</p>
+    </div>
+    <div className={'grid items-start gap-5 ' + (instances.length > 1 ? 'lg:grid-cols-2' : '')}>{instances.map((inst) => <UsagePie key={inst.endpoint} inst={inst} />)}</div>
+  </div>;
 }
 
 export function ProxyRoutingPanel({ models }: { models: ModelStatus[] }) {
@@ -147,6 +209,10 @@ export function ProxyAccountsPanel({ report }: { report: UsePollingResult<ProxyA
       <button type="button" onClick={() => void refetch()} disabled={refreshing} className="min-h-11 rounded-lg border border-slate-700 px-4 text-sm text-slate-200 hover:bg-slate-800 focus-visible:outline focus-visible:outline-sky-400 disabled:opacity-50">{refreshing ? 'Refreshing accounts…' : 'Refresh accounts'}</button>
     </div>
     {error && <p role="alert" className="rounded-lg border border-amber-800/60 p-4 text-sm text-amber-200">{data ? 'Account refresh failed. Showing previously fetched status.' : 'Could not load proxy accounts: ' + error.message}</p>}
-    {loading && !data ? <p role="status" className="text-slate-400">Loading accounts…</p> : data?.note ? <p className="text-sm text-slate-400">{data.note}</p> : data && !instances.length ? <p className="text-slate-400">No subscription proxies configured.</p> : <div className={`grid items-start gap-5 ${instances.length > 1 ? 'lg:grid-cols-2' : ''}`}>{instances.map((inst) => <Instance key={inst.endpoint} inst={inst} wide={instances.length === 1} />)}</div>}
+    {loading && !data ? <p role="status" className="text-slate-400">Loading accounts…</p> : data?.note ? <p className="text-sm text-slate-400">{data.note}</p> : data && !instances.length ? <p className="text-slate-400">No subscription proxies configured.</p> : <>
+      <ProxyUsageCharts instances={instances} />
+      <h3 className="pt-2 text-base font-semibold text-white">Accounts</h3>
+      <div className={`grid items-start gap-5 ${instances.length > 1 ? 'lg:grid-cols-2' : ''}`}>{instances.map((inst) => <Instance key={inst.endpoint} inst={inst} />)}</div>
+    </>}
   </div>;
 }
