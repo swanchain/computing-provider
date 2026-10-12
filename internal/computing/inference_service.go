@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
@@ -24,10 +25,19 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/selfcheck"
 )
 
+// streamResponseHeaderTimeout bounds how long a backend may take to start
+// answering a streaming request, and streamIdleTimeout how long it may then go
+// without sending anything. There is deliberately no limit on the stream as a
+// whole: a long generation that keeps producing tokens is a healthy one, and a
+// total deadline cuts it off mid-answer.
+var (
+	streamResponseHeaderTimeout = 5 * time.Minute
+	streamIdleTimeout           = 2 * time.Minute
+)
+
 // streamingHttpClient is a shared HTTP client for streaming inference requests
 // with connection pooling to avoid creating new connections for each request
 var streamingHttpClient = &http.Client{
-	Timeout: 5 * time.Minute,
 	Transport: &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		DialContext: (&net.Dialer{
@@ -1123,8 +1133,24 @@ func (s *InferenceService) streamFromDockerModelContext(ctx context.Context, end
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
+	// One timer covers both the wait for the first data and the gaps between
+	// chunks. Proxies often send headers at once and the first token only after
+	// prefill, so the idle limit takes over only once data starts flowing.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(streamResponseHeaderTimeout, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
+	req = req.WithContext(ctx)
+
 	resp, err := streamingHttpClient.Do(req)
 	if err != nil {
+		if stalled.Load() {
+			err = fmt.Errorf("no response within %s", streamResponseHeaderTimeout)
+		}
 		result.Error = fmt.Errorf("failed to send request: %w", err)
 		return result
 	}
@@ -1144,9 +1170,13 @@ func (s *InferenceService) streamFromDockerModelContext(ctx context.Context, end
 			if err == io.EOF {
 				break
 			}
+			if stalled.Load() {
+				err = fmt.Errorf("no data from backend in time (start limit %s, idle limit %s)", streamResponseHeaderTimeout, streamIdleTimeout)
+			}
 			result.Error = fmt.Errorf("failed to read stream: %w", err)
 			return result
 		}
+		watchdog.Reset(streamIdleTimeout)
 
 		line = strings.TrimSpace(line)
 		if line == "" {
