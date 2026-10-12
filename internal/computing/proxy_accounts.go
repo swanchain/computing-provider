@@ -71,6 +71,17 @@ type ProxyInstance struct {
 	TokensIn24h  int64 `json:"tokens_in_24h"`
 	TokensOut24h int64 `json:"tokens_out_24h"`
 	Measured24h  bool  `json:"measured_24h"`
+	// Per-model token counts from this proxy's usage queue, including traffic
+	// from clients other than this node. A model needs two samples to measure.
+	ModelUsage24h []ProxyModelUsage `json:"model_usage_24h"`
+}
+
+// ProxyModelUsage is one model's measured token consumption through a proxy.
+type ProxyModelUsage struct {
+	Model        string `json:"model"`
+	TokensIn24h  int64  `json:"tokens_in_24h"`
+	TokensOut24h int64  `json:"tokens_out_24h"`
+	Measured24h  bool   `json:"measured_24h"`
 }
 
 // ProxyAccountsReport is the answer to GET /inference/proxy-accounts.
@@ -156,7 +167,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		if err != nil && strings.Contains(err.Error(), "HTTP 404") {
 			continue // a model server, not a proxy
 		}
-		inst := ProxyInstance{Endpoint: ep, Roles: sortedKeys(roles[ep]), Models: sortedKeys(models[ep]), Accounts: []ProxyAccount{}}
+		inst := ProxyInstance{Endpoint: ep, Roles: sortedKeys(roles[ep]), Models: sortedKeys(models[ep]), Accounts: []ProxyAccount{}, ModelUsage24h: []ProxyModelUsage{}}
 		if err != nil {
 			inst.Error = err.Error()
 		}
@@ -197,7 +208,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 			}
 			inst.Accounts = append(inst.Accounts, a)
 		}
-		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h = proxyTokens24h(ep)
+		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h, inst.ModelUsage24h = proxyTokens24h(ep)
 		report.Instances = append(report.Instances, inst)
 	}
 	return report
@@ -237,31 +248,58 @@ func windowLabel(minutes int) string {
 }
 
 // proxyTokens24h sums an instance's per-model counters over the last day.
-func proxyTokens24h(endpoint string) (in, out int64, measured bool) {
+func proxyTokens24h(endpoint string) (in, out int64, measured bool, models []ProxyModelUsage) {
+	models = []ProxyModelUsage{}
 	database := db.NewDbService()
 	if database == nil {
-		return 0, 0, false
+		return
 	}
 	var rows []BackendUsageSample
 	since := time.Now().Add(-24 * time.Hour)
 	if err := database.Where("endpoint LIKE ? AND time >= ?", endpoint+perModelSep+"%", since).
 		Order("endpoint, time").Find(&rows).Error; err != nil {
-		return 0, 0, false
+		return
 	}
+	return summarizeProxyTokens24h(endpoint, rows)
+}
+
+func summarizeProxyTokens24h(endpoint string, rows []BackendUsageSample) (in, out int64, measured bool, models []ProxyModelUsage) {
+	models = []ProxyModelUsage{}
+	prefix := endpoint + perModelSep
 	byKey := map[string][]BackendUsageSample{}
 	for _, r := range rows {
+		// SQL LIKE can treat URL underscores as wildcards; the exact prefix
+		// check keeps another proxy's counters out of this instance.
+		if !strings.HasPrefix(r.Endpoint, prefix) {
+			continue
+		}
 		byKey[r.Endpoint] = append(byKey[r.Endpoint], r)
 	}
 	whole := func(t time.Time) time.Time { return time.Time{} }
-	for _, ss := range byKey {
-		if len(ss) < 2 {
+	for key, ss := range byKey {
+		model := strings.TrimPrefix(key, prefix)
+		if model == "" {
 			continue
 		}
-		measured = true
-		in += int64(promptDeltas(ss, whole)[time.Time{}])
-		out += int64(generatedDeltas(ss, whole)[time.Time{}])
+		row := ProxyModelUsage{Model: model, Measured24h: len(ss) >= 2}
+		if row.Measured24h {
+			row.TokensIn24h = int64(promptDeltas(ss, whole)[time.Time{}])
+			row.TokensOut24h = int64(generatedDeltas(ss, whole)[time.Time{}])
+			measured = true
+			in += row.TokensIn24h
+			out += row.TokensOut24h
+		}
+		models = append(models, row)
 	}
-	return in, out, measured
+	sort.Slice(models, func(i, j int) bool {
+		iTotal := models[i].TokensIn24h + models[i].TokensOut24h
+		jTotal := models[j].TokensIn24h + models[j].TokensOut24h
+		if iTotal != jTotal {
+			return iTotal > jTotal
+		}
+		return models[i].Model < models[j].Model
+	})
+	return
 }
 
 func sortedKeys(m map[string]bool) []string {

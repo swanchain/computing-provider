@@ -340,7 +340,7 @@ curl http://localhost:8085/api/v1/computing/inference/metrics
 | `GET /inference/metrics/prometheus` | Prometheus format for Grafana |
 | `GET /inference/usage/history?duration=24h` | This node's usage history by source; also accepts `7d` and `30d` |
 | `GET /inference/earnings/history?duration=24h&scope=node` | This node's estimated earnings history; without `scope=node`, the API prefers provider-account history |
-| `GET /inference/proxy-accounts` | Proxy instances, configured models, account status and available quota windows |
+| `GET /inference/proxy-accounts` | Proxy instances, per-model token use (up to 24 hours), account status and available quota windows |
 | `GET /inference/models` | List all models with status |
 | `GET /inference/health` | Health of every model |
 | `POST /inference/models/:id/enable` | Enable a model |

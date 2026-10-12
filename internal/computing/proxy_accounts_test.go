@@ -108,3 +108,29 @@ func TestProxyAccountsNoPlanFromAccountName(t *testing.T) {
 		t.Errorf("plan = %q, want none rather than the file name", p)
 	}
 }
+
+func TestSummarizeProxyTokens24hByModel(t *testing.T) {
+	endpoint := "http://proxy_one:8318"
+	start := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
+	rows := []BackendUsageSample{
+		{Endpoint: perModelKey(endpoint, "openai/sol"), Time: start, Prompt: 100, Generated: 10},
+		{Endpoint: perModelKey(endpoint, "openai/sol"), Time: start.Add(time.Minute), Prompt: 150, Generated: 15},
+		// A reset contributes the new counter value, not a negative delta.
+		{Endpoint: perModelKey(endpoint, "openai/sol"), Time: start.Add(2 * time.Minute), Prompt: 4, Generated: 1},
+		{Endpoint: perModelKey(endpoint, "anthropic/haiku"), Time: start, Prompt: 0, Generated: 0},
+		{Endpoint: perModelKey(endpoint, "anthropic/haiku"), Time: start.Add(time.Minute), Prompt: 20, Generated: 3},
+		{Endpoint: perModelKey(endpoint, "anthropic/opus"), Time: start, Prompt: 7, Generated: 2},
+		// The SQL LIKE query can match a different endpoint when a URL has an underscore.
+		{Endpoint: perModelKey("http://proxyXone:8318", "wrong"), Time: start, Prompt: 1000, Generated: 1000},
+		{Endpoint: perModelKey("http://proxyXone:8318", "wrong"), Time: start.Add(time.Minute), Prompt: 2000, Generated: 2000},
+	}
+	in, out, measured, models := summarizeProxyTokens24h(endpoint, rows)
+	if !measured || in != 74 || out != 9 {
+		t.Fatalf("totals = %d/%d measured=%v, want 74/9 measured", in, out, measured)
+	}
+	if len(models) != 3 || models[0].Model != "openai/sol" || models[0].TokensIn24h != 54 || models[0].TokensOut24h != 6 ||
+		models[1].Model != "anthropic/haiku" || models[1].TokensIn24h != 20 || models[1].TokensOut24h != 3 ||
+		models[2].Model != "anthropic/opus" || models[2].Measured24h {
+		t.Fatalf("per-model usage = %+v", models)
+	}
+}
