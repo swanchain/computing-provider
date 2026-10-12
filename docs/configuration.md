@@ -38,6 +38,8 @@ WebSocketURL = "wss://inference-ws.swanchain.io"     # Swan Inference WebSocket 
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: Provider API key from https://inference.swanchain.io
 Models = ["meta-llama/Llama-3.2-3B-Instruct"]         # Models this provider serves (must match models.json keys)
 ServiceURL = ""                                      # Optional: HTTP API URL (auto-derived from WebSocketURL if empty)
+LocalGatewayPort = 9088                              # Optional: OpenAI-compatible gateway for your own clients (-1 disables)
+CLIProxyManagementKey = ""                           # Optional: CLIProxyAPI management secret-key, for proxy accounts and usage
 ```
 
 | Field | Required | Description |
@@ -47,6 +49,8 @@ ServiceURL = ""                                      # Optional: HTTP API URL (a
 | `ApiKey` | Yes | Provider API key (starts with `sk-prov-`). Get one at https://inference.swanchain.io |
 | `Models` | Yes | List of model names to serve (must match keys in `models.json`) |
 | `ServiceURL` | No | HTTP API URL for status checks. Auto-derived from WebSocketURL if empty |
+| `LocalGatewayPort` | No | Port of the loopback-only OpenAI-compatible gateway on `127.0.0.1` (default `9088`, `-1` disables) |
+| `CLIProxyManagementKey` | No | The `remote-management.secret-key` of your CLIProxyAPI instances. Enables the dashboard's Proxies tab (accounts, quota, per-model tokens) and direct-usage measurement for proxy-backed models |
 
 ### Logging
 
@@ -358,8 +362,11 @@ Each key in `models.json` is the marketplace model ID (must match a value in `Mo
 |-------|----------|-------------|
 | `endpoint` | Yes | Base URL of the local model server (`http://localhost:PORT`) |
 | `api_key` | No | API key sent to the local server (Bearer token) |
-| `category` | No | Model category — `text-generation`, `image-generation`, `embedding` |
+| `category` | No | Model category — `text-generation`, `image-generation`, `embedding`, `transcription` |
 | `local_model` | No | Model name to use when forwarding to the local server. Set this when the marketplace ID differs from what the server expects — e.g. marketplace has `openai/gpt-5.5` but the server only accepts `gpt-5.5`, or Ollama uses `llama3.2:3b` for `meta-llama/Llama-3.2-3B-Instruct` |
+| `local_endpoint` | No | A separate backend for the [local gateway](../README.md#local-gateway); hub requests and probes keep using `endpoint` |
+| `local_api_key` | No | API key for `local_endpoint` |
+| `local_only` | No | `true` serves the model through the local gateway only: never registered with Swan Inference (including on hot reload), hub requests refused, no probe completions |
 | `gpu_memory` | No | VRAM used by this model in MB (used for load scheduling) |
 | `format` | No | Weight format hint: `fp16`, `awq`, `gptq`, `gguf` |
 | `quantization` | No | Quantization detail: `q4_k_m`, `q8_0`, `w4a16`, etc. |
