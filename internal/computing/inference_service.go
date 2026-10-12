@@ -116,6 +116,12 @@ type InferenceService struct {
 
 	contextWarnMu sync.Mutex
 	contextWarned map[string]bool
+
+	// registerMu serialises updateClientModels. Registry callbacks each run on
+	// their own goroutine, so without it a call that read the ready set before
+	// a model turned healthy can finish last and overwrite the newer list —
+	// leaving that model unregistered until something else changes.
+	registerMu sync.Mutex
 }
 
 // NewInferenceService creates a new Inference service
@@ -203,13 +209,22 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	return s
 }
 
+// testHookAfterReadyRead, when set by a test, runs between reading the ready
+// set and publishing it — the window two concurrent calls used to race in.
+var testHookAfterReadyRead func()
+
 // updateClientModels updates the client's model list based on ready models
 // and re-registers with Swan Inference if the ready set changed
 func (s *InferenceService) updateClientModels() {
 	if s.client == nil || s.registry == nil {
 		return
 	}
+	s.registerMu.Lock()
+	defer s.registerMu.Unlock()
 	models := s.withoutLocalOnly(s.registry.GetReadyModelIDs())
+	if testHookAfterReadyRead != nil {
+		testHookAfterReadyRead()
+	}
 	if sameModelSet(s.client.ModelList(), models) {
 		return
 	}
