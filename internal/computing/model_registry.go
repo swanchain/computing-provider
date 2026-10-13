@@ -64,6 +64,10 @@ type RegisteredModel struct {
 	LoadedAt     time.Time   `json:"loaded_at,omitempty"`
 	UpdatedAt    time.Time   `json:"updated_at"`
 	Enabled      bool        `json:"enabled"`
+	// fileDisabled is models.json's "disabled" as last read. A reload applies
+	// it only when it changes, so an API enable or disable survives a reload
+	// of an unchanged file.
+	fileDisabled bool
 }
 
 // ModelRegistry manages the lifecycle of model configurations
@@ -222,7 +226,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.ContextLength != mapping.ContextLength ||
 				existingModel.LocalEndpoint != mapping.LocalEndpoint ||
 				existingModel.LocalAPIKey != mapping.LocalAPIKey ||
-				existingModel.LocalOnly != mapping.LocalOnly {
+				existingModel.LocalOnly != mapping.LocalOnly ||
+				existingModel.fileDisabled != mapping.Disabled {
 
 				existingModel.Endpoint = mapping.Endpoint
 				existingModel.Container = mapping.Container
@@ -236,6 +241,14 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.LocalEndpoint = mapping.LocalEndpoint
 				existingModel.LocalAPIKey = mapping.LocalAPIKey
 				existingModel.LocalOnly = mapping.LocalOnly
+				if existingModel.fileDisabled != mapping.Disabled {
+					existingModel.fileDisabled = mapping.Disabled
+					if mapping.Disabled {
+						disableLocked(existingModel)
+					} else {
+						enableLocked(existingModel)
+					}
+				}
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
@@ -279,6 +292,10 @@ func (r *ModelRegistry) loadConfig() error {
 				LoadedAt:      now,
 				UpdatedAt:     now,
 				Enabled:       true,
+				fileDisabled:  mapping.Disabled,
+			}
+			if mapping.Disabled {
+				disableLocked(model)
 			}
 			r.models[modelID] = model
 
@@ -582,6 +599,16 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 		return ErrModelNotFound
 	}
 
+	enableLocked(model)
+	model.UpdatedAt = time.Now()
+
+	logs.GetLogger().Infof("Enabled model: %s", modelID)
+	return nil
+}
+
+// enableLocked and disableLocked change a model's enabled state; the caller
+// holds r.mu.
+func enableLocked(model *RegisteredModel) {
 	model.Enabled = true
 
 	// DisableModel sets State as well as the flag, and nothing else clears it:
@@ -606,10 +633,12 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 		}
 		model.StateString = model.State.String()
 	}
-	model.UpdatedAt = time.Now()
+}
 
-	logs.GetLogger().Infof("Enabled model: %s", modelID)
-	return nil
+func disableLocked(model *RegisteredModel) {
+	model.Enabled = false
+	model.State = ModelStateDisabled
+	model.StateString = ModelStateDisabled.String()
 }
 
 // IsModelEnabled reports a model's enabled flag, and whether the registry knows
@@ -634,9 +663,7 @@ func (r *ModelRegistry) DisableModel(modelID string) error {
 		return ErrModelNotFound
 	}
 
-	model.Enabled = false
-	model.State = ModelStateDisabled
-	model.StateString = ModelStateDisabled.String()
+	disableLocked(model)
 	model.UpdatedAt = time.Now()
 
 	logs.GetLogger().Infof("Disabled model: %s", modelID)

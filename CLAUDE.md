@@ -144,6 +144,8 @@ The wizard handles:
 }
 ```
 
+> **Disabling:** `"disabled": true` keeps a model off across restarts; disabling through the API lasts only until the daemon restarts. A reload applies the file's value only when it changes, so it does not undo an API enable or disable.
+
 > **Note:** Model IDs use HuggingFace repo IDs (e.g., `meta-llama/Llama-3.2-3B-Instruct`). `local_model` is used when your server uses different model names (e.g., Ollama's `qwen2.5:7b`)
 
 **Start SGLang server:**
