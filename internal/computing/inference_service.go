@@ -92,6 +92,10 @@ type ModelMapping struct {
 	// completion is spent on it. For backends this node may use but must not
 	// offer — a subscription licensed to the operator alone, say.
 	LocalOnly bool `json:"local_only,omitempty"`
+	// Disabled keeps a model off across restarts. Disabling through the API
+	// lasts only for the life of the process, so a model whose server was
+	// stopped on purpose came back enabled after every restart.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // InferenceService manages the Inference client and inference handling
