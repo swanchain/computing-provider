@@ -138,6 +138,15 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		roles[ep][role], models[ep][model] = true, true
 	}
 	for id, m := range s.modelMappings {
+		// A disabled model is out of service and uses no proxy. Its server is
+		// usually stopped too, and an endpoint that cannot be reached is
+		// indistinguishable from a proxy that is down, so it would be listed
+		// as an empty proxy instance.
+		if s.registry != nil {
+			if rm, ok := s.registry.GetModel(id); ok && !rm.Enabled {
+				continue
+			}
+		}
 		// A local-only model's endpoint never sees hub traffic; it is the
 		// local gateway's backend whichever field names it.
 		if m.LocalOnly {

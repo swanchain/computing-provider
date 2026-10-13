@@ -152,3 +152,25 @@ func TestSummarizeProxyTokens24hMergesServedNames(t *testing.T) {
 		t.Fatalf("models = %+v, totals %d/%d; want one anthropic/claude-haiku row with 35/5", models, in, out)
 	}
 }
+
+// A disabled model's server is usually stopped. Unreachable, it cannot be told
+// apart from a proxy that is down, so it must not be listed as one.
+func TestProxyAccountsSkipsDisabledModels(t *testing.T) {
+	s := NewInferenceService("test-node", t.TempDir())
+	s.registry = NewModelRegistry("", nil)
+	s.registry.models["org/stopped"] = &RegisteredModel{ID: "org/stopped", Endpoint: "http://127.0.0.1:1", Enabled: false}
+	s.registry.models["org/down"] = &RegisteredModel{ID: "org/down", Endpoint: "http://127.0.0.1:2", Enabled: true}
+	s.modelMappings["org/stopped"] = ModelMapping{Endpoint: "http://127.0.0.1:1"}
+	s.modelMappings["org/down"] = ModelMapping{Endpoint: "http://127.0.0.1:2"}
+	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.managementKey = "mk"
+
+	r := s.ProxyAccounts(context.Background())
+	var seen []string
+	for _, inst := range r.Instances {
+		seen = append(seen, inst.Endpoint)
+	}
+	if len(seen) != 1 || seen[0] != "http://127.0.0.1:2" {
+		t.Fatalf("instances %v, want only the enabled model's endpoint (a proxy that is down still shows)", seen)
+	}
+}
