@@ -42,6 +42,7 @@ func TestProxyAccountsReport(t *testing.T) {
 	s.modelMappings["org/llama"] = ModelMapping{Endpoint: llama.URL}
 	s.modelMappings["anthropic/private"] = ModelMapping{Endpoint: "http://127.0.0.1:1", LocalEndpoint: "http://127.0.0.1:1", LocalOnly: true}
 	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.queueStart["http://127.0.0.1:1"] = time.Now() // read as a proxy before it went down
 
 	if r := s.ProxyAccounts(context.Background()); len(r.Instances) != 0 || r.Note == "" {
 		t.Fatalf("without a management key: %+v, want a note and nothing else", r)
@@ -164,6 +165,7 @@ func TestProxyAccountsSkipsDisabledModels(t *testing.T) {
 	s.modelMappings["org/down"] = ModelMapping{Endpoint: "http://127.0.0.1:2"}
 	s.usageSampler = NewBackendUsageSampler(nil)
 	s.usageSampler.managementKey = "mk"
+	s.usageSampler.queueStart["http://127.0.0.1:2"] = time.Now()
 
 	r := s.ProxyAccounts(context.Background())
 	var seen []string
@@ -172,5 +174,26 @@ func TestProxyAccountsSkipsDisabledModels(t *testing.T) {
 	}
 	if len(seen) != 1 || seen[0] != "http://127.0.0.1:2" {
 		t.Fatalf("instances %v, want only the enabled model's endpoint (a proxy that is down still shows)", seen)
+	}
+}
+
+// An enabled model whose server was stopped or moved is unreachable too. Only
+// an endpoint already seen answering as a proxy is listed when unreachable;
+// anything else would be shown as an empty proxy.
+func TestProxyAccountsSkipsUnreachableEndpointsNeverSeenAsProxies(t *testing.T) {
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["org/moved"] = ModelMapping{Endpoint: "http://127.0.0.1:3"}
+	s.modelMappings["openai/down"] = ModelMapping{Endpoint: "http://127.0.0.1:4"}
+	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.managementKey = "mk"
+	s.usageSampler.queueStart["http://127.0.0.1:4"] = time.Now()
+
+	r := s.ProxyAccounts(context.Background())
+	var seen []string
+	for _, inst := range r.Instances {
+		seen = append(seen, inst.Endpoint)
+	}
+	if len(seen) != 1 || seen[0] != "http://127.0.0.1:4" {
+		t.Fatalf("instances %v, want only the endpoint known to be a proxy", seen)
 	}
 }

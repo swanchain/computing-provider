@@ -177,6 +177,13 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		if err != nil && strings.Contains(err.Error(), "HTTP 404") {
 			continue // a model server, not a proxy
 		}
+		if err != nil && !b.knownProxy(ep) {
+			// Unreachable and never seen answering as a proxy: most often a
+			// model server that was stopped or moved while still configured.
+			// Listing it would show an empty "proxy"; a real proxy that goes
+			// down has drained usage before and is still listed.
+			continue
+		}
 		inst := ProxyInstance{Endpoint: ep, Roles: sortedKeys(roles[ep]), Models: sortedKeys(models[ep]), Accounts: []ProxyAccount{}, ModelUsage24h: []ProxyModelUsage{}}
 		if err != nil {
 			inst.Error = err.Error()
@@ -222,6 +229,33 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		report.Instances = append(report.Instances, inst)
 	}
 	return report
+}
+
+// knownProxy reports whether ep has been read as a CLIProxyAPI usage queue,
+// in this process or, from the stored per-model samples, before a restart.
+func (b *BackendUsageSampler) knownProxy(ep string) bool {
+	b.mu.Lock()
+	_, seen := b.queueStart[ep]
+	b.mu.Unlock()
+	if seen {
+		return true
+	}
+	database := db.NewDbService()
+	if database == nil {
+		return false
+	}
+	var rows []BackendUsageSample
+	prefix := ep + perModelSep
+	if err := database.Select("endpoint").Where("endpoint LIKE ?", prefix+"%").Limit(50).Find(&rows).Error; err != nil {
+		return false
+	}
+	for _, r := range rows {
+		// LIKE treats URL underscores as wildcards; the prefix check is exact.
+		if strings.HasPrefix(r.Endpoint, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // quotaWindows reads the usage windows from the rate-limit headers the
