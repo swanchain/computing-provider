@@ -130,6 +130,11 @@ type InferenceService struct {
 	// registered set since the daemon started, so a model that flaps stands
 	// out. Guarded by registerMu.
 	registrationDrops map[string]*RegistrationDrops
+	// fromRegistry is set once a registration has been built from the
+	// registry's ready set. The one before it is config.toml's list, which
+	// can name models that are disabled or no longer configured; replacing
+	// it is not a change worth reporting. Guarded by registerMu.
+	fromRegistry bool
 }
 
 // RegistrationDrops is how often a model has left the set registered with
@@ -260,10 +265,11 @@ func (s *InferenceService) updateClientModels() {
 // registered set, with the reason, and counts the departures. The
 // registration line itself lists only the new set, which leaves the operator
 // diffing two long lists and then hunting for the failure behind it. The
-// first registration is not a change and is not itemised. Called with
-// registerMu held.
+// startup registration comes from config.toml, so the first registration
+// built from the registry is not itemised. Called with registerMu held.
 func (s *InferenceService) logRegistrationChanges(previous, current []string) {
-	if len(previous) == 0 {
+	if !s.fromRegistry {
+		s.fromRegistry = true
 		return
 	}
 	was := make(map[string]bool, len(previous))

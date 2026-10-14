@@ -267,6 +267,7 @@ function App() {
                     healthLog={models?.health_log}
                     prices={models?.prices ?? {}}
                     summary={models?.summary}
+                    drops={status?.registration_drops}
                     loading={modelsLoading}
                     error={modelsError}
                     onRefresh={refetchModels}

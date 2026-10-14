@@ -206,6 +206,14 @@ export interface ConnectionStatus {
   version?: string;
   /** Full build string, e.g. "0.5.0+mainnet+git.5f7e316". */
   build?: string;
+  /** Per model: how often it left the hub registration since the daemon started, and why it last did. */
+  registration_drops?: Record<string, RegistrationDrops>;
+}
+
+export interface RegistrationDrops {
+  count: number;
+  last_at: string;
+  last_reason: string;
 }
 
 export interface RequestManagement {
