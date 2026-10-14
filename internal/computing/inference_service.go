@@ -429,7 +429,7 @@ func (s *InferenceService) Start() error {
 	// Set up model health provider for heartbeats (backup for health update messages)
 	s.client.SetModelHealthProvider(func() map[string]string {
 		if s.registry != nil {
-			return s.registry.GetAllModelHealthMap()
+			return s.hubModelHealth(s.registry.GetAllModelHealthMap())
 		}
 		return nil
 	})
@@ -504,7 +504,7 @@ func (s *InferenceService) Start() error {
 	// Set up health update callback to notify Swan Inference when model health changes
 	s.registry.SetHealthUpdateCallback(func(modelHealth map[string]string) {
 		if s.client != nil && s.client.IsConnected() {
-			s.client.SendModelHealthUpdate(modelHealth)
+			s.client.SendModelHealthUpdate(s.hubModelHealth(modelHealth))
 		}
 		// A health transition can change the ready set (e.g. a hot-added model
 		// passing its first health check) — re-register so Swan Inference sees it

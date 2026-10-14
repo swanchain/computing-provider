@@ -224,3 +224,22 @@ func TestLocalOnlyModelNeverReachesTheHub(t *testing.T) {
 		}
 	}
 }
+
+// Registration leaving a local-only model out is not enough: the hub reads the
+// health report too, and a model reported healthy there was put back on the
+// routing table within a second of every register — the node then refused
+// every request routed for it. The report bound for the hub must omit it.
+func TestLocalOnlyModelIsLeftOutOfTheHubHealthReport(t *testing.T) {
+	s := NewInferenceService("test-node", t.TempDir())
+	s.registry = NewModelRegistry("", nil)
+	s.registry.models["org/public"] = &RegisteredModel{ID: "org/public", Enabled: true, State: ModelStateReady, Health: ModelHealthHealthy, HealthString: "healthy"}
+	s.registry.models["anthropic/private"] = &RegisteredModel{ID: "anthropic/private", Enabled: true, LocalOnly: true, State: ModelStateReady, Health: ModelHealthHealthy, HealthString: "healthy"}
+
+	got := s.hubModelHealth(s.registry.GetAllModelHealthMap())
+	if _, ok := got["anthropic/private"]; ok {
+		t.Errorf("health report for the hub carries the local-only model: %v", got)
+	}
+	if _, ok := got["org/public"]; !ok {
+		t.Errorf("health report lost the public model: %v", got)
+	}
+}
