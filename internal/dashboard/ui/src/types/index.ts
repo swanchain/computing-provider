@@ -536,3 +536,33 @@ export interface ProxyAccountsReport {
   instances: ProxyInstance[];
   note?: string;
 }
+
+/** Traffic through the node over a window, from GET /inference/routes. */
+export interface RouteMap {
+  window: string;
+  since: string;
+  links: RouteLink[];
+  backends: RouteBackend[];
+}
+
+export interface RouteLink {
+  source: string;
+  model: string;
+  backend: string;
+  requests: number;
+  failures: number;
+  tokens_in: number;
+  tokens_out: number;
+  avg_latency_ms: number;
+  last_at: string;
+  last_error?: string;
+}
+
+export interface RouteBackend {
+  endpoint: string;
+  roles: string[];
+  models: string[];
+  /** "up", "down" or "unknown". */
+  health: string;
+  error?: string;
+}

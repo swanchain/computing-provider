@@ -876,6 +876,7 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `GET /models/:model_id/metrics` — per-model detailed metrics
 - `GET /health` — all models health
 - `GET /proxy-accounts` — each CLIProxyAPI instance among the models' endpoints and local_endpoints (needs `CLIProxyManagementKey`): its role (`hub` / `local`), accounts with plan, status, usage windows (percent used and reset, as the upstream last reported them), cooldowns and stored-token expiry, and 24h tokens from its usage counters
+- `GET /routes?window=15m` — traffic over a window (`5m`, `15m`, `1h`, `6h`, `24h`) as source → model → backend links with request, failure, latency and token totals and the newest error, plus every configured backend's state; a backend with no traffic is still listed. Rows without a recorded backend (probes, older rows) are put on the model's configured endpoint, except hub requests for a local-only model and requests recorded as not forwarded. The dashboard's Routing view draws it.
 - `POST /models/:model_id/enable` — enable a model
 - `POST /models/:model_id/disable` — disable a model
 - `POST /models/:model_id/healthcheck` — force health check

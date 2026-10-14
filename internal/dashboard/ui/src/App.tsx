@@ -6,6 +6,7 @@ import {
   LogOut,
   ReceiptText,
   RefreshCw,
+  Route,
   Server,
   Settings2,
 } from 'lucide-react';
@@ -29,13 +30,15 @@ import { ModelDetailPanel } from './components/ModelDetailPanel';
 import { AuthDialog } from './components/AuthDialog';
 import { SettingsPanel } from './components/SettingsPanel';
 import { OperationalSummary } from './components/OperationalSummary';
+import { RoutingPanel } from './components/RoutingPanel';
 
 const POLL_INTERVAL = 5000;
-type DashboardView = 'overview' | 'transactions' | 'proxies' | 'settings';
+type DashboardView = 'overview' | 'transactions' | 'routing' | 'proxies' | 'settings';
 
 const views: Array<{ id: DashboardView; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'transactions', label: 'Requests', icon: ReceiptText },
+  { id: 'routing', label: 'Routing', icon: Route },
   { id: 'proxies', label: 'Proxies', icon: KeyRound },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
@@ -57,6 +60,7 @@ function App() {
   const [chartWindow, setChartWindow] = useState('24h');
   const [showMix, setShowMix] = useState(false);
   const [showPerformance, setShowPerformance] = useState(false);
+  const [routeWindow, setRouteWindow] = useState('15m');
 
   const {
     data: metrics,
@@ -97,6 +101,7 @@ function App() {
 
   const hubReport = usePolling(useCallback(() => api.getHubModels(), []), 120_000);
   const proxyReport = usePolling(useCallback(() => api.getProxyAccounts(), []), 60_000);
+  const routeReport = usePolling(useCallback(() => api.getRoutes(routeWindow), [routeWindow]), 15_000);
   const usageReport = usePolling(useCallback(() => api.getUsageHistory(chartWindow, 'node'), [chartWindow]), 60_000);
 
   useEffect(() => {
@@ -326,6 +331,8 @@ function App() {
         )}
 
         {activeView === 'transactions' && <RequestHistoryPanel models={models?.models ?? []} />}
+
+        {activeView === 'routing' && <RoutingPanel report={routeReport} window={routeWindow} onWindowChange={setRouteWindow} />}
 
         {activeView === 'proxies' && (
           <section aria-labelledby="proxies-heading" className="space-y-6">

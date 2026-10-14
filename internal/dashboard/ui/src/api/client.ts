@@ -16,7 +16,7 @@ import type {
   LogSettings,
   RequestLimitSettings,
   DashboardModel,
-  SettingsSaveResult, ProxyAccountsReport } from '../types';
+  SettingsSaveResult, ProxyAccountsReport, RouteMap } from '../types';
 
 const API_BASE = '/api/v1/computing/inference';
 const TOKEN_KEY = 'computing-provider-control-token';
@@ -131,6 +131,9 @@ export const api = {
 
   // The accounts behind each CLIProxyAPI instance
   getProxyAccounts: () => fetchJson<ProxyAccountsReport>('/proxy-accounts'),
+
+  // Traffic as source -> model -> backend links over a window
+  getRoutes: (window: string) => fetchJson<RouteMap>(`/routes?window=${window}`),
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {
