@@ -17,6 +17,7 @@ func TestContextSourceOmittedWhenNotDetermined(t *testing.T) {
 	}{
 		{"detected", ModelContextInfo{Length: 32768, Source: ContextSourceDetected}, ContextSourceDetected},
 		{"override", ModelContextInfo{Length: 128000, Source: ContextSourceOverride}, ContextSourceOverride},
+		{"catalog is absent", ModelContextInfo{Length: 100000, Source: ContextSourceCatalog}, ""},
 		{"unknown is absent", ModelContextInfo{Length: 0, Source: ContextSourceUnknown}, ""},
 		{"pending is absent", ModelContextInfo{Length: 0, Source: ContextSourcePending}, ""},
 		// A source without a length has nothing whose provenance could matter.
@@ -25,6 +26,25 @@ func TestContextSourceOmittedWhenNotDetermined(t *testing.T) {
 		if got := declaredContextSource(tc.info); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestCatalogWindowNeverDeclaredToHub(t *testing.T) {
+	c := &InferenceClient{models: []string{"catalog-model"}}
+	c.SetModelContextsProvider(func() map[string]ModelContextInfo {
+		return map[string]ModelContextInfo{"catalog-model": {Length: 100000, Source: ContextSourceCatalog}}
+	})
+	c.SetModelMappingsProvider(func() map[string]ModelMapping {
+		return map[string]ModelMapping{"catalog-model": {Category: "text-generation"}}
+	})
+	if got := c.buildModelMetadata(); len(got) != 0 {
+		t.Fatalf("heartbeat included catalog-only context: %+v", got)
+	}
+	if got := c.loadModelHashes()[0]; got.ContextLength != 0 || got.ContextSource != "" {
+		t.Fatalf("registration included catalog-only context: %+v", got)
+	}
+	if got := c.buildModelDeclarations()[0].InputModalities[0].MaxContextLength; got != nil {
+		t.Fatalf("declaration included catalog-only context: %+v", got)
 	}
 }
 

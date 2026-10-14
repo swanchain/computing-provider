@@ -528,6 +528,8 @@ func printLocalContexts(apiPort int) {
 		switch info.Source {
 		case "override", "detected":
 			fmt.Printf("  %-40s %8d  (%s)\n", id, info.Length, info.Source)
+		case "catalog":
+			fmt.Printf("  %-40s %8d  (models.dev catalog; backend not verified)\n", id, info.Length)
 		case "pending":
 			fmt.Printf("  %-40s %8s  (health check pending)\n", id, "-")
 		default:

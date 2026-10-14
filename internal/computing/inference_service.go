@@ -118,8 +118,9 @@ type InferenceService struct {
 	selfCheck          *selfCheckRunner
 	noticeLimiter      *noticeLimiter
 
-	contextWarnMu sync.Mutex
-	contextWarned map[string]bool
+	contextWarnMu   sync.Mutex
+	contextWarned   map[string]bool
+	catalogContexts map[string]int
 
 	// registerMu serialises updateClientModels. Registry callbacks each run on
 	// their own goroutine, so without it a call that read the ready set before
@@ -291,6 +292,11 @@ func (s *InferenceService) Start() error {
 	// Start model registry (loads models and starts file watcher)
 	if err := s.registry.Start(); err != nil {
 		logs.GetLogger().Warnf("Failed to start model registry: %v", err)
+	}
+	if contexts, err := loadCatalogContexts(); err == nil {
+		s.catalogContexts = contexts
+	} else {
+		logs.GetLogger().Infof("models.dev context catalogue unavailable; continuing with backend detection and manual overrides: %v", err)
 	}
 
 	// Start rate limiter (with adaptive GPU-aware adjustment)
@@ -556,9 +562,11 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	selectedRoute(ctx, endpoint, payload.ModelID, localModel)
 	op := resolveOperation(payload.Operation, category, payload.Request)
 	var response json.RawMessage
 	forward := func() error {
+		routeAttempt(ctx)
 		var ferr error
 		switch op {
 		case OpTranscriptions:
@@ -911,21 +919,22 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	selectedRoute(ctx, endpoint, payload.ModelID, localModel)
+	routeAttempt(ctx)
 	return s.streamFromDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
 }
 
-// resolveModelContexts returns each configured model's real context window and
-// how it was determined: a manual context_length from models.json wins;
-// otherwise the value the health checker detected from the backend's
-// /v1/models (max_model_len). Models with no known window are omitted — the
-// server falls back to the catalog value for those (#61).
+// resolveModelContexts returns backend-verified or manually asserted windows
+// for hub registration. The theoretical models.dev fallback is deliberately
+// omitted: the hub has its own catalogue and must not treat that number as a
+// measurement of this particular backend's capacity.
 //
 // The provenance travels with the value because the two paths are not equally
 // trustworthy, and the number alone does not say which one produced it.
 func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 	contexts := make(map[string]ModelContextInfo)
 	for modelID := range s.modelMappings {
-		if info := s.ModelContext(modelID); info.Length > 0 {
+		if info := s.ModelContext(modelID); info.Length > 0 && info.Source != ContextSourceCatalog {
 			contexts[modelID] = info
 		} else if info.Source == ContextSourceUnknown {
 			s.warnUnknownContext(modelID)
@@ -941,6 +950,7 @@ func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 const (
 	ContextSourceOverride = "override" // context_length in models.json
 	ContextSourceDetected = "detected" // max_model_len from the backend's /v1/models
+	ContextSourceCatalog  = "catalog"  // public models.dev theoretical limit; not backend-verified
 	ContextSourceUnknown  = "unknown"  // the backend declares none and no override is set
 	ContextSourcePending  = "pending"  // no health check has completed yet
 )
@@ -959,13 +969,15 @@ func (s *InferenceService) ModelContext(modelID string) ModelContextInfo {
 	if ok && mapping.ContextLength > 0 {
 		return ModelContextInfo{Length: mapping.ContextLength, Source: ContextSourceOverride}
 	}
-	if s.healthChecker == nil {
-		return ModelContextInfo{Source: ContextSourcePending}
+	if s.healthChecker != nil {
+		if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
+			return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
+		}
 	}
-	if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
-		return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
+	if catalog := s.catalogContexts[modelID]; catalog > 0 {
+		return ModelContextInfo{Length: catalog, Source: ContextSourceCatalog}
 	}
-	if s.healthChecker.ContextProbed(modelID) {
+	if s.healthChecker != nil && s.healthChecker.ContextProbed(modelID) {
 		return ModelContextInfo{Source: ContextSourceUnknown}
 	}
 	return ModelContextInfo{Source: ContextSourcePending}

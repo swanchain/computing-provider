@@ -69,6 +69,26 @@ func TestRequestStorePersistsAndPages(t *testing.T) {
 	}
 }
 
+func TestRequestStorePersistsRouteReceipt(t *testing.T) {
+	store := withStore(t, 7, 1000)
+	now := time.Now().UTC()
+	store.Record(RequestMetric{
+		RequestID: "routed", Model: "public/model", Source: SourceHub,
+		StartTime: now, EndTime: now.Add(time.Second), Success: true,
+		RouteRecorded: true, BackendEndpoint: "http://127.0.0.1:8318",
+		BackendModel: "upstream/model", BackendAttempts: 2,
+	})
+	flush(t, store)
+	page, err := store.Query(RequestHistoryQuery{Limit: 10})
+	if err != nil || len(page.Requests) != 1 {
+		t.Fatalf("query = %+v, %v", page, err)
+	}
+	got := page.Requests[0]
+	if !got.RouteRecorded || got.BackendEndpoint != "http://127.0.0.1:8318" || got.BackendModel != "upstream/model" || got.BackendAttempts != 2 {
+		t.Fatalf("route receipt did not survive storage: %+v", got)
+	}
+}
+
 func TestRequestStoreFiltersByModelAndSource(t *testing.T) {
 	store := withStore(t, 7, 1000)
 	now := time.Now().UTC()

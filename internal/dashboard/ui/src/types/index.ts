@@ -365,6 +365,12 @@ export interface RequestLog {
   source?: RequestSource;
   /** Local-gateway requests only: the calling process and its User-Agent. */
   client?: string;
+  /** Route information is absent on history recorded before this feature. */
+  route_recorded?: boolean;
+  /** Backend origin only; credentials, paths and query strings are never stored. */
+  backend_endpoint?: string;
+  backend_model?: string;
+  backend_attempts?: number;
 }
 
 export type RequestSource = 'hub' | 'health' | 'selfcheck' | 'local';

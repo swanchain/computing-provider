@@ -1678,10 +1678,11 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	// Registered so a cancel from Swan Inference can stop the backend call.
 	ctx, done := c.beginRequest(requestID)
 	defer done()
+	ctx, route := withRequestRoute(ctx)
 
 	// Handle streaming inference
 	if payload.Stream {
-		c.handleStreamingInference(ctx, requestID, payload, startTime)
+		c.handleStreamingInference(ctx, requestID, payload, startTime, route)
 		return
 	}
 
@@ -1702,7 +1703,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 		// Swan Inference gave up on this request and is no longer waiting, so
 		// nothing is sent back. Recorded so the history shows why it stopped.
 		logs.GetLogger().Infof("Inference request %s for model %s cancelled by Swan Inference after %dms (%s)", requestID, payload.ModelID, latency, reason)
-		c.metrics.RecordRequestEnd(RequestMetric{
+		rec := RequestMetric{
 			Source:      SourceHub,
 			RequestID:   requestID,
 			Model:       payload.ModelID,
@@ -1711,7 +1712,9 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 			LatencyMs:   latencyFloat,
 			Success:     false,
 			ErrorReason: cancelledError(reason),
-		})
+		}
+		route.apply(&rec)
+		c.metrics.RecordRequestEnd(rec)
 		return
 	}
 
@@ -1727,7 +1730,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 
 		// Record failed request
 		logs.GetLogger().Errorf("Inference request %s for model %s failed after %dms (status %d): %v", requestID, payload.ModelID, latency, statusCode, err)
-		c.metrics.RecordRequestEnd(RequestMetric{
+		rec := RequestMetric{
 			Source:      SourceHub,
 			RequestID:   requestID,
 			Model:       payload.ModelID,
@@ -1736,7 +1739,9 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 			LatencyMs:   latencyFloat,
 			Success:     false,
 			ErrorReason: err.Error(),
-		})
+		}
+		route.apply(&rec)
+		c.metrics.RecordRequestEnd(rec)
 		response = &InferenceResponse{
 			RequestID:  requestID,
 			Error:      err.Error(),
@@ -1746,7 +1751,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	} else {
 		// Extract token counts from response if available
 		tokensIn, tokensOut := extractTokenCounts(response.Response)
-		c.metrics.RecordRequestEnd(RequestMetric{
+		rec := RequestMetric{
 			Source:    SourceHub,
 			RequestID: requestID,
 			Model:     payload.ModelID,
@@ -1756,7 +1761,9 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 			TokensIn:  tokensIn,
 			TokensOut: tokensOut,
 			Success:   true,
-		})
+		}
+		route.apply(&rec)
+		c.metrics.RecordRequestEnd(rec)
 		response.RequestID = requestID
 		response.Latency = latency
 	}
@@ -1764,10 +1771,10 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 	c.sendInferenceResponse(response)
 }
 
-func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestID string, payload InferencePayload, startTime time.Time) {
+func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestID string, payload InferencePayload, startTime time.Time, route *requestRoute) {
 	if c.streamingInferenceHandler == nil {
 		logs.GetLogger().Errorf("No streaming inference handler configured")
-		c.metrics.RecordRequestEnd(RequestMetric{
+		rec := RequestMetric{
 			Source:      SourceHub,
 			RequestID:   requestID,
 			Model:       payload.ModelID,
@@ -1776,7 +1783,9 @@ func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestI
 			Streaming:   true,
 			Success:     false,
 			ErrorReason: "streaming not supported",
-		})
+		}
+		route.apply(&rec)
+		c.metrics.RecordRequestEnd(rec)
 		c.sendError(requestID, 501, "streaming not supported")
 		return
 	}
@@ -1830,6 +1839,7 @@ func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestI
 		Success:   err == nil,
 	}
 	streamReq.Source = SourceHub
+	route.apply(&streamReq)
 	if reason := c.cancelReason(requestID); reason != "" {
 		// Swan Inference stopped reading this stream; no stream_end is owed.
 		streamReq.Success = false
@@ -2385,6 +2395,13 @@ func declaredContextSource(info ModelContextInfo) string {
 	}
 }
 
+func declaredContextLength(info ModelContextInfo) int {
+	if declaredContextSource(info) == "" {
+		return 0
+	}
+	return info.Length
+}
+
 // buildModelMetadata builds the lightweight per-model metadata list for
 // heartbeats: context window (manual or backend-detected), format, and
 // quantization — without touching hash manifests on disk (#61).
@@ -2402,7 +2419,7 @@ func (c *InferenceClient) buildModelMetadata() []ModelInfo {
 	for _, modelID := range c.models {
 		info := ModelInfo{
 			ModelID:       modelID,
-			ContextLength: contexts[modelID].Length,
+			ContextLength: declaredContextLength(contexts[modelID]),
 			ContextSource: declaredContextSource(contexts[modelID]),
 		}
 		if mapping, ok := mappings[modelID]; ok {
@@ -2443,7 +2460,7 @@ func (c *InferenceClient) loadModelHashes() []ModelInfo {
 			info.Format = mapping.Format
 			info.Quantization = mapping.Quantization
 		}
-		info.ContextLength = contexts[modelID].Length
+		info.ContextLength = declaredContextLength(contexts[modelID])
 		info.ContextSource = declaredContextSource(contexts[modelID])
 
 		h := c.readWeightHash(modelID, true)
@@ -2830,7 +2847,7 @@ func (c *InferenceClient) buildModelDeclarations() []ModelDeclaration {
 	decls := make([]ModelDeclaration, 0, len(c.models))
 	for _, modelID := range c.models {
 		mapping := mappings[modelID]
-		in, out := declaredModalitiesFor(mapping.Category, contexts[modelID].Length)
+		in, out := declaredModalitiesFor(mapping.Category, declaredContextLength(contexts[modelID]))
 
 		d := ModelDeclaration{
 			SchemaVersion:    ModelDeclarationSchemaVersion,

@@ -135,10 +135,11 @@ knowing about up front:
 - **`local_model`** — set it when your server's name for the model differs from
   the marketplace ID (Ollama's `qwen2.5:7b` for `Qwen/Qwen2.5-7B-Instruct`).
 - **`context_length`** — set it for **any backend other than vLLM or SGLang**.
-  Only those two expose `max_model_len`, so for Ollama, llama.cpp, LiteLLM and
-  other OpenAI-compatible proxies nothing is detected and the marketplace
-  advertises the catalog's theoretical window instead of yours. Clients then
-  size prompts your backend will reject. See
+  Only those two expose `max_model_len`; for Ollama, llama.cpp, LiteLLM and
+  other OpenAI-compatible proxies the provider can show a labelled models.dev
+  catalogue fallback, but that theoretical window is not verified against your
+  backend or sent to the hub as its capacity. Clients may still size prompts
+  your backend will reject. See
   [configuration.md](configuration.md#context-windows).
 
 ### 3. Verify
