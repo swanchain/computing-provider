@@ -15,10 +15,13 @@ func TestRegistrationDropsNameTheModelAndReason(t *testing.T) {
 	s.registry.models["org/off"] = &RegisteredModel{ID: "org/off", Enabled: true, State: ModelStateReady, Health: ModelHealthHealthy}
 	s.healthChecker = NewModelHealthChecker(DefaultHealthCheckConfig())
 	s.client = &InferenceClient{metrics: NewInferenceMetrics()}
+	// The startup registration is config.toml's list, which may name a model
+	// that is disabled; the first ready set replacing it is not a drop.
+	s.client.SetModelList([]string{"org/steady", "org/flaky", "org/off", "org/stale"})
 
 	s.updateClientModels()
 	if d := s.GetRegistrationDrops(); len(d) != 0 {
-		t.Fatalf("first registration counted drops: %v", d)
+		t.Fatalf("replacing the config.toml list counted drops: %v", d)
 	}
 
 	setHealth := func(id string, h ModelHealth, state ModelState) {
