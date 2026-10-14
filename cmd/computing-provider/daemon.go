@@ -464,6 +464,12 @@ func runDaemon(cctx *cli.Context) error {
 		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
 	})
 
+	// Traffic over a recent window as source -> model -> backend links, with
+	// every configured backend's state, for the dashboard's Routing view.
+	router.GET("/inference/routes", func(c *gin.Context) {
+		c.JSON(200, inferenceService.Routes(c.DefaultQuery("window", "15m")))
+	})
+
 	// Request history endpoint
 	router.GET("/inference/requests", func(c *gin.Context) {
 		limit, err := strconv.Atoi(c.DefaultQuery("limit", "100"))
