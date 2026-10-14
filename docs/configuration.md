@@ -101,17 +101,17 @@ Back up `private_key` somewhere safe. It is 32 bytes and irreplaceable.
 
 ### Context windows
 
-`context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose**. For a backend that does not expose it, the provider fetches the public [models.dev catalogue](https://models.dev) at startup and shows its theoretical model window as a labelled fallback in local status. That number is **not** proof of this backend's capacity, so it is not sent to Swan Inference as a backend-verified limit. The hub may assume its own catalogue value; long prompts can still be rejected with `400 exceeds the available context size` unless you set a real `context_length`.
+`context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose**. For a backend that does not expose it, local status shows the window Swan Inference assumes for the model, read from the platform's per-model view of this provider and refreshed every ten minutes. That is the hub's own catalogue value, **not** a measurement of this backend, so it is never sent back to the hub. Clients size prompts by it, and long prompts are rejected with `400 exceeds the available context size` if the backend accepts less — set a real `context_length`.
 
 | Source | Meaning |
 |--------|---------|
 | `override` | `context_length` set in `models.json` — always wins |
 | `detected` | Read from the backend's `max_model_len` |
-| `catalog` | Theoretical models.dev window, shown locally only; backend not verified |
+| `hub` | The window Swan Inference assumes; shown locally only, backend not verified |
 | `not reported` | Neither available; the catalog value is assumed |
 | `health check pending` | The first health check has not completed yet |
 
-`computing-provider inference status` prints the window and source per model. The provider logs a warning once per model when neither the backend nor the catalogue reports a window. Catalogue retrieval is best-effort and has a three-second startup timeout.
+`computing-provider inference status` prints the window and source per model. The provider logs a warning once per model when the backend reports no window, naming the hub's assumed value when it is known.
 
 The source travels with the value to Swan Inference as `context_source`, because
 the two paths are not equally trustworthy and the number alone does not say

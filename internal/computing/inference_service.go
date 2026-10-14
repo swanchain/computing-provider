@@ -118,9 +118,14 @@ type InferenceService struct {
 	selfCheck          *selfCheckRunner
 	noticeLimiter      *noticeLimiter
 
-	contextWarnMu   sync.Mutex
-	contextWarned   map[string]bool
-	catalogContexts map[string]int
+	contextWarnMu sync.Mutex
+	contextWarned map[string]bool
+	// hubContexts is the window Swan Inference assumes for each model this
+	// provider offers, from the platform's per-model view. Shown locally as a
+	// fallback; never declared back to the hub, which would launder its own
+	// assumption into a backend measurement.
+	hubContextMu sync.RWMutex
+	hubContexts  map[string]int
 
 	// registerMu serialises updateClientModels. Registry callbacks each run on
 	// their own goroutine, so without it a call that read the ready set before
@@ -292,11 +297,6 @@ func (s *InferenceService) Start() error {
 	// Start model registry (loads models and starts file watcher)
 	if err := s.registry.Start(); err != nil {
 		logs.GetLogger().Warnf("Failed to start model registry: %v", err)
-	}
-	if contexts, err := loadCatalogContexts(); err == nil {
-		s.catalogContexts = contexts
-	} else {
-		logs.GetLogger().Infof("models.dev context catalogue unavailable; continuing with backend detection and manual overrides: %v", err)
 	}
 
 	// Start rate limiter (with adaptive GPU-aware adjustment)
@@ -925,8 +925,8 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 }
 
 // resolveModelContexts returns backend-verified or manually asserted windows
-// for hub registration. The theoretical models.dev fallback is deliberately
-// omitted: the hub has its own catalogue and must not treat that number as a
+// for hub registration. The hub's assumed window is deliberately omitted: it
+// is the hub's own number, and sending it back would present it as a
 // measurement of this particular backend's capacity.
 //
 // The provenance travels with the value because the two paths are not equally
@@ -934,10 +934,12 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 	contexts := make(map[string]ModelContextInfo)
 	for modelID := range s.modelMappings {
-		if info := s.ModelContext(modelID); info.Length > 0 && info.Source != ContextSourceCatalog {
+		info := s.ModelContext(modelID)
+		switch {
+		case info.Length > 0 && info.Source != ContextSourceHub:
 			contexts[modelID] = info
-		} else if info.Source == ContextSourceUnknown {
-			s.warnUnknownContext(modelID)
+		case info.Source == ContextSourceUnknown, info.Source == ContextSourceHub:
+			s.warnUnknownContext(modelID, info)
 		}
 	}
 	if len(contexts) == 0 {
@@ -950,7 +952,7 @@ func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 const (
 	ContextSourceOverride = "override" // context_length in models.json
 	ContextSourceDetected = "detected" // max_model_len from the backend's /v1/models
-	ContextSourceCatalog  = "catalog"  // public models.dev theoretical limit; not backend-verified
+	ContextSourceHub      = "hub"      // the window Swan Inference assumes; not backend-verified
 	ContextSourceUnknown  = "unknown"  // the backend declares none and no override is set
 	ContextSourcePending  = "pending"  // no health check has completed yet
 )
@@ -974,13 +976,30 @@ func (s *InferenceService) ModelContext(modelID string) ModelContextInfo {
 			return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
 		}
 	}
-	if catalog := s.catalogContexts[modelID]; catalog > 0 {
-		return ModelContextInfo{Length: catalog, Source: ContextSourceCatalog}
+	s.hubContextMu.RLock()
+	assumed := s.hubContexts[modelID]
+	s.hubContextMu.RUnlock()
+	if assumed > 0 {
+		return ModelContextInfo{Length: assumed, Source: ContextSourceHub}
 	}
 	if s.healthChecker != nil && s.healthChecker.ContextProbed(modelID) {
 		return ModelContextInfo{Source: ContextSourceUnknown}
 	}
 	return ModelContextInfo{Source: ContextSourcePending}
+}
+
+// SetHubContexts records the window the platform assumes for each model it
+// lists for this provider.
+func (s *InferenceService) SetHubContexts(models []PlatformModel) {
+	contexts := make(map[string]int, len(models))
+	for _, m := range models {
+		if m.ContextLength > 0 {
+			contexts[m.ModelID] = m.ContextLength
+		}
+	}
+	s.hubContextMu.Lock()
+	s.hubContexts = contexts
+	s.hubContextMu.Unlock()
 }
 
 // ModelContexts returns the context window and source for every mapped model.
@@ -997,7 +1016,7 @@ func (s *InferenceService) ModelContexts() map[string]ModelContextInfo {
 // llama.cpp backend declares nothing, the platform falls back to the catalog's
 // theoretical window, and until now the only log line was the success case — so
 // this failed silently and indefinitely (#75).
-func (s *InferenceService) warnUnknownContext(modelID string) {
+func (s *InferenceService) warnUnknownContext(modelID string, info ModelContextInfo) {
 	s.contextWarnMu.Lock()
 	defer s.contextWarnMu.Unlock()
 	if s.contextWarned == nil {
@@ -1007,6 +1026,13 @@ func (s *InferenceService) warnUnknownContext(modelID string) {
 		return
 	}
 	s.contextWarned[modelID] = true
+	if info.Source == ContextSourceHub {
+		logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
+			"Swan Inference assumes %d tokens, which may not match what this backend accepts. "+
+			"Set \"context_length\" for this model in models.json to report the real window.",
+			modelID, s.modelMappings[modelID].Endpoint, info.Length)
+		return
+	}
 	logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
 		"Swan Inference will assume the catalog value, which may not match what this backend accepts. "+
 		"Set \"context_length\" for this model in models.json to report the real window.",

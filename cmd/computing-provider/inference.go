@@ -528,8 +528,10 @@ func printLocalContexts(apiPort int) {
 		switch info.Source {
 		case "override", "detected":
 			fmt.Printf("  %-40s %8d  (%s)\n", id, info.Length, info.Source)
-		case "catalog":
-			fmt.Printf("  %-40s %8d  (models.dev catalog; backend not verified)\n", id, info.Length)
+		case "hub":
+			unknown++
+			fmt.Printf("  %-40s %8d  ", id, info.Length)
+			color.Yellow("(assumed by Swan Inference; backend not verified)")
 		case "pending":
 			fmt.Printf("  %-40s %8s  (health check pending)\n", id, "-")
 		default:
@@ -540,8 +542,8 @@ func printLocalContexts(apiPort int) {
 	}
 	if unknown > 0 {
 		fmt.Println()
-		color.Yellow(fmt.Sprintf("%d model(s) report no context window.", unknown))
-		fmt.Println("Swan Inference will assume the catalog value for these, which may not match")
+		color.Yellow(fmt.Sprintf("%d model(s) have no backend-reported context window.", unknown))
+		fmt.Println("Swan Inference assumes its catalog value for these, which may not match")
 		fmt.Println("what the backend accepts. Only vLLM and SGLang expose max_model_len; for any")
 		fmt.Println("other backend set the window explicitly in models.json:")
 		fmt.Println()
