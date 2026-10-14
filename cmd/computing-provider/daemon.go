@@ -255,6 +255,10 @@ func runDaemon(cctx *cli.Context) error {
 			// new enough to report it has acked a registration.
 			"hub_registered_models": inferenceService.GetHubRegisteredModels(),
 			"upgrade_available":     inferenceService.GetUpgradeAvailable(),
+			// How often each model has left the registered set since the
+			// daemon started, and why it last did; a model that flaps is
+			// unavailable to consumers for those minutes.
+			"registration_drops": inferenceService.GetRegistrationDrops(),
 			// The build actually serving requests, which is what the operator
 			// needs to see. `update` replaces the binary without restarting, so
 			// after an update this deliberately keeps reporting the old version
