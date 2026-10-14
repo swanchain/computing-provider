@@ -644,6 +644,13 @@ operator lowered it. The register `ack` carries the hub's own
 hub's list and this node's is logged, and both appear on `GET /inference/status`
 as `hub_registered_models` and `upgrade_available`.
 
+When the registered set changes, each model that leaves it is logged with the
+reason (`Model X removed from registration: health check failed 3 time(s) in a
+row: …`, `disabled`, `no longer in models.json`) and each that joins with its
+state. Departures are counted per model since the daemon started and shown on
+`GET /inference/status` as `registration_drops`, so a model that flaps stands
+out.
+
 ### Alert email
 
 Alerts are sent as `multipart/alternative`: a styled HTML part and a plain-text
