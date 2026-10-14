@@ -269,6 +269,22 @@ func (s *InferenceService) withoutLocalOnly(ids []string) []string {
 	return out
 }
 
+// hubModelHealth drops local-only models from a health report bound for the
+// hub. The hub treats a model reported healthy as one this node serves, so a
+// local-only model in the report is routed here despite never being registered.
+func (s *InferenceService) hubModelHealth(health map[string]string) map[string]string {
+	if health == nil {
+		return nil
+	}
+	out := make(map[string]string, len(health))
+	for id, h := range health {
+		if !s.isLocalOnly(id) {
+			out[id] = h
+		}
+	}
+	return out
+}
+
 func (s *InferenceService) isLocalOnly(modelID string) bool {
 	if s.registry != nil {
 		if m, ok := s.registry.GetModel(modelID); ok {
