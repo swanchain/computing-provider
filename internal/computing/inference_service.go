@@ -132,6 +132,23 @@ type InferenceService struct {
 	// a model turned healthy can finish last and overwrite the newer list —
 	// leaving that model unregistered until something else changes.
 	registerMu sync.Mutex
+	// registrationDrops counts, per model, how often it has left the
+	// registered set since the daemon started, so a model that flaps stands
+	// out. Guarded by registerMu.
+	registrationDrops map[string]*RegistrationDrops
+	// fromRegistry is set once a registration has been built from the
+	// registry's ready set. The one before it is config.toml's list, which
+	// can name models that are disabled or no longer configured; replacing
+	// it is not a change worth reporting. Guarded by registerMu.
+	fromRegistry bool
+}
+
+// RegistrationDrops is how often a model has left the set registered with
+// Swan Inference since the daemon started, and why it last did.
+type RegistrationDrops struct {
+	Count      int       `json:"count"`
+	LastAt     time.Time `json:"last_at"`
+	LastReason string    `json:"last_reason"`
 }
 
 // NewInferenceService creates a new Inference service
@@ -235,9 +252,11 @@ func (s *InferenceService) updateClientModels() {
 	if testHookAfterReadyRead != nil {
 		testHookAfterReadyRead()
 	}
-	if sameModelSet(s.client.ModelList(), models) {
+	previous := s.client.ModelList()
+	if sameModelSet(previous, models) {
 		return
 	}
+	s.logRegistrationChanges(previous, models)
 	s.client.SetModelList(models)
 	if s.client.IsConnected() {
 		// The error was discarded before: a re-registration that timed out on a
@@ -246,6 +265,90 @@ func (s *InferenceService) updateClientModels() {
 			logs.GetLogger().Errorf("Re-registration after model set change failed: %v", err)
 		}
 	}
+}
+
+// logRegistrationChanges names each model that leaves or rejoins the
+// registered set, with the reason, and counts the departures. The
+// registration line itself lists only the new set, which leaves the operator
+// diffing two long lists and then hunting for the failure behind it. The
+// startup registration comes from config.toml, so the first registration
+// built from the registry is not itemised. Called with registerMu held.
+func (s *InferenceService) logRegistrationChanges(previous, current []string) {
+	if !s.fromRegistry {
+		s.fromRegistry = true
+		return
+	}
+	was := make(map[string]bool, len(previous))
+	for _, id := range previous {
+		was[id] = true
+	}
+	now := make(map[string]bool, len(current))
+	for _, id := range current {
+		now[id] = true
+		if !was[id] {
+			logs.GetLogger().Infof("Model %s added to registration: %s", id, s.registrationChangeReason(id, false))
+		}
+	}
+	for _, id := range previous {
+		if now[id] {
+			continue
+		}
+		reason := s.registrationChangeReason(id, true)
+		logs.GetLogger().Warnf("Model %s removed from registration: %s", id, reason)
+		if s.registrationDrops == nil {
+			s.registrationDrops = map[string]*RegistrationDrops{}
+		}
+		d := s.registrationDrops[id]
+		if d == nil {
+			d = &RegistrationDrops{}
+			s.registrationDrops[id] = d
+		}
+		d.Count++
+		d.LastAt = time.Now()
+		d.LastReason = reason
+	}
+}
+
+// registrationChangeReason says why a model left (removed) or joined the
+// registered set, from the registry and the health checker's last result.
+func (s *InferenceService) registrationChangeReason(id string, removed bool) string {
+	rm, ok := s.registry.GetModel(id)
+	switch {
+	case !ok:
+		if removed {
+			return "no longer in models.json"
+		}
+		return "added"
+	case removed && !rm.Enabled:
+		return "disabled"
+	case removed && s.isLocalOnly(id):
+		return "marked local_only"
+	case !removed:
+		return "ready, health " + rm.Health.String()
+	}
+	if s.healthChecker != nil {
+		if st, ok := s.healthChecker.GetModelStatus(id); ok {
+			msg := st.LastError
+			if msg == "" {
+				msg = st.LastDeepError
+			}
+			if msg != "" {
+				return fmt.Sprintf("health check failed %d time(s) in a row: %s", st.ConsecutiveFails, msg)
+			}
+		}
+	}
+	return "state " + rm.State.String() + ", health " + rm.Health.String()
+}
+
+// GetRegistrationDrops returns a copy of the per-model drop counts.
+func (s *InferenceService) GetRegistrationDrops() map[string]RegistrationDrops {
+	s.registerMu.Lock()
+	defer s.registerMu.Unlock()
+	out := make(map[string]RegistrationDrops, len(s.registrationDrops))
+	for id, d := range s.registrationDrops {
+		out[id] = *d
+	}
+	return out
 }
 
 // sameModelSet reports whether two model ID lists contain the same IDs,

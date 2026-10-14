@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp, LockKeyhole, Power, RefreshCw, RotateCcw } from 'lucide-react';
 import { api } from '../api/client';
-import type { ModelPrice, ModelsResponse, ModelStatus } from '../types';
+import type { ModelPrice, ModelsResponse, ModelStatus, RegistrationDrops } from '../types';
 
 // A strip of recent health samples, oldest to newest. The current state is one
 // dot; whether it has been flapping is the shape of the whole row, which a
@@ -51,6 +51,8 @@ interface ModelsPanelProps {
   onUnlock: () => void;
   summary?: ModelsResponse['summary'];
   compact?: boolean;
+  /** How often each model left the hub registration since the daemon started. */
+  drops?: Record<string, RegistrationDrops>;
 }
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
@@ -60,7 +62,7 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 4,
 });
 
-export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false }: ModelsPanelProps) {
+export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false, drops }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -206,6 +208,14 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                         title="Served to the local gateway only; never offered to Swan Inference"
                       >
                         local only
+                      </span>
+                    )}
+                    {drops?.[model.id] && (
+                      <span
+                        className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-normal text-amber-200"
+                        title={`Last left the hub registration at ${new Date(drops[model.id].last_at).toLocaleString()}: ${drops[model.id].last_reason}`}
+                      >
+                        ⚠ dropped from hub {drops[model.id].count}× · {drops[model.id].last_reason}
                       </span>
                     )}
                   </div>
