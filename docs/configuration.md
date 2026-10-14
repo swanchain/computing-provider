@@ -101,16 +101,17 @@ Back up `private_key` somewhere safe. It is 32 bytes and irreplaceable.
 
 ### Context windows
 
-`context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose** — for Ollama, llama.cpp, LiteLLM or any OpenAI-compatible proxy, detection yields nothing and Swan Inference assumes the catalog value instead, so long prompts are rejected with `400 exceeds the available context size`.
+`context_length` in `models.json` is the real window the backend accepts. It is auto-detected from `max_model_len` in `/v1/models`, which **only vLLM and SGLang expose**. For a backend that does not expose it, local status shows the window Swan Inference assumes for the model, read from the platform's per-model view of this provider and refreshed every ten minutes. That is the hub's own catalogue value, **not** a measurement of this backend, so it is never sent back to the hub. Clients size prompts by it, and long prompts are rejected with `400 exceeds the available context size` if the backend accepts less — set a real `context_length`.
 
 | Source | Meaning |
 |--------|---------|
 | `override` | `context_length` set in `models.json` — always wins |
 | `detected` | Read from the backend's `max_model_len` |
+| `hub` | The window Swan Inference assumes; shown locally only, backend not verified |
 | `not reported` | Neither available; the catalog value is assumed |
 | `health check pending` | The first health check has not completed yet |
 
-`computing-provider inference status` prints the window and source per model, and the provider logs a warning once per model when nothing is reported.
+`computing-provider inference status` prints the window and source per model. The provider logs a warning once per model when the backend reports no window, naming the hub's assumed value when it is known.
 
 The source travels with the value to Swan Inference as `context_source`, because
 the two paths are not equally trustworthy and the number alone does not say

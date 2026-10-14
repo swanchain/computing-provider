@@ -117,6 +117,12 @@ type RequestMetric struct {
 	// Client describes who sent a local-gateway request: the calling process
 	// and the User-Agent it sent. Empty for every other source.
 	Client string `json:"client,omitempty"`
+	// RouteRecorded distinguishes a new request rejected before forwarding
+	// from an older history row written before route receipts existed.
+	RouteRecorded   bool   `json:"route_recorded,omitempty"`
+	BackendEndpoint string `json:"backend_endpoint,omitempty"`
+	BackendModel    string `json:"backend_model,omitempty"`
+	BackendAttempts int    `json:"backend_attempts,omitempty"`
 }
 
 // RequestSource identifies the entry point a request arrived through.

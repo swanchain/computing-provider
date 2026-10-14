@@ -138,6 +138,7 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 		Streaming: head.Stream,
 		Source:    SourceLocal,
 	}
+	setLocalRoute(&rec, endpoint, head.Model, localModel)
 	// Identifying the caller scans /proc, which takes a noticeable fraction of
 	// a second on a busy host. Run it beside the request instead of in front
 	// of it; the client's socket stays open until the response is written.
@@ -325,6 +326,7 @@ func (s *InferenceService) serveLocalImages(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.recordLocal(r, head.Model, func(rec *RequestMetric) {
+		setLocalRoute(rec, endpoint, head.Model, localModel)
 		resp, err := s.forwardJSONOperation(r.Context(), OpImagesGenerations, endpoint, body, head.Model, localModel, apiKey)
 		if err != nil {
 			rec.ErrorReason = err.Error()
@@ -385,6 +387,7 @@ func (s *InferenceService) serveLocalTranscription(w http.ResponseWriter, r *htt
 		return
 	}
 	s.recordLocal(r, req.Model, func(rec *RequestMetric) {
+		setLocalRoute(rec, endpoint, req.Model, localModel)
 		resp, err := s.transcribe(r.Context(), endpoint, body, localModel, apiKey)
 		if err != nil {
 			rec.ErrorReason = err.Error()
@@ -427,6 +430,16 @@ func (s *InferenceService) recordLocal(r *http.Request, model string, serve func
 			m.RecordRequest(rec)
 		}
 	}
+}
+
+func setLocalRoute(rec *RequestMetric, endpoint, requestedModel, localModel string) {
+	rec.RouteRecorded = true
+	rec.BackendEndpoint = safeRouteEndpoint(endpoint)
+	rec.BackendModel = requestedModel
+	if localModel != "" {
+		rec.BackendModel = localModel
+	}
+	rec.BackendAttempts = 1
 }
 
 // statusOf maps a forwarding error to the HTTP status to report.

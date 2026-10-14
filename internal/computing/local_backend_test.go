@@ -50,13 +50,23 @@ func TestLocalGatewayUsesLocalEndpoint(t *testing.T) {
 	if localAuth != "Bearer local-key" {
 		t.Errorf("local backend got %q, want its own key", localAuth)
 	}
+	history := s.client.Metrics().GetRequestHistory(1, "org/m")
+	if len(history) != 1 || !history[0].RouteRecorded || history[0].BackendEndpoint != local.URL || history[0].BackendModel != "m" || history[0].BackendAttempts != 1 {
+		t.Fatalf("local route receipt = %+v", history)
+	}
 
-	if _, err := s.handleInference(context.Background(), InferencePayload{ModelID: "org/m",
+	ctx, route := withRequestRoute(context.Background())
+	if _, err := s.handleInference(ctx, InferencePayload{ModelID: "org/m",
 		Request: json.RawMessage(`{"model":"org/m","messages":[{"role":"user","content":"hi"}]}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if hubHits != 1 || localHits != 1 {
 		t.Errorf("hub request reached hub=%d local=%d, want it on the endpoint", hubHits, localHits)
+	}
+	receipt := RequestMetric{}
+	route.apply(&receipt)
+	if receipt.BackendEndpoint != hub.URL || receipt.BackendModel != "m" || receipt.BackendAttempts != 1 {
+		t.Errorf("hub route receipt = %+v", receipt)
 	}
 
 	// A disabled model stays refused on the local backend too.

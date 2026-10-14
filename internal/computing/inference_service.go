@@ -120,6 +120,12 @@ type InferenceService struct {
 
 	contextWarnMu sync.Mutex
 	contextWarned map[string]bool
+	// hubContexts is the window Swan Inference assumes for each model this
+	// provider offers, from the platform's per-model view. Shown locally as a
+	// fallback; never declared back to the hub, which would launder its own
+	// assumption into a backend measurement.
+	hubContextMu sync.RWMutex
+	hubContexts  map[string]int
 
 	// registerMu serialises updateClientModels. Registry callbacks each run on
 	// their own goroutine, so without it a call that read the ready set before
@@ -659,9 +665,11 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	selectedRoute(ctx, endpoint, payload.ModelID, localModel)
 	op := resolveOperation(payload.Operation, category, payload.Request)
 	var response json.RawMessage
 	forward := func() error {
+		routeAttempt(ctx)
 		var ferr error
 		switch op {
 		case OpTranscriptions:
@@ -1014,24 +1022,27 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 	}
 
 	logs.GetLogger().Infof("Using Docker endpoint for streaming model %s: %s (local: %s)", payload.ModelID, endpoint, localModel)
+	selectedRoute(ctx, endpoint, payload.ModelID, localModel)
+	routeAttempt(ctx)
 	return s.streamFromDockerModelContext(ctx, endpoint, payload.Request, payload.ModelID, localModel, apiKey, sendChunk)
 }
 
-// resolveModelContexts returns each configured model's real context window and
-// how it was determined: a manual context_length from models.json wins;
-// otherwise the value the health checker detected from the backend's
-// /v1/models (max_model_len). Models with no known window are omitted — the
-// server falls back to the catalog value for those (#61).
+// resolveModelContexts returns backend-verified or manually asserted windows
+// for hub registration. The hub's assumed window is deliberately omitted: it
+// is the hub's own number, and sending it back would present it as a
+// measurement of this particular backend's capacity.
 //
 // The provenance travels with the value because the two paths are not equally
 // trustworthy, and the number alone does not say which one produced it.
 func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 	contexts := make(map[string]ModelContextInfo)
 	for modelID := range s.modelMappings {
-		if info := s.ModelContext(modelID); info.Length > 0 {
+		info := s.ModelContext(modelID)
+		switch {
+		case info.Length > 0 && info.Source != ContextSourceHub:
 			contexts[modelID] = info
-		} else if info.Source == ContextSourceUnknown {
-			s.warnUnknownContext(modelID)
+		case info.Source == ContextSourceUnknown, info.Source == ContextSourceHub:
+			s.warnUnknownContext(modelID, info)
 		}
 	}
 	if len(contexts) == 0 {
@@ -1044,6 +1055,7 @@ func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 const (
 	ContextSourceOverride = "override" // context_length in models.json
 	ContextSourceDetected = "detected" // max_model_len from the backend's /v1/models
+	ContextSourceHub      = "hub"      // the window Swan Inference assumes; not backend-verified
 	ContextSourceUnknown  = "unknown"  // the backend declares none and no override is set
 	ContextSourcePending  = "pending"  // no health check has completed yet
 )
@@ -1062,16 +1074,35 @@ func (s *InferenceService) ModelContext(modelID string) ModelContextInfo {
 	if ok && mapping.ContextLength > 0 {
 		return ModelContextInfo{Length: mapping.ContextLength, Source: ContextSourceOverride}
 	}
-	if s.healthChecker == nil {
-		return ModelContextInfo{Source: ContextSourcePending}
+	if s.healthChecker != nil {
+		if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
+			return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
+		}
 	}
-	if detected := s.healthChecker.GetDetectedContext(modelID); detected > 0 {
-		return ModelContextInfo{Length: detected, Source: ContextSourceDetected}
+	s.hubContextMu.RLock()
+	assumed := s.hubContexts[modelID]
+	s.hubContextMu.RUnlock()
+	if assumed > 0 {
+		return ModelContextInfo{Length: assumed, Source: ContextSourceHub}
 	}
-	if s.healthChecker.ContextProbed(modelID) {
+	if s.healthChecker != nil && s.healthChecker.ContextProbed(modelID) {
 		return ModelContextInfo{Source: ContextSourceUnknown}
 	}
 	return ModelContextInfo{Source: ContextSourcePending}
+}
+
+// SetHubContexts records the window the platform assumes for each model it
+// lists for this provider.
+func (s *InferenceService) SetHubContexts(models []PlatformModel) {
+	contexts := make(map[string]int, len(models))
+	for _, m := range models {
+		if m.ContextLength > 0 {
+			contexts[m.ModelID] = m.ContextLength
+		}
+	}
+	s.hubContextMu.Lock()
+	s.hubContexts = contexts
+	s.hubContextMu.Unlock()
 }
 
 // ModelContexts returns the context window and source for every mapped model.
@@ -1088,7 +1119,7 @@ func (s *InferenceService) ModelContexts() map[string]ModelContextInfo {
 // llama.cpp backend declares nothing, the platform falls back to the catalog's
 // theoretical window, and until now the only log line was the success case — so
 // this failed silently and indefinitely (#75).
-func (s *InferenceService) warnUnknownContext(modelID string) {
+func (s *InferenceService) warnUnknownContext(modelID string, info ModelContextInfo) {
 	s.contextWarnMu.Lock()
 	defer s.contextWarnMu.Unlock()
 	if s.contextWarned == nil {
@@ -1098,6 +1129,13 @@ func (s *InferenceService) warnUnknownContext(modelID string) {
 		return
 	}
 	s.contextWarned[modelID] = true
+	if info.Source == ContextSourceHub {
+		logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
+			"Swan Inference assumes %d tokens, which may not match what this backend accepts. "+
+			"Set \"context_length\" for this model in models.json to report the real window.",
+			modelID, s.modelMappings[modelID].Endpoint, info.Length)
+		return
+	}
 	logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
 		"Swan Inference will assume the catalog value, which may not match what this backend accepts. "+
 		"Set \"context_length\" for this model in models.json to report the real window.",

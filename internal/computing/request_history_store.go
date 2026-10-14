@@ -34,7 +34,11 @@ type RequestHistoryEntity struct {
 	// a row per request means an unbounded field is an unbounded table.
 	ErrorReason string
 	// Client is set for local-gateway requests only; see describeLocalClient.
-	Client string
+	Client          string
+	RouteRecorded   bool
+	BackendEndpoint string
+	BackendModel    string
+	BackendAttempts int
 }
 
 func (RequestHistoryEntity) TableName() string {
@@ -197,18 +201,22 @@ func (s *RequestStore) writeLoop() {
 
 func entityFor(req RequestMetric) RequestHistoryEntity {
 	return RequestHistoryEntity{
-		RequestID:   req.RequestID,
-		Model:       req.Model,
-		Source:      string(req.Source),
-		StartTime:   req.StartTime,
-		EndTime:     req.EndTime,
-		LatencyMs:   req.LatencyMs,
-		TokensIn:    req.TokensIn,
-		TokensOut:   req.TokensOut,
-		Streaming:   req.Streaming,
-		Success:     req.Success,
-		ErrorReason: req.ErrorReason,
-		Client:      req.Client,
+		RequestID:       req.RequestID,
+		Model:           req.Model,
+		Source:          string(req.Source),
+		StartTime:       req.StartTime,
+		EndTime:         req.EndTime,
+		LatencyMs:       req.LatencyMs,
+		TokensIn:        req.TokensIn,
+		TokensOut:       req.TokensOut,
+		Streaming:       req.Streaming,
+		Success:         req.Success,
+		ErrorReason:     req.ErrorReason,
+		Client:          req.Client,
+		RouteRecorded:   req.RouteRecorded,
+		BackendEndpoint: req.BackendEndpoint,
+		BackendModel:    req.BackendModel,
+		BackendAttempts: req.BackendAttempts,
 	}
 }
 
@@ -316,18 +324,22 @@ func (s *RequestStore) Query(q RequestHistoryQuery) (RequestHistoryPage, error) 
 	}
 	for _, row := range rows {
 		page.Requests = append(page.Requests, RequestMetric{
-			RequestID:   row.RequestID,
-			Model:       row.Model,
-			StartTime:   row.StartTime,
-			EndTime:     row.EndTime,
-			LatencyMs:   row.LatencyMs,
-			TokensIn:    row.TokensIn,
-			TokensOut:   row.TokensOut,
-			Streaming:   row.Streaming,
-			Success:     row.Success,
-			ErrorReason: row.ErrorReason,
-			Source:      RequestSource(row.Source),
-			Client:      row.Client,
+			RequestID:       row.RequestID,
+			Model:           row.Model,
+			StartTime:       row.StartTime,
+			EndTime:         row.EndTime,
+			LatencyMs:       row.LatencyMs,
+			TokensIn:        row.TokensIn,
+			TokensOut:       row.TokensOut,
+			Streaming:       row.Streaming,
+			Success:         row.Success,
+			ErrorReason:     row.ErrorReason,
+			Source:          RequestSource(row.Source),
+			Client:          row.Client,
+			RouteRecorded:   row.RouteRecorded,
+			BackendEndpoint: row.BackendEndpoint,
+			BackendModel:    row.BackendModel,
+			BackendAttempts: row.BackendAttempts,
 		})
 	}
 	return page, nil

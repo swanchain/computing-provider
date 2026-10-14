@@ -95,6 +95,20 @@ function StatusBadge({ success }: { success: boolean }) {
 function RequestReceipt({ request }: { request: RequestLog }) {
   return (
     <div className="grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+      <div className="sm:col-span-2 lg:col-span-4 rounded-lg border border-slate-700/70 bg-slate-900/70 p-3">
+        <span className="block text-slate-400">Route</span>
+        {request.route_recorded ? request.backend_endpoint ? (
+          <div className="mt-1 space-y-1 text-slate-200">
+            <p className="break-all font-mono">{request.model} → {request.backend_model || request.model}</p>
+            <p className="break-all font-mono text-slate-400">{request.backend_endpoint}</p>
+            <p className="text-slate-400">{request.backend_attempts || 0} forwarding {request.backend_attempts === 1 ? 'attempt' : 'attempts'} · Backend account not reported per request</p>
+          </div>
+        ) : (
+          <span className="mt-1 block text-slate-400">Not forwarded by this node</span>
+        ) : (
+          <span className="mt-1 block text-slate-400">Route details unavailable for this request</span>
+        )}
+      </div>
       <div>
         <span className="block text-slate-400">Request ID</span>
         <span className="mt-1 block break-all font-mono text-slate-300">{request.request_id}</span>

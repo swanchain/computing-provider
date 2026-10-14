@@ -118,6 +118,22 @@ func runDaemon(cctx *cli.Context) error {
 	providerStats := computing.NewProviderStatsClient(
 		conf.GetConfig().Inference.ServiceURL, conf.GetConfig().Inference.ApiKey)
 
+	// The context window the hub assumes for each model, shown locally where
+	// the backend reports none. Refreshed in the background so a status call
+	// or a registration never waits on the platform.
+	go func() {
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if models, err := providerStats.Models(ctx); err == nil {
+				inferenceService.SetHubContexts(models)
+			} else {
+				logs.GetLogger().Debugf("hub context windows unavailable: %v", err)
+			}
+			cancel()
+			time.Sleep(10 * time.Minute)
+		}
+	}()
+
 	// Record the platform's lifetime earnings with every metrics snapshot, so
 	// the earnings series can be differenced from the ledger that governs
 	// rather than recomputed from token counts at published rates. The client
