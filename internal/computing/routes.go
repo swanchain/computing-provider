@@ -23,6 +23,11 @@ type RouteMap struct {
 
 // RouteLink aggregates the requests from one source for one model to one
 // backend.
+//
+// A link whose source is "direct" is work a backend did that never passed
+// through the node, derived from the backend's own counters as in the usage
+// history: it carries tokens and no requests, latency or errors, because none
+// of those were observed.
 type RouteLink struct {
 	Source       string    `json:"source"`
 	Model        string    `json:"model"`
@@ -93,9 +98,91 @@ func (s *InferenceService) Routes(window string) RouteMap {
 	if s.registry != nil {
 		models = s.withLocalHealth(s.registry.GetAllModels())
 	}
-	m := buildRouteMap(rows, failed, models)
+	m := buildRouteMap(rows, failed, models, s.directRoutes(window, since, d))
 	m.Window, m.Since = window, since
 	return m
+}
+
+type directRouteEntry struct {
+	at    time.Time
+	links []RouteLink
+}
+
+// directRouteTTL matches the backend sampler's interval: nothing newer can
+// exist sooner.
+const directRouteTTL = time.Minute
+
+// directRouteBucket is the resolution direct usage is derived at. A request
+// is recorded when it starts while a backend counts tokens as it produces
+// them, so a bucket much shorter than the requests on it reports one as
+// direct work in the bucket it finished in.
+func directRouteBucket(window time.Duration) time.Duration {
+	switch {
+	case window <= time.Hour:
+		return 5 * time.Minute
+	case window <= 6*time.Hour:
+		return 15 * time.Minute
+	}
+	return time.Hour
+}
+
+// directRoutes is the direct usage per backend and model over the window.
+func (s *InferenceService) directRoutes(window string, since time.Time, d time.Duration) []RouteLink {
+	s.directRouteMu.Lock()
+	defer s.directRouteMu.Unlock()
+	if e, ok := s.directRouteCache[window]; ok && time.Since(e.at) < directRouteTTL {
+		return e.links
+	}
+	bucket := directRouteBucket(d)
+	in, err := s.usageInputs(since, bucket)
+	if err != nil {
+		return nil
+	}
+	links := directRouteLinks(in, usageClassOf(s.modelMappings), since, time.Now(), bucket)
+	if s.directRouteCache == nil {
+		s.directRouteCache = map[string]directRouteEntry{}
+	}
+	s.directRouteCache[window] = directRouteEntry{at: time.Now(), links: links}
+	return links
+}
+
+// directRouteLinks derives direct usage separately for each counter, so work
+// sent straight to a proxy's local instance is not merged with the same
+// model's work on the hub instance. Only output tokens make a link: the input
+// figure is a lower bound that prompt caching can push either way, and a
+// backend that generated nothing the node did not record did no direct work.
+func directRouteLinks(in usageData, classOf func(key, model string) string, from, to time.Time, bucket time.Duration) []RouteLink {
+	out := []RouteLink{}
+	for key, ss := range in.samples {
+		models := in.endpointModels[key]
+		if len(models) == 0 {
+			continue
+		}
+		series := buildUsageSeries(in.records, map[string][]BackendUsageSample{key: ss}, in.endpointModels, classOf, from, to, bucket, "")
+		t := series.Totals[SourceDirect]
+		if t.TokensOut <= 0 {
+			continue
+		}
+		var last time.Time
+		for _, p := range series.Points {
+			if p.Sources[SourceDirect].TokensOut > 0 {
+				last = p.Timestamp.Add(bucket)
+			}
+		}
+		if last.After(to) {
+			last = to
+		}
+		ep, _, _ := strings.Cut(key, perModelSep)
+		out = append(out, RouteLink{Source: SourceDirect, Model: strings.Join(models, ", "), Backend: safeRouteEndpoint(ep),
+			TokensIn: t.TokensIn, TokensOut: t.TokensOut, LastAt: last})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TokensOut != out[j].TokensOut {
+			return out[i].TokensOut > out[j].TokensOut
+		}
+		return out[i].Model+out[i].Backend < out[j].Model+out[j].Backend
+	})
+	return out
 }
 
 // routeSource maps a stored source to its name; rows written before sources
@@ -116,7 +203,10 @@ func routeSource(source string) string {
 //
 // failed holds recent failures, newest first; each link shows the newest one
 // that took the same route.
-func buildRouteMap(rows []routeRow, failed []RequestHistoryEntity, models []*RegisteredModel) RouteMap {
+//
+// direct holds the links for work that bypassed the node; they follow the
+// recorded links.
+func buildRouteMap(rows []routeRow, failed []RequestHistoryEntity, models []*RegisteredModel, direct []RouteLink) RouteMap {
 	byID := map[string]*RegisteredModel{}
 	for _, m := range models {
 		byID[m.ID] = m
@@ -187,6 +277,7 @@ func buildRouteMap(rows []routeRow, failed []RequestHistoryEntity, models []*Reg
 		}
 		return a.Source+a.Model+a.Backend < b.Source+b.Model+b.Backend
 	})
+	out.Links = append(out.Links, direct...)
 
 	type state struct {
 		roles, models   map[string]bool
@@ -242,8 +333,16 @@ func buildRouteMap(rows []routeRow, failed []RequestHistoryEntity, models []*Reg
 	}
 	for _, l := range out.Links {
 		role := "hub"
-		if l.Source == string(SourceLocal) {
+		switch l.Source {
+		case string(SourceLocal):
 			role = "local"
+		case SourceDirect:
+			// Whatever called the backend directly gives it no role here,
+			// unless it has none from the node's own configuration.
+			if _, known := backends[l.Backend]; known {
+				continue
+			}
+			role = "direct"
 		}
 		note(l.Backend, role, l.Model)
 	}

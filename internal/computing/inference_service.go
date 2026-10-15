@@ -127,6 +127,12 @@ type InferenceService struct {
 	hubContextMu sync.RWMutex
 	hubContexts  map[string]int
 
+	// directRouteCache holds the route map's direct links per window. They
+	// are read from counter samples taken once a minute, so recomputing them
+	// on every dashboard poll would only repeat the same work.
+	directRouteMu    sync.Mutex
+	directRouteCache map[string]directRouteEntry
+
 	// registerMu serialises updateClientModels. Registry callbacks each run on
 	// their own goroutine, so without it a call that read the ready set before
 	// a model turned healthy can finish last and overwrite the newer list —

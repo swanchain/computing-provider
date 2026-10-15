@@ -343,7 +343,28 @@ func buildUsageSeries(records []usageRecord, samples map[string][]BackendUsageSa
 func (s *InferenceService) UsageHistory(duration string, window, bucket time.Duration) (UsageSeries, error) {
 	to := time.Now()
 	from := to.Add(-window)
+	in, err := s.usageInputs(from, bucket)
+	if err != nil {
+		return UsageSeries{}, err
+	}
+	series := buildUsageSeries(in.records, in.samples, in.endpointModels, usageClassOf(s.modelMappings), from, to, bucket, duration)
+	series.Endpoints = s.usageSampler.Status()
+	if series.Endpoints == nil {
+		series.Endpoints = []BackendEndpointStatus{}
+	}
+	return series, nil
+}
 
+// usageData is what a usage series is built from: the node's recorded
+// requests since from, the backend counter samples, and which models each
+// sample key counts.
+type usageData struct {
+	records        []usageRecord
+	samples        map[string][]BackendUsageSample
+	endpointModels map[string][]string
+}
+
+func (s *InferenceService) usageInputs(from time.Time, bucket time.Duration) (usageData, error) {
 	var records []usageRecord
 	database := db.NewDbService()
 	if database != nil && s.requestStore != nil {
@@ -351,7 +372,7 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 			Select("model, source, start_time, tokens_in, tokens_out").
 			Where("start_time >= ?", from).
 			Scan(&records).Error; err != nil {
-			return UsageSeries{}, err
+			return usageData{}, err
 		}
 	} else if s.client != nil {
 		for _, r := range s.client.metrics.QueryRequestHistory(RequestHistoryQuery{Limit: 1 << 30}).Requests {
@@ -376,7 +397,7 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 		// baseline to difference against.
 		var rows []BackendUsageSample
 		if err := database.Where("time >= ?", from.Add(-bucket)).Order("endpoint, time").Find(&rows).Error; err != nil {
-			return UsageSeries{}, err
+			return usageData{}, err
 		}
 		for _, r := range rows {
 			samples[r.Endpoint] = append(samples[r.Endpoint], r)
@@ -391,13 +412,7 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 			}
 		}
 	}
-
-	series := buildUsageSeries(records, samples, endpointModels, usageClassOf(s.modelMappings), from, to, bucket, duration)
-	series.Endpoints = s.usageSampler.Status()
-	if series.Endpoints == nil {
-		series.Endpoints = []BackendEndpointStatus{}
-	}
-	return series, nil
+	return usageData{records: records, samples: samples, endpointModels: endpointModels}, nil
 }
 
 // splitLocalEndpoint is a model's local_endpoint when it names a backend
