@@ -512,3 +512,23 @@ func TestReadProbeResponseTakesUsage(t *testing.T) {
 		t.Errorf("failure: ok=%v status=%d error len=%d, want a 200-byte snippet", r.OK, r.StatusCode, len(r.Error))
 	}
 }
+
+// A model switched off in models.json is out of service by the operator's
+// choice. Probing it anyway failed every audit for a model known not to work,
+// and recorded a failed request in the history each time.
+func TestDisabledModelsAreNotProbed(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 503}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/off": {"endpoint": be.URL, "disabled": true},
+	})
+	d := fakeDaemon(t, true, []string{"org/off"}, map[string]string{"org/off": "healthy"}, map[string]int64{"org/off": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: []string{"org/off"}, LogDir: dir})
+	if res := find(t, r, "inference probe"); res.Status != StatusPass {
+		t.Fatalf("got %s %q, want pass — a disabled model should be skipped", res.Status, res.Message)
+	}
+	if p := r.Probes["org/off"]; !p.Skipped {
+		t.Errorf("probe = %+v, want skipped", p)
+	}
+}

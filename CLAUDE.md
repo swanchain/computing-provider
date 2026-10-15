@@ -211,7 +211,12 @@ that probe can tell a live HTTP server from a backend that can actually serve
 (#70). Failures are classified: a 400/422/429 is the prompt or load, not the
 backend, and never counts against health; a 5xx, a 401/403/404 or no response at
 all does. Non-chat models (embeddings, image, audio) are skipped, since they
-answer 404 at `/v1/chat/completions`.
+answer 404 at `/v1/chat/completions`. So are disabled models, whether
+`"disabled": true` in models.json or disabled through the API: nothing is
+routed to them, and on a metered proxy each probe spends quota to record a
+failure the operator already knows about. The self-check skips models disabled
+in models.json the same way, but keeps probing the ones it disabled itself,
+since that probe is what re-enables them.
 
 ```toml
 [HealthCheck]

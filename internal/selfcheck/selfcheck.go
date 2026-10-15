@@ -48,7 +48,7 @@ type ProbeResult struct {
 	// that far (connection refused, timeout, DNS).
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
-	Skipped    bool   `json:"skipped,omitempty"` // Not a chat model
+	Skipped    bool   `json:"skipped,omitempty"` // Not a chat model, or disabled
 	// LatencyMs is how long the completion took. Reported so the audit's own
 	// probes can be recorded alongside routed traffic instead of being load the
 	// operator cannot see.
@@ -195,6 +195,10 @@ type modelEntry struct {
 	// LocalOnly models serve the local gateway alone: they are not in
 	// config.toml, not registered, and not probed.
 	LocalOnly bool `json:"local_only"`
+	// Disabled models stay in the config checks but get no completion: the
+	// operator took them out of service, and a model known not to work there
+	// would otherwise fail every audit.
+	Disabled bool `json:"disabled"`
 }
 
 // servedName is the name the backend knows the model by, which differs from the
@@ -532,8 +536,13 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 		return
 	}
 	var failed []string
-	var probed, skipped, expected int
+	var probed, skipped, disabled, expected int
 	for id, m := range models {
+		if m.Disabled {
+			disabled++
+			c.probes[id] = ProbeResult{Skipped: true}
+			continue
+		}
 		if !m.chatCompatible() {
 			skipped++
 			c.probes[id] = ProbeResult{Skipped: true}
@@ -566,6 +575,9 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 	msg := fmt.Sprintf("all %d models completed a request", probed-expected)
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (%d non-chat models not probed)", skipped)
+	}
+	if disabled > 0 {
+		msg += fmt.Sprintf(" (%d disabled in models.json, not probed)", disabled)
 	}
 	if expected > 0 {
 		msg += fmt.Sprintf(" (%d already disabled and still failing)", expected)

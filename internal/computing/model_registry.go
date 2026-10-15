@@ -253,7 +253,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 				// Update health checker with new endpoint
 				if r.healthChecker != nil {
-					r.healthChecker.SetProbeExempt(modelID, mapping.LocalOnly)
+					r.healthChecker.SetProbeExempt(modelID, probeExempt(existingModel))
 					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 				}
 
@@ -301,7 +301,7 @@ func (r *ModelRegistry) loadConfig() error {
 
 			// Register with health checker
 			if r.healthChecker != nil {
-				r.healthChecker.SetProbeExempt(modelID, mapping.LocalOnly)
+				r.healthChecker.SetProbeExempt(modelID, probeExempt(model))
 				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
 			}
 
@@ -601,6 +601,9 @@ func (r *ModelRegistry) EnableModel(modelID string) error {
 
 	enableLocked(model)
 	model.UpdatedAt = time.Now()
+	if r.healthChecker != nil {
+		r.healthChecker.SetProbeExempt(modelID, probeExempt(model))
+	}
 
 	logs.GetLogger().Infof("Enabled model: %s", modelID)
 	return nil
@@ -635,6 +638,15 @@ func enableLocked(model *RegisteredModel) {
 	}
 }
 
+// probeExempt reports whether the health checker should spend no engine probe
+// on a model. A local-only model's backend is reserved for the operator, and a
+// disabled one is not offered to the hub, so a completion against either buys
+// nothing. Recovery of a model the self-check disabled is the self-check's own
+// probe, not this one.
+func probeExempt(model *RegisteredModel) bool {
+	return model.LocalOnly || !model.Enabled
+}
+
 func disableLocked(model *RegisteredModel) {
 	model.Enabled = false
 	model.State = ModelStateDisabled
@@ -665,6 +677,9 @@ func (r *ModelRegistry) DisableModel(modelID string) error {
 
 	disableLocked(model)
 	model.UpdatedAt = time.Now()
+	if r.healthChecker != nil {
+		r.healthChecker.SetProbeExempt(modelID, probeExempt(model))
+	}
 
 	logs.GetLogger().Infof("Disabled model: %s", modelID)
 	return nil
