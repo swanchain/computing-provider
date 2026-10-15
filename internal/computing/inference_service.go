@@ -421,8 +421,9 @@ func (s *InferenceService) Start() error {
 
 	s.client = NewInferenceClient(s.nodeID, workerAddr, ownerAddr)
 	// config.toml's Models list is what the first registration sends; a
-	// local-only model in it must still never reach the hub.
-	s.client.SetModelList(s.withoutLocalOnly(s.client.ModelList()))
+	// local-only model in it must still never reach the hub, and neither
+	// may one models.json marks disabled.
+	s.client.SetModelList(s.startupModelList(s.client.ModelList()))
 	s.client.SetInferenceHandler(s.handleInference)
 	s.client.SetStreamingInferenceHandler(s.handleStreamingInference)
 	s.client.SetWarmupHandler(s.handleWarmup)

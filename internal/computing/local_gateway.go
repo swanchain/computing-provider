@@ -270,6 +270,22 @@ func (s *InferenceService) withoutLocalOnly(ids []string) []string {
 	return out
 }
 
+// startupModelList is config.toml's Models list as the first registration
+// may send it: without local-only models, and without models disabled in
+// models.json. The first registration goes out before any health check, so
+// without the second rule every restart re-offered a disabled model to the
+// hub until the registry's own list replaced it.
+func (s *InferenceService) startupModelList(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range s.withoutLocalOnly(ids) {
+		if m, ok := s.modelMappings[id]; ok && m.Disabled {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
 // hubModelHealth drops local-only models from a health report bound for the
 // hub. The hub treats a model reported healthy as one this node serves, so a
 // local-only model in the report is routed here despite never being registered.

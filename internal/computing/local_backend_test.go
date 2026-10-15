@@ -180,9 +180,14 @@ func TestLocalOnlyModelNeverReachesTheHub(t *testing.T) {
 	}
 	// The startup path sends config.toml's list, which may name it too.
 	s.client.SetModelList([]string{"org/public", "anthropic/private"})
-	s.client.SetModelList(s.withoutLocalOnly(s.client.ModelList()))
+	s.client.SetModelList(s.startupModelList(s.client.ModelList()))
 	if got := s.client.ModelList(); len(got) != 1 {
 		t.Errorf("startup list %v still carries the local-only model", got)
+	}
+	// ...and a model models.json disables.
+	s.modelMappings["org/off"] = ModelMapping{Endpoint: backend.URL, Disabled: true}
+	if got := s.startupModelList([]string{"org/public", "org/off"}); len(got) != 1 || got[0] != "org/public" {
+		t.Errorf("startup list %v, want the disabled model dropped", got)
 	}
 
 	req := json.RawMessage(`{"model":"anthropic/private","messages":[{"role":"user","content":"hi"}]}`)
