@@ -22,6 +22,8 @@ const SOURCE_LABEL: Record<string, string> = {
   selfcheck: 'Self-check',
   direct: 'Direct (bypassed node)',
 };
+// The diagram's boxes are narrow; the table and tooltips keep the full name.
+const SOURCE_SHORT: Record<string, string> = { direct: 'Direct' };
 const SOURCE_ORDER = ['hub', 'local', 'direct', 'health', 'selfcheck'];
 const SOURCE_COLOUR: Record<string, string> = {
   hub: '#38bdf8',
@@ -179,7 +181,8 @@ function RouteDiagram({ map, showProbes }: { map: RouteMap; showProbes: boolean 
           return (
             <g key={key} {...nodeProps(key, direct ? `${SOURCE_LABEL[s]}: ${tokensBy(key)} tokens` : `${SOURCE_LABEL[s] ?? s}: ${totalBy(key)} requests`)}>
               <rect x={COL.source} y={cy - NODE_H / 2} width={COL_W.source} height={NODE_H} rx={8} fill="#0f172a" stroke={SOURCE_COLOUR[s] ?? '#475569'} strokeWidth={focus === key ? 2 : 1} />
-              <text x={COL.source + 12} y={cy + 4} className="fill-slate-100 text-[13px]">{SOURCE_LABEL[s] ?? s}</text>
+              <title>{SOURCE_LABEL[s] ?? s}</title>
+              <text x={COL.source + 12} y={cy + 4} className="fill-slate-100 text-[13px]">{SOURCE_SHORT[s] ?? SOURCE_LABEL[s] ?? s}</text>
               <text x={COL.source + COL_W.source - 12} y={cy + 4} textAnchor="end" className="fill-slate-400 text-[12px] tabular-nums">{direct ? `${compact(tokensBy(key))} tok` : compact(totalBy(key))}</text>
             </g>
           );
@@ -189,13 +192,15 @@ function RouteDiagram({ map, showProbes }: { map: RouteMap; showProbes: boolean 
           const key = `m:${m}`;
           const cy = y(i, models.length);
           const failed = links.filter((l) => l.model === m).reduce((n, l) => n + l.failures, 0);
+          const count = `${modelTotals.get(m) || !modelDirect.get(m) ? compact(modelTotals.get(m) ?? 0) : `${compact(modelDirect.get(m) ?? 0)} tok`}${failed ? ` · ${failed}✕` : ''}`;
           return (
             <g key={key} {...nodeProps(key, `${m}: ${modelTotals.get(m)} requests${failed ? `, ${failed} failed` : ''}`)}>
               <title>{m}</title>
               <rect x={COL.model} y={cy - NODE_H / 2} width={COL_W.model} height={NODE_H} rx={8} fill="#0f172a" stroke={failed ? FAIL_COLOUR : '#334155'} strokeWidth={focus === key ? 2 : 1} />
-              <text x={COL.model + 12} y={cy + 4} className="fill-slate-100 font-mono text-[12px]">{clip(m, 26)}</text>
+              {/* About 7px per monospace character; the name gives way to the count. */}
+              <text x={COL.model + 12} y={cy + 4} className="fill-slate-100 font-mono text-[12px]">{clip(m, Math.min(26, 32 - count.length))}</text>
               <text x={COL.model + COL_W.model - 12} y={cy + 4} textAnchor="end" className={`text-[12px] tabular-nums ${failed ? 'fill-red-300' : 'fill-slate-400'}`}>
-                {modelTotals.get(m) || !modelDirect.get(m) ? compact(modelTotals.get(m) ?? 0) : `${compact(modelDirect.get(m) ?? 0)} tok`}{failed ? ` · ${failed}✕` : ''}
+                {count}
               </text>
             </g>
           );
@@ -205,14 +210,15 @@ function RouteDiagram({ map, showProbes }: { map: RouteMap; showProbes: boolean 
           const key = `b:${b.endpoint}`;
           const cy = y(i, backends.length);
           const total = totalBy(key);
+          const count = b.health === 'down' ? 'down' : total ? compact(total) : tokensBy(key) ? `${compact(tokensBy(key))} tok` : 'idle';
           return (
             <g key={key} {...nodeProps(key, `${b.endpoint}: ${b.health}, ${total} requests`)}>
               <title>{`${b.endpoint} — ${b.health}${b.error ? `: ${b.error}` : ''}\n${b.models.join('\n')}`}</title>
               <rect x={COL.backend} y={cy - NODE_H / 2} width={COL_W.backend} height={NODE_H} rx={8} fill="#0f172a" stroke={b.health === 'down' ? FAIL_COLOUR : '#334155'} strokeWidth={focus === key ? 2 : 1} />
               <circle cx={COL.backend + 14} cy={cy} r={5} fill={HEALTH_COLOUR[b.health] ?? HEALTH_COLOUR.unknown} />
-              <text x={COL.backend + 26} y={cy + 4} className="fill-slate-100 font-mono text-[12px]">{clip(b.endpoint.replace(/^https?:\/\//, ''), 22)}</text>
+              <text x={COL.backend + 26} y={cy + 4} className="fill-slate-100 font-mono text-[12px]">{clip(b.endpoint.replace(/^https?:\/\//, ''), Math.min(22, 27 - count.length))}</text>
               <text x={COL.backend + COL_W.backend - 12} y={cy + 4} textAnchor="end" className={`text-[12px] tabular-nums ${b.health === 'down' ? 'fill-red-300' : 'fill-slate-400'}`}>
-                {b.health === 'down' ? 'down' : total ? compact(total) : tokensBy(key) ? `${compact(tokensBy(key))} tok` : 'idle'}
+                {count}
               </text>
             </g>
           );
