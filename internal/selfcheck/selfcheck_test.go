@@ -512,3 +512,33 @@ func TestReadProbeResponseTakesUsage(t *testing.T) {
 		t.Errorf("failure: ok=%v status=%d error len=%d, want a 200-byte snippet", r.OK, r.StatusCode, len(r.Error))
 	}
 }
+
+// A model switched off in models.json is out of service by the operator's
+// choice. Auditing it anyway failed every run for a model known not to work —
+// its probe, its health and its missing registration — and recorded a failed
+// request in the history each time.
+func TestDisabledModelsAreNotAudited(t *testing.T) {
+	dir := t.TempDir()
+	be := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	off := fakeBackend{maxModelLen: 4096, completionOK: false, statusCode: 503}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/on":  {"endpoint": be.URL},
+		"org/off": {"endpoint": off.URL, "disabled": true},
+	})
+	d := fakeDaemon(t, true, []string{"org/on"},
+		map[string]string{"org/on": "healthy", "org/off": "unhealthy"},
+		map[string]int64{"org/on": 1})
+
+	// Listed in config.toml or not, a disabled model raises nothing.
+	for _, cfg := range [][]string{{"org/on"}, {"org/on", "org/off"}} {
+		r := Run(Options{RepoPath: dir, APIBase: d.URL, ConfigModels: cfg, LogDir: dir})
+		for _, res := range r.Results {
+			if res.Status != StatusPass {
+				t.Errorf("config %v: %s is %s: %q", cfg, res.Name, res.Status, res.Message)
+			}
+		}
+		if _, probed := r.Probes["org/off"]; probed {
+			t.Errorf("config %v: the disabled model was probed", cfg)
+		}
+	}
+}

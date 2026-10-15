@@ -195,6 +195,11 @@ type modelEntry struct {
 	// LocalOnly models serve the local gateway alone: they are not in
 	// config.toml, not registered, and not probed.
 	LocalOnly bool `json:"local_only"`
+	// Disabled models are out of service by the operator's choice: not
+	// registered, not routed, and so not audited. The self-check's own
+	// auto-disable is a runtime state, not this flag, so the models it takes
+	// out are still probed and can be re-enabled.
+	Disabled bool `json:"disabled"`
 }
 
 // servedName is the name the backend knows the model by, which differs from the
@@ -235,6 +240,7 @@ type checker struct {
 	probeClient *http.Client
 	res         []Result
 	probes      map[string]ProbeResult
+	disabled    map[string]bool // disabled in models.json
 }
 
 func (c *checker) add(name string, status Status, msg, hint string) {
@@ -297,8 +303,12 @@ func (c *checker) checkModelsConfig() map[string]modelEntry {
 		return nil
 	}
 	c.add("models.json", StatusPass, fmt.Sprintf("%d models mapped", len(models)), "")
+	c.disabled = map[string]bool{}
 	for id, m := range models {
-		if m.LocalOnly {
+		if m.Disabled {
+			c.disabled[id] = true
+		}
+		if m.LocalOnly || m.Disabled {
 			delete(models, id)
 		}
 	}
@@ -314,7 +324,7 @@ func (c *checker) checkModelsConfig() map[string]modelEntry {
 		}
 	}
 	for id := range cfg {
-		if _, ok := models[id]; !ok {
+		if _, ok := models[id]; !ok && !c.disabled[id] {
 			missingFromJSON = append(missingFromJSON, id)
 		}
 	}
@@ -414,6 +424,9 @@ func (c *checker) checkHealth() {
 	// check completes, so neither should fail a run started right after boot.
 	var unhealthy, other []string
 	for id, h := range health {
+		if c.disabled[id] {
+			continue
+		}
 		switch h.HealthString {
 		case "healthy":
 		case "unhealthy":

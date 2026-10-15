@@ -553,6 +553,7 @@ func (h *ModelHealthChecker) chatCompatible(modelID string) bool {
 // SetProbeExempt excludes a model from deep checks. Local-only models are:
 // each check is a real completion, and on a metered backend the operator has
 // reserved for their own use it spends that reservation on the node itself.
+// Disabled models are too, since nothing is routed to them.
 func (h *ModelHealthChecker) SetProbeExempt(modelID string, exempt bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
