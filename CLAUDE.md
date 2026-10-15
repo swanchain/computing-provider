@@ -214,9 +214,10 @@ all does. Non-chat models (embeddings, image, audio) are skipped, since they
 answer 404 at `/v1/chat/completions`. So are disabled models, whether
 `"disabled": true` in models.json or disabled through the API: nothing is
 routed to them, and on a metered proxy each probe spends quota to record a
-failure the operator already knows about. The self-check skips models disabled
-in models.json the same way, but keeps probing the ones it disabled itself,
-since that probe is what re-enables them.
+failure the operator already knows about. The self-check leaves models
+disabled in models.json out of every audit — probe, health, registration and
+config agreement — but keeps probing the ones it disabled itself, since that
+probe is what re-enables them.
 
 ```toml
 [HealthCheck]
