@@ -59,8 +59,10 @@ function ago(iso: string) {
   return `${Math.round(s / 3600)}h ago`;
 }
 
+// 1px to 4.5px: wide enough to rank routes at a glance, narrow enough that
+// many routes into one box stay readable.
 function stroke(requests: number, max: number) {
-  return 1.5 + 8 * (Math.log1p(requests) / Math.log1p(Math.max(max, 1)));
+  return 1 + 3.5 * (Math.log1p(requests) / Math.log1p(Math.max(max, 1)));
 }
 
 const isDirect = (l: RouteLink) => l.source === 'direct';
