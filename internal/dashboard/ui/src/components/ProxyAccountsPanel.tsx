@@ -10,19 +10,45 @@ function dateLabel(value?: string) {
   return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
 }
 
+// The proxy learns an account's usage only from the headers on responses it
+// relays, so the figure stops moving whenever this proxy is idle — while the
+// same account can still be used elsewhere. Past this age it is flagged.
+const QUOTA_STALE_MS = 30 * 60 * 1000;
+
+function ageLabel(value?: string) {
+  const ms = value ? Date.now() - Date.parse(value) : NaN;
+  if (!Number.isFinite(ms)) return 'time unknown';
+  const mins = Math.max(0, Math.floor(ms / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hours = Math.floor(mins / 60);
+  if (hours < 48) return hours + 'h ' + (mins % 60) + 'm ago';
+  return Math.floor(hours / 24) + 'd ago';
+}
+
+function quotaStale(value?: string) {
+  const t = value ? Date.parse(value) : NaN;
+  return !Number.isFinite(t) || Date.now() - t > QUOTA_STALE_MS;
+}
+
 function compactCount(n: number) {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 }
 
-function WindowBar({ w }: { w: ProxyQuotaWindow }) {
+function WindowBar({ w, stale }: { w: ProxyQuotaWindow; stale: boolean }) {
   const pct = Math.max(0, Math.min(100, w.used_percent));
+  // A window that has reset since the report says nothing about the current one.
+  if (stale && w.reset_at && isPast(w.reset_at)) return <div className="min-w-0 text-sm">
+    <p className="text-slate-300">{w.label} usage</p>
+    <p className="mt-1 text-xs text-slate-400">Reset {dateLabel(w.reset_at)}, after the last report. Current usage is unknown until this account serves a request.</p>
+  </div>;
   return <div className="min-w-0">
     <div className="mb-1 flex flex-wrap justify-between gap-x-3 text-sm">
       <span className="text-slate-300">{w.label} usage</span>
-      <span className={pct >= 90 ? 'text-amber-200' : 'text-slate-200'}>{pct.toFixed(0)}% used{pct >= 90 ? ' · near limit' : ''}</span>
+      <span className={pct >= 90 ? 'text-amber-200' : 'text-slate-200'}>{stale ? 'at least ' : ''}{pct.toFixed(0)}% used{pct >= 90 ? ' · near limit' : ''}</span>
     </div>
     <div role="meter" aria-label={w.label + ' usage'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} className="h-2 overflow-hidden rounded bg-slate-700">
-      <div className={'h-full ' + (pct >= 90 ? 'bg-amber-400' : 'bg-emerald-400')} style={{ width: pct + '%' }} />
+      <div className={'h-full ' + (pct >= 90 ? 'bg-amber-400' : 'bg-emerald-400') + (stale ? ' opacity-50' : '')} style={{ width: pct + '%' }} />
     </div>
     {w.reset_at && <p className="mt-1 text-xs text-slate-400">Resets {dateLabel(w.reset_at)}</p>}
   </div>;
@@ -32,6 +58,7 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
   const expired = isPast(a.expires);
   const unavailable = accountWideCooldown(a);
   const claude = a.provider === 'claude' || a.provider === 'anthropic';
+  const stale = quotaStale(a.quota_observed_at);
   const status = a.disabled ? 'Disabled' : expired ? 'Check sign-in' : unavailable ? 'Temporarily unavailable' : a.status === 'active' ? 'Signed in' : a.status || 'Status unknown';
   const style = a.disabled ? 'bg-slate-800 text-slate-400' : expired || unavailable ? 'bg-amber-500/10 text-amber-200' : 'bg-emerald-500/10 text-emerald-200';
   return <li className="min-w-0 p-4 sm:p-5">
@@ -44,9 +71,11 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
       <span className={'rounded-full px-3 py-1 text-xs font-medium ' + style}>{status}</span>
     </div>
     {!a.disabled && <div className="mt-4">
-      {a.windows.length ? <div className="grid gap-4 xl:grid-cols-2">{a.windows.map((w) => <WindowBar key={w.label} w={w} />)}</div> :
+      {a.windows.length ? <div className="grid gap-4 xl:grid-cols-2">{a.windows.map((w) => <WindowBar key={w.label} w={w} stale={stale} />)}</div> :
         <p className="text-sm leading-6 text-slate-400">{claude ? <>Subscription usage isn’t available here. <a className="text-sky-300 underline underline-offset-4" href="https://claude.ai/settings/usage" target="_blank" rel="noreferrer">View usage in Claude ↗</a></> : a.provider === 'codex' ? 'Usage has not been reported yet. It appears after this account serves a request.' : 'This provider does not report subscription usage to the proxy.'}</p>}
-      {a.windows.length > 0 && <p className="mt-2 text-xs text-slate-400">Usage last reported: {dateLabel(a.quota_observed_at)}</p>}
+      {a.windows.length > 0 && (stale
+        ? <p className="mt-2 text-xs leading-5 text-amber-200">⚠ Usage last reported {ageLabel(a.quota_observed_at)} ({dateLabel(a.quota_observed_at)}). It updates only when this proxy serves a request, so any use of this account elsewhere since then is not counted.</p>
+        : <p className="mt-2 text-xs text-slate-400">Usage last reported {ageLabel(a.quota_observed_at)} ({dateLabel(a.quota_observed_at)})</p>)}
     </div>}
     {!!a.cooldowns.length && <div className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3">
       <p className="text-sm font-medium text-amber-200">{unavailable ? 'Account restriction' : 'Model restrictions'}</p>
