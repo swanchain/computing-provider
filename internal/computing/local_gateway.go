@@ -271,14 +271,19 @@ func (s *InferenceService) withoutLocalOnly(ids []string) []string {
 }
 
 // startupModelList is config.toml's Models list as the first registration
-// may send it: without local-only models, and without models disabled in
-// models.json. The first registration goes out before any health check, so
-// without the second rule every restart re-offered a disabled model to the
-// hub until the registry's own list replaced it.
+// may send it: without local-only models, and without disabled ones. The
+// first registration goes out before any health check, so without the second
+// rule every restart re-offered a disabled model to the hub until the
+// registry's own list replaced it.
+//
+// Disabled is read from the registry, which has applied models.json's
+// "disabled" by the time this runs. s.modelMappings is no use for it: the
+// registry's add callback rebuilds each entry from the registered model, which
+// does not carry the flag.
 func (s *InferenceService) startupModelList(ids []string) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range s.withoutLocalOnly(ids) {
-		if m, ok := s.modelMappings[id]; ok && m.Disabled {
+		if _, disabled := s.disabledInRegistry(id); disabled {
 			continue
 		}
 		out = append(out, id)
