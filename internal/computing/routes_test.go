@@ -74,3 +74,41 @@ func TestRoutesGroupsTrafficAndListsIdleBackends(t *testing.T) {
 		t.Errorf("a disabled model's idle backend was listed: %+v", m.Backends)
 	}
 }
+
+// Direct usage is derived per counter: a model served by two proxies gets a
+// link to each that did unrecorded work, recorded work is subtracted, and a
+// counter with no unrecorded output makes no link.
+func TestDirectRouteLinksPerBackend(t *testing.T) {
+	bucket := 5 * time.Minute
+	from := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	at := func(m int) time.Time { return from.Add(time.Duration(m) * time.Minute) }
+	hub, local := perModelKey("http://localhost:8317", "openai/sol"), perModelKey("http://127.0.0.1:8318", "openai/sol")
+	in := usageData{
+		samples: map[string][]BackendUsageSample{
+			hub:   {{Endpoint: hub, Time: at(-5), Generated: 100}, {Endpoint: hub, Time: at(10), Generated: 150}},
+			local: {{Endpoint: local, Time: at(-5), Generated: 0}, {Endpoint: local, Time: at(20), Prompt: 900, Generated: 400}},
+			"http://localhost:30000": {{Endpoint: "http://localhost:30000", Time: at(-5)}, {Endpoint: "http://localhost:30000", Time: at(30), Generated: 0}},
+		},
+		endpointModels: map[string][]string{hub: {"openai/sol"}, local: {"openai/sol"}, "http://localhost:30000": {"org/glm"}},
+		// The hub instance's 50 generated tokens are all the node's own work.
+		records: []usageRecord{{Model: "openai/sol", Source: string(SourceHub), StartTime: at(7), TokensOut: 50}},
+	}
+	classOf := usageClassOf(map[string]ModelMapping{"openai/sol": {Endpoint: "http://localhost:8317", LocalEndpoint: "http://127.0.0.1:8318"}})
+	links := directRouteLinks(in, classOf, from, to, bucket)
+	if len(links) != 1 {
+		t.Fatalf("links = %+v, want only the local proxy's unrecorded work", links)
+	}
+	l := links[0]
+	if l.Source != SourceDirect || l.Backend != "http://127.0.0.1:8318" || l.Model != "openai/sol" || l.TokensOut != 400 || l.TokensIn != 900 || l.Requests != 0 {
+		t.Errorf("link = %+v", l)
+	}
+	if !l.LastAt.Equal(at(25)) {
+		t.Errorf("last = %v, want the end of the bucket the work was counted in", l.LastAt)
+	}
+
+	m := buildRouteMap(nil, nil, nil, append(links, RouteLink{Source: SourceDirect, Model: "x/y", Backend: "http://localhost:9999", TokensOut: 1}))
+	if len(m.Links) != 2 || len(m.Backends) != 2 || m.Backends[1].Roles[0] != "direct" {
+		t.Errorf("direct links should be kept and their unconfigured backends listed as direct: %+v", m)
+	}
+}
