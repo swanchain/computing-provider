@@ -184,8 +184,10 @@ func TestLocalOnlyModelNeverReachesTheHub(t *testing.T) {
 	if got := s.client.ModelList(); len(got) != 1 {
 		t.Errorf("startup list %v still carries the local-only model", got)
 	}
-	// ...and a model models.json disables.
-	s.modelMappings["org/off"] = ModelMapping{Endpoint: backend.URL, Disabled: true}
+	// ...and a disabled one. Its mapping does not carry the flag, as on a
+	// real start, where the registry's callback rebuilds the mappings.
+	s.registry.models["org/off"] = &RegisteredModel{ID: "org/off", Enabled: false, fileDisabled: true}
+	s.modelMappings["org/off"] = ModelMapping{Endpoint: backend.URL}
 	if got := s.startupModelList([]string{"org/public", "org/off"}); len(got) != 1 || got[0] != "org/public" {
 		t.Errorf("startup list %v, want the disabled model dropped", got)
 	}
