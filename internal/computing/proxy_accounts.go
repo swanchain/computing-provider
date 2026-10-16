@@ -170,6 +170,9 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 	names := s.modelEndpoints()
 	creds := map[string]map[string]cliproxy.Credential{} // auth dir -> file -> credential
 	for _, ep := range endpoints {
+		if !onThisMachine(ep) {
+			continue // the management key stays on this machine
+		}
 		var files authFilesResponse
 		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err := b.management(cctx, ep+"/v0/management/auth-files", &files)

@@ -747,18 +747,27 @@ Loopback only, since neither it nor the servers behind it authenticate.
 A model can give the gateway its own backend with `local_endpoint` (and
 `local_api_key`) in models.json — for example a second CLIProxyAPI on a
 separate account, so the operator's own tools do not spend the quota that
-routed work depends on. Hub requests and probes keep using `endpoint`. The
-gateway's backend is checked for reachability every minute (`GET /v1/models`,
-no completion, since a completion would spend the quota being protected) and
-shown per model as `local_health`; its counters are sampled for direct usage
-too, each compared only with the recorded requests that went to it.
+routed work depends on. Hub requests and probes keep using `endpoint`. Its
+counters are sampled for direct usage too, each compared only with the
+recorded requests that went to it.
+
+**Only models registered with Swan Inference are health-checked.** A check
+exists to keep the hub from routing to a model that cannot serve; nothing
+routes to a gateway backend but the operator's own clients, which see a
+failure the moment it happens. Probing one anyway cost a request every 30
+seconds — against a metered proxy or a third-party API — to learn what the
+next real request would have said. So a gateway backend (a `local_endpoint`,
+or a local-only model's `endpoint`) is shown as `local_health` from the last
+request the gateway sent it: `healthy` if the backend answered (a 400 or 429
+counts — that is the request, not the backend), `unreachable` if it did not,
+`unknown` before the first. A request the client abandoned is not counted.
 
 `"local_only": true` keeps a model to the gateway entirely: it is dropped from
 every registration (the startup list from config.toml and the re-registration
 after a models.json reload, which sends every ready model and ignores
 config.toml), a hub inference or warmup request for it is refused with 404,
-the health checker sends it no deep-check completion, and the self-check
-ignores it. Leaving a model out of config.toml is not enough on its own — the
+the health checker does not check it at all (it is `ready` once configured),
+and the self-check ignores it. Leaving a model out of config.toml is not enough on its own — the
 first hot reload registers it.
 
 **Direct usage.** Anything that still calls a model server directly can only
@@ -769,7 +778,10 @@ generated tokens are compared: llama.cpp's prompt counter excludes prompt-cache
 hits while a request's `prompt_tokens` does not, so subtracting prompts would
 report cache hits as missing work. llama.cpp answers `/metrics` with 501 unless
 started with `--metrics`, which `models serve` now always passes; an endpoint
-that cannot be read is listed as unmeasured, never as zero.
+that cannot be read is listed as unmeasured, never as zero. Only endpoints on
+this machine (loopback) are sampled; a remote one is listed as not measured.
+Its counters, if it has any, are not this node's, and a remote endpoint is most
+often a third-party API that should not be polled every minute.
 
 CLIProxyAPI has no `/metrics`. With `[Inference] CLIProxyManagementKey` set to
 its management `secret-key`, the sampler drains its usage queue each minute into
@@ -780,6 +792,12 @@ priced per model rather than as one sum for every model it fronts. The proxy
 needs `usage-statistics-enabled: true` (checked: off would read as idle) and a
 `redis-usage-queue-retention-seconds` of a few minutes, since the default 60 is
 the sample interval.
+
+**The management key never leaves this machine.** The sampler used to fall
+back to the management API whenever an endpoint's `/metrics` answered 404, so
+the key was sent to any such endpoint — a third-party API in models.json among
+them. It is now sent only to loopback addresses, by the sampler and the
+Proxies report alike, so a CLIProxyAPI on another host is not shown.
 
 `source` says where a request *entered*, not who *originated* it. A hub request
 carries no marker distinguishing customer traffic from the marketplace's own

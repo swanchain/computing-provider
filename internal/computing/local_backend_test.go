@@ -78,40 +78,78 @@ func TestLocalGatewayUsesLocalEndpoint(t *testing.T) {
 	}
 }
 
-// The local backend's reachability is reported per model, so a down local
-// backend does not hide behind the hub endpoint's health.
-func TestLocalBackendHealthIsReported(t *testing.T) {
+// A gateway backend's status is the outcome of the last request the gateway
+// sent it, not a probe: nothing is sent to it in the background, and a down
+// local backend still does not hide behind the hub endpoint's health.
+func TestLocalBackendHealthComesFromGatewayRequests(t *testing.T) {
+	var hits int
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
 		if r.Header.Get("Authorization") != "Bearer k" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = io.WriteString(w, `{"data":[]}`)
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer up.Close()
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
+	// Answers, but rejects the request: the backend is up.
+	picky := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"context too long"}}`)
+	}))
+	defer picky.Close()
 
 	s := NewInferenceService("test-node", t.TempDir())
+	s.client = &InferenceClient{metrics: NewInferenceMetrics()}
 	s.registry = NewModelRegistry("", nil)
-	s.registry.models["a"] = &RegisteredModel{ID: "a", Endpoint: "http://hub", LocalEndpoint: up.URL, LocalAPIKey: "k"}
-	s.registry.models["b"] = &RegisteredModel{ID: "b", Endpoint: "http://hub", LocalEndpoint: down.URL}
-	s.registry.models["c"] = &RegisteredModel{ID: "c", Endpoint: "http://hub"}
-	s.localChecker = newLocalBackendChecker(s.localBackends)
-	s.localChecker.checkAll()
+	s.registry.models["a"] = &RegisteredModel{ID: "a", Enabled: true, Endpoint: "http://hub", LocalEndpoint: up.URL, LocalAPIKey: "k"}
+	s.registry.models["b"] = &RegisteredModel{ID: "b", Enabled: true, Endpoint: "http://hub", LocalEndpoint: down.URL}
+	s.registry.models["c"] = &RegisteredModel{ID: "c", Enabled: true, Endpoint: "http://hub"}
+	s.registry.models["d"] = &RegisteredModel{ID: "d", Enabled: true, LocalOnly: true, Endpoint: picky.URL}
+	s.registry.models["e"] = &RegisteredModel{ID: "e", Enabled: true, LocalOnly: true, Endpoint: up.URL}
 
-	got := map[string]*RegisteredModel{}
-	for _, m := range s.GetAllModels() {
-		got[m.ID] = m
+	status := func() map[string]*RegisteredModel {
+		got := map[string]*RegisteredModel{}
+		for _, m := range s.GetAllModels() {
+			got[m.ID] = m
+		}
+		return got
 	}
+	if got := status(); got["a"].LocalHealth != "unknown" || got["e"].LocalHealth != "unknown" {
+		t.Errorf("before any request: a=%q e=%q, want unknown", got["a"].LocalHealth, got["e"].LocalHealth)
+	}
+
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+	for _, id := range []string{"a", "b", "d"} {
+		resp, err := http.Post(gw.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"`+id+`","messages":[{"role":"user","content":"x"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	got := status()
 	if got["a"].LocalHealth != "healthy" {
 		t.Errorf("a = %q (%s), want healthy", got["a"].LocalHealth, got["a"].LocalError)
 	}
-	if got["b"].LocalHealth != "unreachable" || !strings.Contains(got["b"].LocalError, "unreachable") {
-		t.Errorf("b = %q (%s), want unreachable", got["b"].LocalHealth, got["b"].LocalError)
+	if got["b"].LocalHealth != "unreachable" || got["b"].LocalError == "" {
+		t.Errorf("b = %q (%s), want unreachable with a reason", got["b"].LocalHealth, got["b"].LocalError)
 	}
 	if got["c"].LocalHealth != "" {
-		t.Errorf("c has no local endpoint but reports %q", got["c"].LocalHealth)
+		t.Errorf("c has no gateway backend but reports %q", got["c"].LocalHealth)
+	}
+	if got["d"].LocalHealth != "healthy" {
+		t.Errorf("d answered 400, which is the request and not the backend; got %q", got["d"].LocalHealth)
+	}
+	// e shares a's backend, which the gateway has just seen answer.
+	if got["e"].LocalHealth != "healthy" {
+		t.Errorf("e = %q, want healthy from the request to the same backend", got["e"].LocalHealth)
+	}
+	if hits != 1 {
+		t.Errorf("the local backend received %d requests, want only the one the gateway forwarded", hits)
 	}
 	raw, _ := json.Marshal(got["a"])
 	if strings.Contains(string(raw), `"k"`) {

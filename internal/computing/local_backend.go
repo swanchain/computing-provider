@@ -2,10 +2,9 @@ package computing
 
 import (
 	"context"
-	"fmt"
+	"net"
 	"net/http"
-	"runtime/debug"
-	"sort"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,22 +12,21 @@ import (
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 )
 
-// Reachability of the local gateway's own backends.
+// The local gateway's backends: a hub model's local_endpoint, and the
+// endpoint of a local-only model.
 //
-// The health checker probes each model's hub endpoint, and model state is
-// built from that alone. A model with a separate local_endpoint could
-// therefore show ready and healthy while every local request failed against
-// a backend that was down. This checks each local endpoint the cheap way —
-// GET /v1/models with its key — so the dashboard can say so.
+// Only models registered with Swan Inference are health-checked. A check
+// exists to keep the hub from routing to a model that cannot serve; nothing
+// routes to these but the operator's own clients, which see a failure the
+// moment it happens. Probing them anyway costs requests — every 30 seconds
+// against what is often a metered proxy or a third-party API — to learn what
+// the next real request would have said.
 //
-// It deliberately sends no completion. A local endpoint is typically a proxy
-// in front of a metered subscription, and a probe there spends the quota it
-// would be checking; whether that quota is exhausted is a question for the
-// proxy's own account status, not for a reachability check.
+// So a gateway backend's status is the outcome of the last request the
+// gateway sent it: reachable if the backend answered, failing if it did not.
+// Before the first request it is unknown.
 
-const localBackendInterval = time.Minute
-
-// localBackendStatus is one endpoint's last check.
+// localBackendStatus is one endpoint's last observed request.
 type localBackendStatus struct {
 	OK        bool
 	Error     string
@@ -36,148 +34,91 @@ type localBackendStatus struct {
 }
 
 type localBackendChecker struct {
-	endpoints func() map[string]string // endpoint -> API key
-	client    *http.Client
-
 	mu     sync.Mutex
-	status map[string]localBackendStatus
-	stop   chan struct{}
-	done   chan struct{}
+	status map[string]localBackendStatus // keyed by safeRouteEndpoint form
 }
 
-func newLocalBackendChecker(endpoints func() map[string]string) *localBackendChecker {
-	return &localBackendChecker{
-		endpoints: endpoints,
-		client:    &http.Client{Timeout: 10 * time.Second},
-		status:    map[string]localBackendStatus{},
-	}
+func newLocalBackendChecker() *localBackendChecker {
+	return &localBackendChecker{status: map[string]localBackendStatus{}}
 }
 
-func (c *localBackendChecker) Start() {
-	c.stop = make(chan struct{})
-	c.done = make(chan struct{})
-	go func() {
-		defer close(c.done)
-		defer func() {
-			if err := recover(); err != nil {
-				logs.GetLogger().Errorf("[local_backend] panic recovered: %v\n%s", err, debug.Stack())
-			}
-		}()
-		c.checkAll()
-		ticker := time.NewTicker(localBackendInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-c.stop:
-				return
-			case <-ticker.C:
-				c.checkAll()
-			}
-		}
-	}()
-}
-
-func (c *localBackendChecker) Stop() {
-	if c == nil || c.stop == nil {
+// Observe records the outcome of a gateway request to endpoint.
+func (c *localBackendChecker) Observe(endpoint string, st localBackendStatus) {
+	if c == nil || endpoint == "" {
 		return
 	}
-	close(c.stop)
-	<-c.done
-}
-
-func (c *localBackendChecker) checkAll() {
-	eps := c.endpoints()
-	keys := make([]string, 0, len(eps))
-	for ep := range eps {
-		keys = append(keys, ep)
-	}
-	sort.Strings(keys)
-	for _, ep := range keys {
-		st := localBackendStatus{CheckedAt: time.Now()}
-		if err := c.check(ep, eps[ep]); err != nil {
-			st.Error = err.Error()
-		} else {
-			st.OK = true
-		}
-		c.mu.Lock()
-		prev, seen := c.status[ep]
-		c.status[ep] = st
-		c.mu.Unlock()
-		if seen && prev.OK != st.OK {
-			if st.OK {
-				logs.GetLogger().Infof("Local gateway backend %s is reachable again", ep)
-			} else {
-				logs.GetLogger().Warnf("Local gateway backend %s is unreachable: %s", ep, st.Error)
-			}
-		}
-	}
 	c.mu.Lock()
-	for ep := range c.status {
-		if _, ok := eps[ep]; !ok {
-			delete(c.status, ep)
+	prev, seen := c.status[endpoint]
+	c.status[endpoint] = st
+	c.mu.Unlock()
+	if seen && prev.OK != st.OK {
+		if st.OK {
+			logs.GetLogger().Infof("Local gateway backend %s is answering again", endpoint)
+		} else {
+			logs.GetLogger().Warnf("Local gateway backend %s is failing: %s", endpoint, st.Error)
 		}
 	}
-	c.mu.Unlock()
 }
 
-func (c *localBackendChecker) check(endpoint, apiKey string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/v1/models", nil)
-	if err != nil {
-		return err
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("unreachable: %v", err)
-	}
-	resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("rejected local_api_key (HTTP %d)", resp.StatusCode)
-	case resp.StatusCode != http.StatusOK:
-		return fmt.Errorf("HTTP %d from /v1/models", resp.StatusCode)
-	}
-	return nil
-}
-
-// Status returns an endpoint's last check; ok is false before the first.
+// Status returns an endpoint's last observed request; ok is false before the
+// first.
 func (c *localBackendChecker) Status(endpoint string) (localBackendStatus, bool) {
 	if c == nil {
 		return localBackendStatus{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st, ok := c.status[endpoint]
+	st, ok := c.status[safeRouteEndpoint(endpoint)]
 	return st, ok
 }
 
-// localBackends lists the distinct local endpoints in use, with their keys.
-func (s *InferenceService) localBackends() map[string]string {
-	out := map[string]string{}
-	if s.registry == nil {
-		return out
+// backendAnswered reports whether a gateway response status means the backend
+// itself answered. A 400 or 429 is the request or the load, not the backend;
+// a 5xx, a 401/403/404, or no response at all (reported as 502) is the
+// backend. This is the classification the self-check uses.
+func backendAnswered(code int) bool {
+	switch {
+	case code < 400:
+		return true
+	case code == http.StatusBadRequest, code == http.StatusRequestEntityTooLarge,
+		code == http.StatusUnprocessableEntity, code == http.StatusTooManyRequests:
+		return true
 	}
-	for _, m := range s.registry.GetAllModels() {
-		if m.LocalEndpoint != "" && m.LocalEndpoint != m.Endpoint {
-			if _, seen := out[m.LocalEndpoint]; !seen || out[m.LocalEndpoint] == "" {
-				out[m.LocalEndpoint] = m.LocalAPIKey
-			}
-		}
+	return false
+}
+
+// observeLocal files a finished gateway request as its backend's status. A
+// request the client abandoned says nothing about the backend.
+func (s *InferenceService) observeLocal(r *http.Request, rec *RequestMetric) {
+	if !rec.RouteRecorded || rec.BackendEndpoint == "" || r.Context().Err() != nil {
+		return
 	}
-	return out
+	st := localBackendStatus{OK: rec.Success || backendAnswered(capturedStatus(r)), CheckedAt: rec.EndTime}
+	if !st.OK {
+		st.Error = rec.ErrorReason
+	}
+	s.localChecker.Observe(rec.BackendEndpoint, st)
+}
+
+// gatewayEndpoint is the backend the local gateway uses for a model.
+func gatewayEndpoint(m *RegisteredModel) string {
+	if m.LocalEndpoint != "" {
+		return m.LocalEndpoint
+	}
+	if m.LocalOnly {
+		return m.Endpoint
+	}
+	return ""
 }
 
 // withLocalHealth fills in each model's local backend status for display.
 func (s *InferenceService) withLocalHealth(models []*RegisteredModel) []*RegisteredModel {
 	for _, m := range models {
-		if m.LocalEndpoint == "" {
+		ep := gatewayEndpoint(m)
+		if ep == "" {
 			continue
 		}
-		st, ok := s.localChecker.Status(m.LocalEndpoint)
+		st, ok := s.localChecker.Status(ep)
 		switch {
 		case !ok:
 			m.LocalHealth = "unknown"
@@ -188,4 +129,65 @@ func (s *InferenceService) withLocalHealth(models []*RegisteredModel) []*Registe
 		}
 	}
 	return models
+}
+
+// onThisMachine reports whether an endpoint's host is a loopback address.
+// The CLIProxyAPI management key is sent only to these: anything else may be
+// a third party, and a 404 from its /metrics is no evidence it is a proxy.
+func onThisMachine(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// statusCapture records the status a gateway handler wrote, so the request
+// can be filed against its backend once it finishes.
+type statusCapture struct {
+	http.ResponseWriter
+	code int
+}
+
+func (w *statusCapture) WriteHeader(code int) {
+	if w.code == 0 {
+		w.code = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCapture) Write(b []byte) (int, error) {
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Flush keeps streaming working through the wrapper.
+func (w *statusCapture) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+type statusCaptureKey struct{}
+
+func withStatusCapture(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sc := &statusCapture{ResponseWriter: w}
+		next.ServeHTTP(sc, r.WithContext(context.WithValue(r.Context(), statusCaptureKey{}, sc)))
+	})
+}
+
+// capturedStatus is the status written so far for a gateway request.
+func capturedStatus(r *http.Request) int {
+	if sc, ok := r.Context().Value(statusCaptureKey{}).(*statusCapture); ok {
+		return sc.code
+	}
+	return 0
 }

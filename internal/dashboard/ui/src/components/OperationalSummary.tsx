@@ -47,8 +47,9 @@ export function OperationalSummary({ status, metrics, models, dataIssues, loadin
   }
   const localDown = models?.models.filter((m) => m.local_health === 'unreachable').length ?? 0;
   if (localDown) {
-    severity = 'critical';
-    messages.push(`${localDown} local model routes unreachable`);
+    // Hub traffic is unaffected; this is the operator's own clients' backend.
+    if (severity === 'healthy') severity = 'warning';
+    messages.push(`${localDown} local model route${localDown === 1 ? '' : 's'} failed the last request`);
   }
   if (models && models.summary.total === 0) {
     severity = 'critical';

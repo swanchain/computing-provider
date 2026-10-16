@@ -240,7 +240,16 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.ContextLength = mapping.ContextLength
 				existingModel.LocalEndpoint = mapping.LocalEndpoint
 				existingModel.LocalAPIKey = mapping.LocalAPIKey
+				localOnlyChanged := existingModel.LocalOnly != mapping.LocalOnly
 				existingModel.LocalOnly = mapping.LocalOnly
+				if localOnlyChanged && existingModel.State != ModelStateDisabled {
+					existingModel.State = initialState(existingModel)
+					existingModel.StateString = existingModel.State.String()
+					if mapping.LocalOnly {
+						existingModel.Health = ModelHealthUnknown
+						existingModel.HealthString = ModelHealthUnknown.String()
+					}
+				}
 				if existingModel.fileDisabled != mapping.Disabled {
 					existingModel.fileDisabled = mapping.Disabled
 					if mapping.Disabled {
@@ -252,10 +261,7 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.UpdatedAt = now
 
 				// Update health checker with new endpoint
-				if r.healthChecker != nil {
-					r.healthChecker.SetProbeExempt(modelID, probeExempt(existingModel))
-					r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
-				}
+				r.syncHealthCheckLocked(existingModel)
 
 				logs.GetLogger().Infof("Updated model configuration: %s", modelID)
 				if r.onModelUpdated != nil {
@@ -285,8 +291,6 @@ func (r *ModelRegistry) loadConfig() error {
 				LocalEndpoint: mapping.LocalEndpoint,
 				LocalAPIKey:   mapping.LocalAPIKey,
 				LocalOnly:     mapping.LocalOnly,
-				State:         ModelStateLoading,
-				StateString:   ModelStateLoading.String(),
 				Health:        ModelHealthUnknown,
 				HealthString:  ModelHealthUnknown.String(),
 				LoadedAt:      now,
@@ -294,16 +298,15 @@ func (r *ModelRegistry) loadConfig() error {
 				Enabled:       true,
 				fileDisabled:  mapping.Disabled,
 			}
+			model.State = initialState(model)
+			model.StateString = model.State.String()
 			if mapping.Disabled {
 				disableLocked(model)
 			}
 			r.models[modelID] = model
 
 			// Register with health checker
-			if r.healthChecker != nil {
-				r.healthChecker.SetProbeExempt(modelID, probeExempt(model))
-				r.healthChecker.RegisterModel(modelID, mapping.Endpoint, mapping.APIKey, mapping.LocalModel, mapping.Category)
-			}
+			r.syncHealthCheckLocked(model)
 
 			logs.GetLogger().Infof("Registered new model: %s -> %s (local: %s)", modelID, mapping.Endpoint, mapping.LocalModel)
 			if r.onModelAdded != nil {
@@ -407,7 +410,9 @@ func (r *ModelRegistry) onHealthStatusChange(modelID string, oldHealth, newHealt
 	r.mu.Lock()
 
 	model, exists := r.models[modelID]
-	if !exists {
+	// A local-only model is not health-checked; a result can only be a check
+	// that was in flight when it was made local-only.
+	if !exists || model.LocalOnly {
 		r.mu.Unlock()
 		return
 	}
@@ -625,7 +630,10 @@ func enableLocked(model *RegisteredModel) {
 	// The state is derived from health rather than assumed Ready, so enabling a
 	// model whose backend is down does not claim otherwise. Unknown health
 	// becomes Loading, which the next check resolves.
-	if model.State == ModelStateDisabled {
+	if model.State == ModelStateDisabled && model.LocalOnly {
+		model.State = ModelStateReady
+		model.StateString = model.State.String()
+	} else if model.State == ModelStateDisabled {
 		switch model.Health {
 		case ModelHealthHealthy, ModelHealthDegraded:
 			model.State = ModelStateReady
@@ -645,6 +653,31 @@ func enableLocked(model *RegisteredModel) {
 // probe, not this one.
 func probeExempt(model *RegisteredModel) bool {
 	return model.LocalOnly || !model.Enabled
+}
+
+// initialState is a newly configured model's state. A hub model starts
+// Loading and becomes Ready once a health check passes. A local-only model is
+// never health-checked — see local_backend.go — so it is Ready as soon as it is
+// configured; the gateway's own requests report how its backend is doing.
+func initialState(model *RegisteredModel) ModelState {
+	if model.LocalOnly {
+		return ModelStateReady
+	}
+	return ModelStateLoading
+}
+
+// syncHealthCheckLocked registers a model with the health checker, or removes
+// it when it is local-only. The caller holds r.mu.
+func (r *ModelRegistry) syncHealthCheckLocked(model *RegisteredModel) {
+	if r.healthChecker == nil {
+		return
+	}
+	if model.LocalOnly {
+		r.healthChecker.UnregisterModel(model.ID)
+		return
+	}
+	r.healthChecker.SetProbeExempt(model.ID, probeExempt(model))
+	r.healthChecker.RegisterModel(model.ID, model.Endpoint, model.APIKey, model.LocalModel, model.Category)
 }
 
 func disableLocked(model *RegisteredModel) {

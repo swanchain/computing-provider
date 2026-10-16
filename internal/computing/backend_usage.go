@@ -224,6 +224,16 @@ func (b *BackendUsageSampler) sampleAll() {
 	var rows []BackendUsageSample
 	for ep, info := range eps {
 		st := BackendEndpointStatus{Endpoint: ep, Models: info.Models}
+		if !onThisMachine(ep) {
+			// A remote endpoint is most often a third-party API: its counters,
+			// if it publishes any, are not this node's, and polling it every
+			// minute is load on somebody else's service for nothing.
+			st.Reason = "not on this machine — not measured"
+			b.mu.Lock()
+			b.status[ep] = st
+			b.mu.Unlock()
+			continue
+		}
 		readings, err := b.read(ep, info, now)
 		if err != nil {
 			st.Reason = err.Error()
@@ -424,6 +434,12 @@ func containsString(list []string, s string) bool {
 
 // management GETs a CLIProxyAPI management route and decodes its JSON.
 func (b *BackendUsageSampler) management(ctx context.Context, url string, into any) error {
+	// The management key controls the proxy and its accounts. A 404 from some
+	// endpoint's /metrics is no evidence that endpoint is a proxy, so the key
+	// is never sent off this machine, whatever asked for it.
+	if !onThisMachine(url) {
+		return fmt.Errorf("not on this machine — the CLIProxyAPI management key is only sent to a proxy on loopback")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

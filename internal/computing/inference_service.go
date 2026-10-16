@@ -210,6 +210,7 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		nodeID:             nodeID,
 		cpPath:             cpPath,
 		modelMappings:      make(map[string]ModelMapping),
+		localChecker:       newLocalBackendChecker(),
 		registry:           registry,
 		healthChecker:      healthChecker,
 		rateLimiter:        rateLimiter,
@@ -537,9 +538,6 @@ func (s *InferenceService) Start() error {
 
 	// Sample the model servers' token counters, the only record of work sent
 	// to them directly rather than through this node.
-	s.localChecker = newLocalBackendChecker(s.localBackends)
-	s.localChecker.Start()
-
 	s.usageSampler = NewBackendUsageSampler(s.modelEndpoints)
 	if cfg := conf.GetConfig(); cfg != nil {
 		s.usageSampler.managementKey = cfg.Inference.CLIProxyManagementKey
@@ -591,7 +589,6 @@ func (s *InferenceService) Stop() {
 	if s.requestStore != nil {
 		s.requestStore.Stop()
 	}
-	s.localChecker.Stop()
 	if s.usageSampler != nil {
 		s.usageSampler.Stop()
 	}

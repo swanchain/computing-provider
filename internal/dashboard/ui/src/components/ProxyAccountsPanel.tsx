@@ -201,6 +201,14 @@ function UsagePie({ inst }: { inst: ProxyInstance }) {
   </section>;
 }
 
+// Gateway backends are not probed; their status is the last request the local
+// gateway sent them.
+function localBackendLabel(health?: string): string {
+  if (health === 'healthy') return 'last request answered';
+  if (health === 'unreachable') return 'last request failed';
+  return 'no requests yet';
+}
+
 export function ProxyUsageCharts({ instances }: { instances: ProxyInstance[] }) {
   return <div>
     <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-3">
@@ -223,7 +231,7 @@ export function ProxyRoutingPanel({ models }: { models: ModelStatus[] }) {
         <p className={'mt-2 text-xs ' + (m.local_only ? 'text-sky-300' : 'text-slate-300')}>{m.local_only ? 'Local only · not registered to hub' : 'Hub and local routing configured'}</p>
         <dl className="mt-3 space-y-3 text-sm">
           {!m.local_only && <div><dt className="text-slate-400">Hub backend · {m.health_string}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-300">{m.endpoint}</dd></div>}
-          <div><dt className="text-slate-400">Local backend · {m.local_endpoint ? m.local_health === 'healthy' ? 'reachable' : m.local_health === 'unreachable' ? 'unreachable' : 'not checked yet' : m.health_string}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-300">{m.local_endpoint || m.endpoint}</dd></div>
+          <div><dt className="text-slate-400">Local backend · {localBackendLabel(m.local_health)}</dt><dd className="mt-1 break-all font-mono text-xs text-slate-300">{m.local_endpoint || m.endpoint}</dd></div>
         </dl>
         {m.local_error && <p className="mt-2 break-words text-sm text-amber-200">{m.local_error}</p>}
       </article>)}</div>
