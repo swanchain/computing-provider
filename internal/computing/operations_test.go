@@ -262,3 +262,35 @@ func newMultipart(body *bytes.Buffer, fields map[string]string, audio []byte) st
 	_ = mw.Close()
 	return mw.FormDataContentType()
 }
+
+// An embeddings request through the gateway reaches the backend's
+// /v1/embeddings under the local model name and is recorded with its tokens.
+func TestLocalGatewayEmbeddings(t *testing.T) {
+	var path, model string
+	s, srv := newGatewayService(t, func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		model, _ = body["model"].(string)
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":7,"total_tokens":7}}`))
+	})
+	s.modelMappings["org/embed"] = ModelMapping{Endpoint: srv.URL, LocalModel: "embed-local", Category: "embeddings"}
+	gw := httptest.NewServer(s.LocalGatewayHandler())
+	defer gw.Close()
+
+	resp, err := http.Post(gw.URL+"/v1/embeddings", "application/json", strings.NewReader(`{"model":"org/embed","input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(got), `"embedding"`) {
+		t.Fatalf("status %d body %s", resp.StatusCode, got)
+	}
+	if path != "/v1/embeddings" || model != "embed-local" {
+		t.Errorf("backend saw %s with model %q", path, model)
+	}
+	if rec := lastLocalRecord(t, s); !rec.Success || rec.TokensIn != 7 || rec.Model != "org/embed" {
+		t.Errorf("record = %+v", rec)
+	}
+}
