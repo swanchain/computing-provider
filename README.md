@@ -269,30 +269,60 @@ Live probe
 That credential is not expired, so re-authenticating will not help — check
 whether the account still has access.
 
-### Separate accounts for marketplace and personal use
+### Hub proxy and local proxy
 
-Run a second CLIProxyAPI on its own account and give it to the
-[local gateway](#local-gateway), so your own tools never spend the quota that
-marketplace traffic depends on:
+Run two CLIProxyAPI instances, each logged in to a **different account**:
 
-```json
-{
-  "openai/gpt-5.5": {
-    "endpoint": "http://127.0.0.1:8317",
-    "local_endpoint": "http://127.0.0.1:8318",
-    "local_api_key": "<second proxy's key>",
-    "local_model": "gpt-5.5"
-  },
-  "anthropic/claude-sonnet-5-5": {
-    "endpoint": "http://127.0.0.1:8318",
-    "local_model": "claude-sonnet-5-5",
-    "local_only": true
-  }
-}
-```
+| | Serves | Port (example) | models.json field |
+|---|---|---|---|
+| **Hub proxy** | marketplace requests from Swan Inference | `8317` | `endpoint` |
+| **Local proxy** | your own tools, through the [local gateway](#local-gateway) | `8318` | `local_endpoint`, or `endpoint` on a `local_only` model |
 
-Marketplace requests and health probes use `endpoint`; the gateway uses
-`local_endpoint`.
+Your own scripts and agents then never spend the quota that marketplace traffic
+depends on, and a busy benchmark cannot rate-limit routed work.
+
+1. Start the second proxy from its own directory, with its own `config.yaml`,
+   `port`, `api-keys` and auth directory, and log it in to the second account.
+2. Map models to the two proxies in `models.json`:
+
+   ```json
+   {
+     "openai/gpt-5.5": {
+       "endpoint": "http://127.0.0.1:8317",
+       "api_key": "<hub proxy's key>",
+       "local_endpoint": "http://127.0.0.1:8318",
+       "local_api_key": "<local proxy's key>",
+       "local_model": "gpt-5.5"
+     },
+     "anthropic/claude-sonnet-5-5": {
+       "endpoint": "http://127.0.0.1:8318",
+       "api_key": "<local proxy's key>",
+       "local_model": "claude-sonnet-5-5",
+       "local_only": true
+     }
+   }
+   ```
+
+   `openai/gpt-5.5` is offered on the marketplace through the hub proxy, and the
+   same model name on the gateway goes to the local proxy instead.
+   `claude-sonnet-5-5` is for your own use only.
+3. Point your clients at the gateway, not at either proxy:
+
+   ```bash
+   export OPENAI_BASE_URL=http://127.0.0.1:9088/v1   # any API key is accepted
+   curl $OPENAI_BASE_URL/chat/completions -H 'Content-Type: application/json' \
+     -d '{"model":"openai/gpt-5.5","messages":[{"role":"user","content":"hi"}]}'
+   ```
+
+   Calling the local proxy directly works too, but the node then sees the work
+   only as `direct` usage in the proxy's counters, not as `local` requests.
+
+**Only hub models are health-checked.** Health probes are real completions, so
+they run only against `endpoint` on models offered to the marketplace. The local
+proxy, and every `local_only` model, are never probed: the dashboard shows their
+state from the last request the gateway sent them ("last request answered",
+"last request failed", "no requests yet"). A failing local route is a warning,
+never a reason to stop serving marketplace traffic.
 
 `"local_only": true` keeps a model off the marketplace entirely: it is never
 registered, requests for it from Swan Inference are refused, and it is never
@@ -304,6 +334,8 @@ For the dashboard's **Proxies** tab — accounts, quota, per-model token use —
 `[Inference] CLIProxyManagementKey` to the proxies' management `secret-key`, and
 in each proxy's `config.yaml` set `usage-statistics-enabled: true` and
 `redis-usage-queue-retention-seconds` to a few minutes.
+The key is only ever sent to proxies on this machine (`localhost` or a loopback
+address); a remote endpoint is never given it.
 
 ---
 
@@ -320,6 +352,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:9088/v1   # any API key is accepted
 |---|---|
 | `POST /v1/chat/completions` | Chat, streaming or not |
 | `POST /v1/images/generations` | Image models |
+| `POST /v1/embeddings` | Embedding models |
 | `POST /v1/audio/transcriptions` | Speech to text, standard multipart upload |
 | `GET /v1/models` | Every model the gateway can reach, including `local_only` ones |
 
