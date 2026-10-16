@@ -46,6 +46,7 @@ func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.serveLocalChat)
 	mux.HandleFunc("/v1/models", s.serveLocalModels)
 	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
+	mux.HandleFunc("/v1/embeddings", s.serveLocalEmbeddings)
 	mux.HandleFunc("/v1/audio/transcriptions", s.serveLocalTranscription)
 	return mux
 }
@@ -341,6 +342,19 @@ func writeLocalError(w http.ResponseWriter, status int, msg string) {
 // serveLocalImages forwards an image generation request, recorded as local
 // work like the chat path.
 func (s *InferenceService) serveLocalImages(w http.ResponseWriter, r *http.Request) {
+	s.serveLocalJSONOperation(w, r, OpImagesGenerations)
+}
+
+// serveLocalEmbeddings forwards an embeddings request, so a client that also
+// needs vectors — a knowledge index, say — can use the gateway for both and
+// have that work show up beside its chat traffic.
+func (s *InferenceService) serveLocalEmbeddings(w http.ResponseWriter, r *http.Request) {
+	s.serveLocalJSONOperation(w, r, OpEmbeddings)
+}
+
+// serveLocalJSONOperation forwards a non-chat JSON request to the backend
+// path for op and records it as local.
+func (s *InferenceService) serveLocalJSONOperation(w http.ResponseWriter, r *http.Request, op string) {
 	if r.Method != http.MethodPost {
 		writeLocalError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -364,7 +378,7 @@ func (s *InferenceService) serveLocalImages(w http.ResponseWriter, r *http.Reque
 	}
 	s.recordLocal(r, head.Model, func(rec *RequestMetric) {
 		setLocalRoute(rec, endpoint, head.Model, localModel)
-		resp, err := s.forwardJSONOperation(r.Context(), OpImagesGenerations, endpoint, body, head.Model, localModel, apiKey)
+		resp, err := s.forwardJSONOperation(r.Context(), op, endpoint, body, head.Model, localModel, apiKey)
 		if err != nil {
 			rec.ErrorReason = err.Error()
 			writeLocalError(w, statusOf(err), err.Error())
