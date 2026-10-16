@@ -62,6 +62,14 @@ const priceFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 4,
 });
 
+// A local-only model is not health-checked: nothing routes to it but this
+// machine's own clients. Its status is the last local request's outcome.
+function localOnlyHealth(health?: string): string {
+  if (health === 'healthy') return 'last local request answered';
+  if (health === 'unreachable') return 'last local request failed';
+  return 'not health-checked · no local requests yet';
+}
+
 export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false, drops }: ModelsPanelProps) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
@@ -225,11 +233,11 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                   </div>
                   {localDown(model) && (
                     <div className="mt-0.5 break-all text-xs text-red-300" title={model.local_error || undefined}>
-                      ✗ local gateway backend {model.local_endpoint} unreachable — see Proxies
+                      ✗ local gateway backend {model.local_endpoint || model.endpoint} failed its last request — see Proxies
                     </div>
                   )}
                   <div className="text-xs text-slate-400 mt-0.5">
-                    {model.state_string} • {model.health_string}
+                    {model.state_string} • {model.local_only ? localOnlyHealth(model.local_health) : model.health_string}
                   </div>
                   <HealthStrip samples={healthLog?.[model.id] ?? []} />
                   {price && (

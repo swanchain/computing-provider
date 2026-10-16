@@ -50,7 +50,7 @@ CLIProxyManagementKey = ""                           # Optional: CLIProxyAPI man
 | `Models` | Yes | List of model names to serve (must match keys in `models.json`) |
 | `ServiceURL` | No | HTTP API URL for status checks. Auto-derived from WebSocketURL if empty |
 | `LocalGatewayPort` | No | Port of the loopback-only OpenAI-compatible gateway on `127.0.0.1` (default `9088`, `-1` disables) |
-| `CLIProxyManagementKey` | No | The `remote-management.secret-key` of your CLIProxyAPI instances. Enables the dashboard's Proxies tab (accounts, quota, per-model tokens) and direct-usage measurement for proxy-backed models |
+| `CLIProxyManagementKey` | No | The `remote-management.secret-key` of your CLIProxyAPI instances. Enables the dashboard's Proxies tab (accounts, quota, per-model tokens) and direct-usage measurement for proxy-backed models. Sent only to proxies on this machine (loopback) |
 
 ### Logging
 

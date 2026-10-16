@@ -48,7 +48,7 @@ func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
 	mux.HandleFunc("/v1/embeddings", s.serveLocalEmbeddings)
 	mux.HandleFunc("/v1/audio/transcriptions", s.serveLocalTranscription)
-	return mux
+	return withStatusCapture(mux)
 }
 
 // StartLocalGateway serves the gateway on 127.0.0.1:port until the returned
@@ -157,6 +157,7 @@ func (s *InferenceService) serveLocalChat(w http.ResponseWriter, r *http.Request
 	rec.EndTime = time.Now()
 	rec.LatencyMs = float64(rec.EndTime.Sub(rec.StartTime).Milliseconds())
 	rec.Client = <-client
+	s.observeLocal(r, &rec)
 	if s.client != nil {
 		if m := s.client.Metrics(); m != nil {
 			m.RecordRequest(rec)
@@ -476,6 +477,7 @@ func (s *InferenceService) recordLocal(r *http.Request, model string, serve func
 	rec.EndTime = time.Now()
 	rec.LatencyMs = float64(rec.EndTime.Sub(rec.StartTime).Milliseconds())
 	rec.Client = <-client
+	s.observeLocal(r, &rec)
 	if s.client != nil {
 		if m := s.client.Metrics(); m != nil {
 			m.RecordRequest(rec)
