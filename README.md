@@ -6,7 +6,7 @@
 Turn your GPU — or a subscription-backed model proxy — into a paid inference
 endpoint on the [Swan Inference](https://inference.swanchain.io) marketplace.
 
-Latest release: [v0.6.1](https://github.com/swanchain/computing-provider/releases/tag/v0.6.1).
+Latest release: [v0.7.0](https://github.com/swanchain/computing-provider/releases/tag/v0.7.0).
 
 ![Computing Provider v0.6.1 dashboard overview with usage, estimated earnings, model readiness, and GPU capacity](docs/images/dashboard.png)
 
