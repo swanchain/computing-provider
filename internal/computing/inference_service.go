@@ -119,6 +119,7 @@ type InferenceService struct {
 	concurrencyLimiter *ConcurrencyLimiter
 	retryPolicy        *RetryPolicy
 	gpuCollector       *GPUMetricsCollector
+	gpuStop            chan struct{} // closes the GPU sampling loop
 	metricsHistory     *MetricsHistory
 	requestStore       *RequestStore
 	usageSampler       *BackendUsageSampler // model servers' own token counters
@@ -649,6 +650,40 @@ func (s *InferenceService) startLocalStores() {
 			logs.GetLogger().Warnf("Failed to start metrics history: %v", err)
 		}
 	}
+
+	s.startGPUSampling()
+}
+
+// gpuSampleInterval is how often the dashboard's GPU figures are refreshed.
+var gpuSampleInterval = 15 * time.Second
+
+// startGPUSampling keeps the GPU figures fresh on their own. They used to be
+// refreshed only by the heartbeat, so a node that was not connected to the
+// hub showed "No GPUs detected" however hard its cards were working.
+func (s *InferenceService) startGPUSampling() {
+	if s.gpuCollector == nil || s.client == nil || s.client.metrics == nil {
+		return
+	}
+	stop := make(chan struct{})
+	s.gpuStop = stop
+	sample := func() {
+		if m := s.gpuCollector.CollectGPUMetrics(); len(m) > 0 {
+			s.client.metrics.UpdateGPUMetrics(m)
+		}
+	}
+	go func() {
+		sample()
+		ticker := time.NewTicker(gpuSampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				sample()
+			}
+		}
+	}()
 }
 
 // startupRetryable says whether a failed first connection is worth retrying
@@ -687,6 +722,10 @@ func (s *InferenceService) Stop() {
 	}
 	if s.requestStore != nil {
 		s.requestStore.Stop()
+	}
+	if s.gpuStop != nil {
+		close(s.gpuStop)
+		s.gpuStop = nil
 	}
 	if s.usageSampler != nil {
 		s.usageSampler.Stop()
