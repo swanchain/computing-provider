@@ -96,6 +96,10 @@ type GPUMetrics struct {
 	PowerLimitW      float64 `json:"power_limit_w"`
 	FanSpeedPct      float64 `json:"fan_speed_percent,omitempty"`
 	ComputeProcesses int     `json:"compute_processes"`
+	// UnifiedMemory marks a GPU with no memory of its own (GB10, Jetson,
+	// Thor): the memory figures are the system's, since that is what the
+	// GPU allocates from.
+	UnifiedMemory bool `json:"unified_memory,omitempty"`
 }
 
 // RequestMetric represents a single request's metrics
