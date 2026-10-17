@@ -63,11 +63,21 @@ computing-provider setup signup                 # create an account
 ```bash
 computing-provider run
 computing-provider run --host 0.0.0.0   # only on a trusted network
+computing-provider run --no-auth        # development: no control token
 ```
 
 Starts the WebSocket connection to Swan Inference, registers the models in
 `models.json`, and serves the local REST API. Shuts down cleanly on
 SIGTERM/SIGINT.
+
+`--no-auth` stops the API asking for `$CP_PATH/dashboard.token` on writes and
+settings reads, so a developer iterating against a local daemon is not pasting
+a token into every `curl` and every fresh browser tab; the dashboard shows
+**Auth off** in place of **Unlock controls**. It is refused unless `--host` is
+a loopback address, and it trusts every user on the machine — anyone with a
+shell there can take models out of service — so keep it off a shared host.
+The dashboard proxies to that API, so while it is open the `dashboard` command
+refuses a non-loopback `--host` as well.
 
 ### `selfcheck`
 

@@ -3,6 +3,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LockKeyhole,
+  LockKeyholeOpen,
   LogOut,
   ReceiptText,
   RefreshCw,
@@ -107,8 +108,10 @@ function App() {
   const routeReport = usePolling(useCallback(() => api.getRoutes(routeWindow), [routeWindow]), 15_000);
   const usageReport = usePolling(useCallback(() => api.getUsageHistory(chartWindow, 'node'), [chartWindow]), 60_000);
 
+  // Probed with or without a stored token: a daemon started with --no-auth
+  // answers the settings read to anyone, and the controls should open without
+  // asking for a token that is not being checked.
   useEffect(() => {
-    if (!api.hasAccessToken()) return;
     api.getSettings()
       .then(() => setAuthenticated(true))
       .catch(() => {
@@ -192,7 +195,15 @@ function App() {
               <RefreshCw aria-hidden="true" size={16} className={refreshing ? 'animate-spin' : ''} />
               <span className="hidden sm:inline">{refreshing ? 'Refreshing…' : 'Refresh'}</span>
             </button>
-            {authenticated ? (
+            {authenticated && !api.hasAccessToken() ? (
+              <span
+                title="The daemon runs with --no-auth: controls are open to every process on its machine."
+                className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-amber-700/60 bg-amber-950/40 px-3 text-sm text-amber-200"
+              >
+                <LockKeyholeOpen aria-hidden="true" size={16} />
+                <span className="hidden sm:inline">Auth off</span>
+              </span>
+            ) : authenticated ? (
               <button
                 type="button"
                 onClick={handleLock}

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/swanchain/computing-provider-v2/conf"
@@ -66,7 +68,24 @@ func EnsureAccessToken(cpRepoPath string) (token string, tokenPath string, err e
 	return token, tokenPath, nil
 }
 
+// authDisabled is set by `run --no-auth`. The token exists because the API
+// can take models out of service and read back operational settings; on a
+// developer's own machine, bound to loopback, it only gets in the way. The
+// daemon refuses the flag on any other bind, so a disabled token never faces
+// a network — but it does trust every local user, which is why a shared box
+// keeps it on.
+var authDisabled atomic.Bool
+
+// SetAuthDisabled turns the control token off (true) or back on (false).
+func SetAuthDisabled(disabled bool) { authDisabled.Store(disabled) }
+
+// AuthDisabled reports whether the control token is being enforced.
+func AuthDisabled() bool { return authDisabled.Load() }
+
 func authorized(c *gin.Context, token string) bool {
+	if authDisabled.Load() {
+		return true
+	}
 	const prefix = "Bearer "
 	header := c.GetHeader("Authorization")
 	if !strings.HasPrefix(header, prefix) {
@@ -110,4 +129,20 @@ func RequireAccess(token string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// APIAnswersWithoutToken reports whether the API behind apiTarget serves a
+// settings read with no Authorization header, which is what `run --no-auth`
+// does. The dashboard is a reverse proxy to that API, so binding it to a
+// non-loopback address would hand the open API to the network and defeat the
+// loopback-only rule the daemon enforces on itself. The check is best effort:
+// an API that cannot be reached yet reads as not open.
+func APIAnswersWithoutToken(apiTarget string) bool {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(strings.TrimRight(apiTarget, "/") + "/api/v1/computing/inference/settings")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }

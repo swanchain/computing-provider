@@ -69,3 +69,59 @@ func TestProtectWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestDisabledAuthLetsEveryCallerThrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	SetAuthDisabled(true)
+	t.Cleanup(func() { SetAuthDisabled(false) })
+
+	r := gin.New()
+	r.POST("/write", ProtectWrites("secret"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	r.GET("/settings", RequireAccess("secret"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for _, test := range []struct{ method, path string }{
+		{http.MethodPost, "/write"},
+		{http.MethodGet, "/settings"},
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(test.method, test.path, nil))
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s %s with auth disabled = %d, want 204", test.method, test.path, rec.Code)
+		}
+	}
+
+	SetAuthDisabled(false)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/write", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("re-enabled auth answered %d, want 401", rec.Code)
+	}
+}
+
+func TestAPIAnswersWithoutToken(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		code int
+		want bool
+	}{
+		{"open api", http.StatusOK, true},
+		{"token required", http.StatusUnauthorized, false},
+		{"error", http.StatusInternalServerError, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/computing/inference/settings" || r.Header.Get("Authorization") != "" {
+					t.Errorf("probe %s %s with auth %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(test.code)
+			}))
+			defer srv.Close()
+			if got := APIAnswersWithoutToken(srv.URL); got != test.want {
+				t.Fatalf("got %v, want %v", got, test.want)
+			}
+		})
+	}
+	if APIAnswersWithoutToken("http://127.0.0.1:1") {
+		t.Fatal("an unreachable API read as open")
+	}
+}

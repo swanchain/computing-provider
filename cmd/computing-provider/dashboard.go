@@ -64,6 +64,12 @@ var dashboardCmd = &cli.Command{
 		if err != nil {
 			return fmt.Errorf("initialize dashboard access token: %w", err)
 		}
+		// The dashboard proxies every API call. An API running with --no-auth
+		// is allowed only on loopback; a dashboard on another address would
+		// put it on the network anyway.
+		if !isLoopbackHost(host) && dashboard.APIAnswersWithoutToken(apiTarget) {
+			return fmt.Errorf("the API at %s answers without a token (run --no-auth); the dashboard may then only bind a loopback address, not %q", apiTarget, host)
+		}
 
 		fmt.Printf("Starting Inference Dashboard on http://%s:%d\n", host, port)
 		fmt.Printf("API server: %s\n", apiTarget)

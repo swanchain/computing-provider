@@ -38,6 +38,10 @@ var runCmd = &cli.Command{
 			Usage: "API listen address (use 0.0.0.0 only on a trusted network)",
 			Value: "127.0.0.1",
 		},
+		&cli.BoolFlag{
+			Name:  "no-auth",
+			Usage: "skip the dashboard control token; loopback --host only, and every local user can then control the node",
+		},
 	},
 	Action: func(cctx *cli.Context) error {
 		return runDaemon(cctx)
@@ -96,7 +100,15 @@ func runDaemon(cctx *cli.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialize dashboard access token: %w", err)
 	}
-	logs.GetLogger().Infof("Dashboard control token: %s", tokenPath)
+	if cctx.Bool("no-auth") {
+		if !isLoopbackHost(cctx.String("host")) {
+			return fmt.Errorf("--no-auth is only allowed with a loopback --host, not %q: without the token anyone who can reach the port can take models out of service", cctx.String("host"))
+		}
+		dashboard.SetAuthDisabled(true)
+		logs.GetLogger().Warn("Dashboard control token disabled (--no-auth): any process on this machine can change the node")
+	} else {
+		logs.GetLogger().Infof("Dashboard control token: %s", tokenPath)
+	}
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
 	logs.GetLogger().Infof("Logging to %s (rotate at %dMB, keep %d)",
 		conf.GetConfig().Log.Dir, conf.GetConfig().Log.MaxSizeMB, conf.GetConfig().Log.MaxBackups)
@@ -834,4 +846,16 @@ func logQuery(c *gin.Context) (logview.Query, error) {
 		q.Limit = n
 	}
 	return q, nil
+}
+
+// isLoopbackHost reports whether a --host value keeps the API on this machine.
+// --no-auth is refused on anything else: a bare "" or "0.0.0.0" binds every
+// interface, which is exactly the exposure the token was added for.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
