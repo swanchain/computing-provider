@@ -93,7 +93,7 @@ export function GPUPanel({ gpus, loading, error }: GPUPanelProps) {
               {g.memory_total_mb > 0 && (
                 <div>
                   <div className="mb-1 flex justify-between text-xs text-slate-300">
-                    <span>VRAM</span>
+                    <span>{g.unified_memory ? 'Unified memory' : 'VRAM'}</span>
                     <span>{(g.memory_used_mb / 1024).toFixed(1)} / {(g.memory_total_mb / 1024).toFixed(1)} GB</span>
                   </div>
                   <ProgressBar
@@ -139,8 +139,9 @@ export function GPUStrip({ gpus, loading, error }: GPUPanelProps) {
             </div>
             {g.memory_total_mb > 0 && (
               <div className="mt-1 flex items-center gap-2 text-xs tabular-nums text-slate-300">
-                <span className="w-12 truncate">{(g.memory_used_mb / 1024).toFixed(1)}/{(g.memory_total_mb / 1024).toFixed(0)} GB</span>
-                <ProgressBar value={g.memory_used_mb} max={g.memory_total_mb} color={vramShare >= 0.98 ? 'bg-red-500' : vramShare >= 0.95 ? 'bg-amber-400' : 'bg-slate-500'} label={`GPU ${g.index} memory allocation`} />
+                <span className="w-12 truncate" title={g.unified_memory ? 'Unified memory: the GPU shares system RAM, so this is system memory in use' : 'VRAM in use'}>{(g.memory_used_mb / 1024).toFixed(1)}/{(g.memory_total_mb / 1024).toFixed(0)} GB</span>
+                <ProgressBar value={g.memory_used_mb} max={g.memory_total_mb} color={vramShare >= 0.98 ? 'bg-red-500' : vramShare >= 0.95 ? 'bg-amber-400' : 'bg-slate-500'} label={`GPU ${g.index} ${g.unified_memory ? 'unified memory' : 'memory'} allocation`} />
+                {g.unified_memory && <span className="text-[10px] text-slate-500">unified</span>}
               </div>
             )}
           </li>

@@ -45,6 +45,8 @@ export interface GPUInfo {
   power_draw_w: number;
   power_limit_w: number;
   compute_processes: number;
+  /** The GPU shares system RAM (GB10, Jetson): memory figures are the system's. */
+  unified_memory?: boolean;
 }
 
 export interface ModelStatus {
