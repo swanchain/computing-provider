@@ -326,6 +326,31 @@ overloaded GPU. Both can also be changed at runtime, globally or per model,
 through the REST API — see the endpoint table in the
 [main README](../README.md#rest-api).
 
+**Per model**, the limits live in the model's `models.json` entry, so they
+survive a restart and a hot reload applies a change at once:
+
+```json
+"TheDrummer/Skyfall-31B-v4.2": {
+  "endpoint": "http://127.0.0.1:30014",
+  "max_concurrent": 2,
+  "rpm": 30
+}
+```
+
+A 31B model on two llama.cpp slots cannot take what a proxy-backed model can,
+and the hub only knows that if it is told: `max_concurrent` is declared to Swan
+Inference as the model's concurrency capacity at registration, and a change to
+it is re-declared without a disable/enable cycle. Without it the hub assumes
+the built-in default of ten and keeps routing to a node that will answer 429.
+
+`rpm` is a per-minute statement, so that many requests arriving together are
+within it; the refill is spread over the minute. Setting either through the
+dashboard (the sliders icon on a model row) or `POST
+/inference/models/:model_id/limits` writes the same fields into `models.json`;
+an empty field or `0` returns that limit to the default. Both limits reject,
+never queue: the hub reassigns a refused request immediately, while a queued
+one would run into its first-chunk timeout and count as a failure.
+
 ### Earnings history
 
 `GET /inference/earnings/history` prefers **Swan Inference's own earnings
@@ -383,6 +408,8 @@ Each key in `models.json` is the marketplace model ID (must match a value in `Mo
 | `local_endpoint` | No | A separate backend for the [local gateway](../README.md#local-gateway); hub requests and probes keep using `endpoint` |
 | `local_api_key` | No | API key for `local_endpoint` |
 | `local_only` | No | `true` serves the model through the local gateway only: never registered with Swan Inference (including on hot reload), hub requests refused, no probe completions |
+| `max_concurrent` | No | This model's own in-flight limit, declared to Swan Inference as its concurrency capacity. Absent: the global `[RequestLimits] MaxConcurrent` applies and the built-in per-model default (10) is declared |
+| `rpm` | No | This model's own request rate, per minute. Absent: only the global rate applies |
 | `gpu_memory` | No | VRAM used by this model in MB (used for load scheduling) |
 | `format` | No | Weight format hint: `fp16`, `awq`, `gptq`, `gguf` |
 | `quantization` | No | Quantization detail: `q4_k_m`, `q8_0`, `w4a16`, etc. |

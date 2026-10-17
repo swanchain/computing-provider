@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp, LockKeyhole, Power, RefreshCw, RotateCcw } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp, LockKeyhole, Power, RefreshCw, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { api } from '../api/client';
-import type { ModelPrice, ModelsResponse, ModelStatus, RegistrationDrops } from '../types';
+import type { ConcurrencyMetrics, ModelPrice, ModelsResponse, ModelStatus, RegistrationDrops } from '../types';
 
 // A strip of recent health samples, oldest to newest. The current state is one
 // dot; whether it has been flapping is the shape of the whole row, which a
@@ -53,6 +53,87 @@ interface ModelsPanelProps {
   compact?: boolean;
   /** How often each model left the hub registration since the daemon started. */
   drops?: Record<string, RegistrationDrops>;
+  /** The concurrency each model is declared to the hub with. */
+  capacity?: Record<string, number>;
+  /** Live in-flight counts, for the limits line. */
+  concurrency?: ConcurrencyMetrics;
+}
+
+// One line per model saying what it is held to. Each limit is either the
+// model's own (from models.json) or the global default, and the line says
+// which, because "0/10" means something different when the 10 was never
+// chosen for this model.
+function LimitsLine({ model, capacity, active }: { model: ModelStatus; capacity?: number; active: number }) {
+  const own = model.max_concurrent && model.max_concurrent > 0;
+  const slots = capacity ?? model.max_concurrent;
+  return (
+    <div className="mt-0.5 text-xs text-slate-400">
+      <span title={own ? 'Own limit from models.json, declared to Swan Inference' : 'Global default; set an own limit to declare it to Swan Inference'}>
+        {active}/{slots ?? '—'} in flight{own ? '' : ' (default)'}
+      </span>
+      {' · '}
+      <span title={model.rpm ? 'Own limit from models.json' : 'No own rate limit; the global one applies'}>
+        {model.rpm && model.rpm > 0 ? `${model.rpm} rpm` : 'rate: global'}
+      </span>
+    </div>
+  );
+}
+
+// Inline editor for the two limits. Empty restores the default; the save goes
+// to models.json, so it survives a restart, and a concurrency change is
+// declared to the hub at once.
+function LimitsEditor({ model, onSaved, onCancel }: { model: ModelStatus; onSaved: () => void; onCancel: () => void }) {
+  const [maxConcurrent, setMaxConcurrent] = useState(model.max_concurrent ? String(model.max_concurrent) : '');
+  const [rpm, setRpm] = useState(model.rpm ? String(model.rpm) : '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    const mc = maxConcurrent.trim() === '' ? 0 : Number(maxConcurrent);
+    const r = rpm.trim() === '' ? 0 : Number(rpm);
+    if (!Number.isInteger(mc) || mc < 0 || !Number.isFinite(r) || r < 0) {
+      setError('Max concurrent must be a whole number and rpm a number; leave a field empty for the default.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.setModelLimits(model.id, { max_concurrent: mc, rpm: r });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save limits');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const field = 'w-24 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500';
+  return (
+    <form
+      className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-slate-600 bg-slate-800/60 p-3"
+      onSubmit={(e) => { e.preventDefault(); void save(); }}
+      aria-label={`Limits for ${model.id}`}
+    >
+      <label className="text-xs text-slate-300">
+        Max concurrent
+        <input className={`${field} mt-1 block`} inputMode="numeric" placeholder="default" value={maxConcurrent} onChange={(e) => setMaxConcurrent(e.target.value)} />
+      </label>
+      <label className="text-xs text-slate-300">
+        Requests / min
+        <input className={`${field} mt-1 block`} inputMode="decimal" placeholder="none" value={rpm} onChange={(e) => setRpm(e.target.value)} />
+      </label>
+      <div className="flex gap-2">
+        <button type="submit" disabled={saving} className="min-h-9 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" onClick={onCancel} className="min-h-9 rounded-lg border border-slate-600 px-3 text-sm text-slate-300 hover:bg-slate-700">
+          Cancel
+        </button>
+      </div>
+      <p className="basis-full text-[11px] text-slate-400">Saved to models.json. Concurrency is declared to Swan Inference; hub requests over either limit get 429.</p>
+      {error && <p role="alert" className="basis-full text-xs text-red-300">{error}</p>}
+    </form>
+  );
 }
 
 const priceFormatter = new Intl.NumberFormat('en-US', {
@@ -70,7 +151,8 @@ function localOnlyHealth(health?: string): string {
   return 'not health-checked · no local requests yet';
 }
 
-export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false, drops }: ModelsPanelProps) {
+export function ModelsPanel({ models, healthLog, prices, loading, error, onRefresh, onModelClick, authenticated, onUnlock, summary, compact = false, drops, capacity, concurrency }: ModelsPanelProps) {
+  const [editingLimits, setEditingLimits] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -188,8 +270,8 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
           {shownModels.map((model) => {
             const price = prices[model.id];
             return (
+            <div key={model.id}>
             <div
-              key={model.id}
               className="flex items-start justify-between gap-2 rounded-lg border border-slate-600 bg-slate-700/50 p-3 transition-colors hover:border-slate-500 sm:items-center"
             >
               <button
@@ -239,6 +321,9 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                   <div className="text-xs text-slate-400 mt-0.5">
                     {model.state_string} • {model.local_only ? localOnlyHealth(model.local_health) : model.health_string}
                   </div>
+                  {!model.local_only && (
+                    <LimitsLine model={model} capacity={capacity?.[model.id]} active={concurrency?.per_model_active?.[model.id] ?? 0} />
+                  )}
                   <HealthStrip samples={healthLog?.[model.id] ?? []} />
                   {price && (
                     <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
@@ -251,6 +336,18 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
               </button>
 
               <div className="flex flex-shrink-0 items-center gap-1 sm:gap-2">
+                {!model.local_only && (
+                  <button
+                    type="button"
+                    onClick={() => (authenticated ? setEditingLimits(editingLimits === model.id ? null : model.id) : onUnlock())}
+                    className={`p-2 rounded transition-colors hover:bg-slate-600 ${editingLimits === model.id ? 'text-blue-300' : 'text-slate-400 hover:text-slate-200'}`}
+                    title="Concurrency and rate limits"
+                    aria-label={`Edit limits for ${model.id}`}
+                    aria-expanded={editingLimits === model.id}
+                  >
+                    <SlidersHorizontal size={16} />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleHealthCheck(model.id)}
@@ -279,6 +376,14 @@ export function ModelsPanel({ models, healthLog, prices, loading, error, onRefre
                   <Power size={16} />
                 </button>
               </div>
+            </div>
+            {editingLimits === model.id && (
+              <LimitsEditor
+                model={model}
+                onSaved={() => { setEditingLimits(null); onRefresh(); }}
+                onCancel={() => setEditingLimits(null)}
+              />
+            )}
             </div>
             );
           })}

@@ -67,6 +67,8 @@ func mappingFor(model *RegisteredModel) ModelMapping {
 		LocalEndpoint: model.LocalEndpoint,
 		LocalAPIKey:   model.LocalAPIKey,
 		LocalOnly:     model.LocalOnly,
+		MaxConcurrent: model.MaxConcurrent,
+		RPM:           model.RPM,
 	}
 }
 
@@ -92,6 +94,12 @@ type ModelMapping struct {
 	// completion is spent on it. For backends this node may use but must not
 	// offer — a subscription licensed to the operator alone, say.
 	LocalOnly bool `json:"local_only,omitempty"`
+	// MaxConcurrent and RPM are this model's own admission limits, applied at
+	// startup and on every reload, and declared to the hub (MaxConcurrent) at
+	// registration. Zero leaves the global [RequestLimits] in charge. They
+	// used to exist only as runtime API calls, lost on every restart.
+	MaxConcurrent int     `json:"max_concurrent,omitempty"`
+	RPM           float64 `json:"rpm,omitempty"`
 	// Disabled keeps a model off across restarts. Disabling through the API
 	// lasts only for the life of the process, so a model whose server was
 	// stopped on purpose came back enabled after every restart.
@@ -224,18 +232,28 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 	// Set up registry callbacks to update modelMappings for backward compatibility
 	registry.SetCallbacks(
 		func(model *RegisteredModel) {
-			// On model added
+			// On model added. Limits first: the registration that follows
+			// declares the model's concurrency.
 			s.modelMappings[model.ID] = mappingFor(model)
+			s.applyModelLimits(model.ID, limitsOf(model))
 			s.updateClientModels()
 		},
 		func(modelID string) {
 			// On model removed
 			delete(s.modelMappings, modelID)
+			s.applyModelLimits(modelID, ModelLimits{})
 			s.updateClientModels()
 		},
 		func(model *RegisteredModel) {
 			// On model updated
+			prev := s.modelMappings[model.ID].Limits()
 			s.modelMappings[model.ID] = mappingFor(model)
+			if l := limitsOf(model); l != prev {
+				s.applyModelLimits(model.ID, l)
+				if l.MaxConcurrent != prev.MaxConcurrent {
+					s.redeclareModels()
+				}
+			}
 		},
 	)
 
@@ -407,6 +425,11 @@ func (s *InferenceService) Start() error {
 	// Start model registry (loads models and starts file watcher)
 	if err := s.registry.Start(); err != nil {
 		logs.GetLogger().Warnf("Failed to start model registry: %v", err)
+	}
+	// The added callbacks run on their own goroutines; apply the file's limits
+	// here as well so the first registration cannot race ahead of them.
+	for _, model := range s.registry.GetAllModels() {
+		s.applyModelLimits(model.ID, limitsOf(model))
 	}
 
 	// Start rate limiter (with adaptive GPU-aware adjustment)

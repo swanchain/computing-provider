@@ -67,6 +67,10 @@ export interface ModelStatus {
   local_error?: string;
   /** Served to the local gateway only; never offered to the hub. */
   local_only?: boolean;
+  /** Own in-flight limit from models.json; absent means the global default. */
+  max_concurrent?: number;
+  /** Own requests-per-minute limit from models.json; absent means no own limit. */
+  rpm?: number;
 }
 
 export interface EmailSettings {
@@ -145,6 +149,8 @@ export interface ModelsResponse {
   health_log?: Record<string, string[]>;
   models: ModelStatus[];
   prices: Record<string, ModelPrice>;
+  /** The concurrency each model is declared to the hub with. */
+  capacity?: Record<string, number>;
   summary: {
     total: number;
     ready: number;

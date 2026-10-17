@@ -187,3 +187,47 @@ func DeregisterModel(cpRepoPath, modelID, endpoint string) error {
 	delete(models, modelID)
 	return writeModels(path, models)
 }
+
+// SetModelLimits writes a model's own admission limits into its models.json
+// entry, merged the way RegisterModel merges: every other field of the entry
+// is kept as written. A zero removes the key, so the entry reads as "default"
+// rather than carrying an explicit 0 that a reader might take literally.
+func SetModelLimits(cpRepoPath, modelID string, maxConcurrent int, rpm float64) error {
+	path := ModelsPath(cpRepoPath)
+	models, err := readModels(path)
+	if err != nil {
+		return err
+	}
+	existing, ok := models[modelID]
+	if !ok {
+		return fmt.Errorf("%s has no entry for %s", path, modelID)
+	}
+	entry := map[string]json.RawMessage{}
+	if err := json.Unmarshal(existing, &entry); err != nil {
+		return fmt.Errorf("entry for %s in %s is not an object", modelID, path)
+	}
+	set := func(key string, v any, keep bool) error {
+		if !keep {
+			delete(entry, key)
+			return nil
+		}
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		entry[key] = raw
+		return nil
+	}
+	if err := set("max_concurrent", maxConcurrent, maxConcurrent > 0); err != nil {
+		return err
+	}
+	if err := set("rpm", rpm, rpm > 0); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	models[modelID] = raw
+	return writeModels(path, models)
+}
