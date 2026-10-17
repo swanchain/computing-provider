@@ -59,6 +59,9 @@ type InferenceMetrics struct {
 	requestHistory []RequestMetric
 	// requestSink persists each request, when a store is attached.
 	requestSink    func(RequestMetric)
+	// requestEndObservers see each routed request's outcome; see OnRequestEnd.
+	requestEndObservers []func(RequestMetric)
+	observersMu         sync.RWMutex
 	historyMu      sync.RWMutex
 	maxHistorySize int
 }
@@ -107,6 +110,11 @@ type RequestMetric struct {
 	Streaming   bool      `json:"streaming"`
 	Success     bool      `json:"success"`
 	ErrorReason string    `json:"error_reason,omitempty"`
+	// StatusCode is the HTTP status the backend answered with, or 0 when the
+	// request never got that far. It is what separates a backend that is down
+	// from a client that sent an over-long prompt, which the error text alone
+	// does not reliably say.
+	StatusCode int `json:"status_code,omitempty"`
 	// Source is where the request entered this node, so an operator can tell
 	// their own checking apart from work the marketplace sent. It deliberately
 	// does not claim to say who *originated* a hub request: the payload carries
@@ -198,6 +206,30 @@ func (m *InferenceMetrics) RecordRequestStart(model string, streaming bool) {
 	mm.ActiveRequests++
 }
 
+// OnRequestEnd registers fn to be called with every routed request's outcome.
+// Only routed work reaches RecordRequestEnd — probes and the local gateway go
+// through RecordRequest alone — so this is the one place a per-request policy
+// such as the self-check's breaker can watch the traffic the hub is counting.
+func (m *InferenceMetrics) OnRequestEnd(fn func(RequestMetric)) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.observersMu.Lock()
+	defer m.observersMu.Unlock()
+	m.requestEndObservers = append(m.requestEndObservers, fn)
+}
+
+// notifyRequestEnd runs the observers outside m.mu, since one of them may read
+// the metrics back.
+func (m *InferenceMetrics) notifyRequestEnd(req RequestMetric) {
+	m.observersMu.RLock()
+	observers := append([]func(RequestMetric){}, m.requestEndObservers...)
+	m.observersMu.RUnlock()
+	for _, fn := range observers {
+		fn(req)
+	}
+}
+
 // RecordRequestEnd records the completion of a request and appends it to
 // the request history buffer (served by the /inference/requests endpoint)
 func (m *InferenceMetrics) RecordRequestEnd(req RequestMetric) {
@@ -208,6 +240,7 @@ func (m *InferenceMetrics) RecordRequestEnd(req RequestMetric) {
 	success := req.Success
 
 	m.RecordRequest(req)
+	m.notifyRequestEnd(req)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

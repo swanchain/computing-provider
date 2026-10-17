@@ -184,6 +184,52 @@ type SelfCheck struct {
 	// severe enough to deregister anything, so the alerting threshold and the
 	// acting threshold disagree.
 	AlertAfterFailures int `toml:"AlertAfterFailures"` // Default: 2; -1 alerts on the first audit
+	// TripAfterRequestFailures deregisters a model when this many consecutive
+	// routed requests fail because of the backend, without waiting for the next
+	// audit. The audit is paced in minutes; a backend that dies under load fails
+	// every request until then and the hub counts each one against the node.
+	TripAfterRequestFailures int `toml:"TripAfterRequestFailures"` // Default: 3; -1 disables
+	// TripWindowSeconds is how close together those failures must be. A run of
+	// failures older than this is forgotten, so three timeouts spread over a
+	// quiet week do not add up to an outage.
+	TripWindowSeconds int `toml:"TripWindowSeconds"` // Default: 60
+	// RecoveryProbeSeconds is how often a model the breaker took out is probed
+	// so it can come back, instead of waiting up to IntervalMinutes.
+	RecoveryProbeSeconds int `toml:"RecoveryProbeSeconds"` // Default: 60; -1 waits for the audit
+}
+
+// TripThreshold returns how many consecutive backend-at-fault request failures
+// trip a model out of routing, or 0 when the breaker is off.
+func (s SelfCheck) TripThreshold() int {
+	switch {
+	case s.TripAfterRequestFailures < 0:
+		return 0
+	case s.TripAfterRequestFailures == 0:
+		return 3
+	default:
+		return s.TripAfterRequestFailures
+	}
+}
+
+// TripWindow is how long a run of request failures stays current.
+func (s SelfCheck) TripWindow() time.Duration {
+	if s.TripWindowSeconds <= 0 {
+		return 60 * time.Second
+	}
+	return time.Duration(s.TripWindowSeconds) * time.Second
+}
+
+// RecoveryProbeInterval is how often a tripped model is re-probed, or 0 to
+// leave recovery to the periodic audit.
+func (s SelfCheck) RecoveryProbeInterval() time.Duration {
+	switch {
+	case s.RecoveryProbeSeconds < 0:
+		return 0
+	case s.RecoveryProbeSeconds == 0:
+		return 60 * time.Second
+	default:
+		return time.Duration(s.RecoveryProbeSeconds) * time.Second
+	}
 }
 
 // Enabled reports whether the periodic audit runs (default true).

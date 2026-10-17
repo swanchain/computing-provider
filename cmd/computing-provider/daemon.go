@@ -270,6 +270,7 @@ func runDaemon(cctx *cli.Context) error {
 			// in one and not the other receives no traffic. Null until a hub
 			// new enough to report it has acked a registration.
 			"hub_registered_models": inferenceService.GetHubRegisteredModels(),
+			"auto_disabled_models":  inferenceService.AutoDisabledModels(),
 			"upgrade_available":     inferenceService.GetUpgradeAvailable(),
 			// How often each model has left the registered set since the
 			// daemon started, and why it last did; a model that flaps is

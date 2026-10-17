@@ -284,6 +284,12 @@ func UpdateSelfCheckSettings(cpRepoPath string, settings SelfCheckSettings) erro
 			AutoDisable:           boolPointer(settings.AutoDisable),
 			AutoRecover:           boolPointer(settings.AutoRecover),
 			FailuresBeforeDisable: settings.FailuresBeforeDisable,
+			// The dashboard form does not carry these; a save must not reset
+			// what the operator put in config.toml by hand.
+			AlertAfterFailures:       node.SelfCheck.AlertAfterFailures,
+			TripAfterRequestFailures: node.SelfCheck.TripAfterRequestFailures,
+			TripWindowSeconds:        node.SelfCheck.TripWindowSeconds,
+			RecoveryProbeSeconds:     node.SelfCheck.RecoveryProbeSeconds,
 		}
 		return nil
 	})
