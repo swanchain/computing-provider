@@ -111,7 +111,7 @@ type InferenceService struct {
 	client             *InferenceClient
 	nodeID             string
 	cpPath             string
-	modelMappings      map[string]ModelMapping
+	modelMappings      map[string]ModelMapping // mirrors models.json; guarded by mappingsMu
 	registry           *ModelRegistry
 	healthChecker      *ModelHealthChecker
 	localChecker       *localBackendChecker
@@ -146,6 +146,10 @@ type InferenceService struct {
 	// a model turned healthy can finish last and overwrite the newer list —
 	// leaving that model unregistered until something else changes.
 	registerMu sync.Mutex
+	// mappingsMu guards modelMappings: the registry callbacks that write it
+	// each run on their own goroutine, and the HTTP handlers and the hub client
+	// read it from theirs. Use mapping, mappings, setMapping and deleteMapping.
+	mappingsMu sync.RWMutex
 	// registrationDrops counts, per model, how often it has left the
 	// registered set since the daemon started, so a model that flaps stands
 	// out. Guarded by registerMu.
@@ -234,20 +238,21 @@ func NewInferenceService(nodeID, cpPath string) *InferenceService {
 		func(model *RegisteredModel) {
 			// On model added. Limits first: the registration that follows
 			// declares the model's concurrency.
-			s.modelMappings[model.ID] = mappingFor(model)
+			s.setMapping(model.ID, mappingFor(model))
 			s.applyModelLimits(model.ID, limitsOf(model))
 			s.updateClientModels()
 		},
 		func(modelID string) {
 			// On model removed
-			delete(s.modelMappings, modelID)
+			s.deleteMapping(modelID)
 			s.applyModelLimits(modelID, ModelLimits{})
 			s.updateClientModels()
 		},
 		func(model *RegisteredModel) {
 			// On model updated
-			prev := s.modelMappings[model.ID].Limits()
-			s.modelMappings[model.ID] = mappingFor(model)
+			previous, _ := s.mapping(model.ID)
+			prev := previous.Limits()
+			s.setMapping(model.ID, mappingFor(model))
 			if l := limitsOf(model); l != prev {
 				s.applyModelLimits(model.ID, l)
 				if l.MaxConcurrent != prev.MaxConcurrent {
@@ -403,15 +408,53 @@ func (s *InferenceService) loadModelMappings() {
 		return
 	}
 
-	if err := json.Unmarshal(data, &s.modelMappings); err != nil {
+	loaded := make(map[string]ModelMapping)
+	if err := json.Unmarshal(data, &loaded); err != nil {
 		logs.GetLogger().Errorf("Failed to parse models.json: %v", err)
 		return
 	}
+	s.mappingsMu.Lock()
+	s.modelMappings = loaded
+	s.mappingsMu.Unlock()
 
-	logs.GetLogger().Infof("Loaded %d model mappings from models.json", len(s.modelMappings))
-	for model, mapping := range s.modelMappings {
+	logs.GetLogger().Infof("Loaded %d model mappings from models.json", len(loaded))
+	for model, mapping := range loaded {
 		logs.GetLogger().Infof("  - %s -> %s", model, mapping.Endpoint)
 	}
+}
+
+// mapping is one model's models.json entry.
+func (s *InferenceService) mapping(modelID string) (ModelMapping, bool) {
+	s.mappingsMu.RLock()
+	defer s.mappingsMu.RUnlock()
+	m, ok := s.modelMappings[modelID]
+	return m, ok
+}
+
+// mappings is a copy of every entry, safe to range over without the lock.
+func (s *InferenceService) mappings() map[string]ModelMapping {
+	s.mappingsMu.RLock()
+	defer s.mappingsMu.RUnlock()
+	out := make(map[string]ModelMapping, len(s.modelMappings))
+	for id, m := range s.modelMappings {
+		out[id] = m
+	}
+	return out
+}
+
+func (s *InferenceService) setMapping(modelID string, m ModelMapping) {
+	s.mappingsMu.Lock()
+	defer s.mappingsMu.Unlock()
+	if s.modelMappings == nil {
+		s.modelMappings = make(map[string]ModelMapping)
+	}
+	s.modelMappings[modelID] = m
+}
+
+func (s *InferenceService) deleteMapping(modelID string) {
+	s.mappingsMu.Lock()
+	defer s.mappingsMu.Unlock()
+	delete(s.modelMappings, modelID)
 }
 
 // Start initializes and starts the Inference client
@@ -453,9 +496,7 @@ func (s *InferenceService) Start() error {
 	s.client.SetWarmupHandler(s.handleWarmup)
 
 	// Set up model mappings provider for format/quantization and engine detection
-	s.client.SetModelMappingsProvider(func() map[string]ModelMapping {
-		return s.modelMappings
-	})
+	s.client.SetModelMappingsProvider(s.mappings)
 
 	// Set up model health provider for heartbeats (backup for health update messages)
 	s.client.SetModelHealthProvider(func() map[string]string {
@@ -708,7 +749,7 @@ func (s *InferenceService) handleInference(ctx context.Context, payload Inferenc
 		}
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
-		mapping, mapOk := s.modelMappings[payload.ModelID]
+		mapping, mapOk := s.mapping(payload.ModelID)
 		if !mapOk {
 			return nil, &ModelServerError{
 				StatusCode: 404,
@@ -980,7 +1021,7 @@ func (s *InferenceService) AutoDisabledModels() map[string]string {
 // GetActiveModels returns the list of active model deployments
 func (s *InferenceService) GetActiveModels() []string {
 	var activeModels []string
-	for modelName := range s.modelMappings {
+	for modelName := range s.mappings() {
 		activeModels = append(activeModels, modelName)
 	}
 	return activeModels
@@ -1107,7 +1148,7 @@ func (s *InferenceService) handleStreamingInference(ctx context.Context, request
 // trustworthy, and the number alone does not say which one produced it.
 func (s *InferenceService) resolveModelContexts() map[string]ModelContextInfo {
 	contexts := make(map[string]ModelContextInfo)
-	for modelID := range s.modelMappings {
+	for modelID := range s.mappings() {
 		info := s.ModelContext(modelID)
 		switch {
 		case info.Length > 0 && info.Source != ContextSourceHub:
@@ -1141,7 +1182,7 @@ type ModelContextInfo struct {
 // over backend detection, because an operator who sets it knows something the
 // backend will not say.
 func (s *InferenceService) ModelContext(modelID string) ModelContextInfo {
-	mapping, ok := s.modelMappings[modelID]
+	mapping, ok := s.mapping(modelID)
 	if ok && mapping.ContextLength > 0 {
 		return ModelContextInfo{Length: mapping.ContextLength, Source: ContextSourceOverride}
 	}
@@ -1178,8 +1219,9 @@ func (s *InferenceService) SetHubContexts(models []PlatformModel) {
 
 // ModelContexts returns the context window and source for every mapped model.
 func (s *InferenceService) ModelContexts() map[string]ModelContextInfo {
-	out := make(map[string]ModelContextInfo, len(s.modelMappings))
-	for modelID := range s.modelMappings {
+	all := s.mappings()
+	out := make(map[string]ModelContextInfo, len(all))
+	for modelID := range all {
 		out[modelID] = s.ModelContext(modelID)
 	}
 	return out
@@ -1200,17 +1242,18 @@ func (s *InferenceService) warnUnknownContext(modelID string, info ModelContextI
 		return
 	}
 	s.contextWarned[modelID] = true
+	backend, _ := s.mapping(modelID)
 	if info.Source == ContextSourceHub {
 		logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
 			"Swan Inference assumes %d tokens, which may not match what this backend accepts. "+
 			"Set \"context_length\" for this model in models.json to report the real window.",
-			modelID, s.modelMappings[modelID].Endpoint, info.Length)
+			modelID, backend.Endpoint, info.Length)
 		return
 	}
 	logs.GetLogger().Warnf("No context window reported for %s (backend %s does not expose max_model_len). "+
 		"Swan Inference will assume the catalog value, which may not match what this backend accepts. "+
 		"Set \"context_length\" for this model in models.json to report the real window.",
-		modelID, s.modelMappings[modelID].Endpoint)
+		modelID, backend.Endpoint)
 }
 
 // handleWarmup processes model warmup requests from Swan Inference
@@ -1239,7 +1282,7 @@ func (s *InferenceService) handleWarmup(payload WarmupPayload) (*WarmupResponse,
 		}
 	} else {
 		// Fall back to direct mapping lookup for backward compatibility
-		mapping, mapOk := s.modelMappings[payload.ModelID]
+		mapping, mapOk := s.mapping(payload.ModelID)
 		if !mapOk {
 			return nil, fmt.Errorf("model %s not deployed on this provider", payload.ModelID)
 		}

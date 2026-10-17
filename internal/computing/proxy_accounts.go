@@ -137,7 +137,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		}
 		roles[ep][role], models[ep][model] = true, true
 	}
-	for id, m := range s.modelMappings {
+	for id, m := range s.mappings() {
 		// A disabled model is out of service and uses no proxy. Its server is
 		// usually stopped too, and an endpoint that cannot be reached is
 		// indistinguishable from a proxy that is down, so it would be listed

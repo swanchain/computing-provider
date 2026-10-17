@@ -138,7 +138,7 @@ func (s *InferenceService) directRoutes(window string, since time.Time, d time.D
 	if err != nil {
 		return nil
 	}
-	links := directRouteLinks(in, usageClassOf(s.modelMappings), since, time.Now(), bucket)
+	links := directRouteLinks(in, usageClassOf(s.mappings()), since, time.Now(), bucket)
 	if s.directRouteCache == nil {
 		s.directRouteCache = map[string]directRouteEntry{}
 	}
