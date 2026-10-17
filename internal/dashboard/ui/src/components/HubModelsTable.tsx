@@ -116,8 +116,10 @@ export function HubModelsTable({ models, hub, hubError, capacity, concurrency, d
     return h ? h.recent_success_count + h.recent_failure_count : 0;
   };
   // A healthy model that served nothing recently is a line of noise on a page
-  // read every morning; it folds into one row until asked for.
-  const quiet = rows.filter((m) => !needsLook(m) && !notListed.has(m.id) && recentTotal(m) === 0 && !(earned?.[m.id]));
+  // read every morning; it folds into one row until asked for. Only when the
+  // platform's counts could be read: without them every model looks quiet,
+  // and a node cut off from the hub would show an empty table.
+  const quiet = hubKnown ? rows.filter((m) => !needsLook(m) && !notListed.has(m.id) && recentTotal(m) === 0 && !(earned?.[m.id])) : [];
   const shown = showQuiet ? rows : rows.filter((m) => !quiet.includes(m));
   const ordered = [...shown].sort((a, b) => Number(needsLook(b)) - Number(needsLook(a)) || recentTotal(b) - recentTotal(a) || a.id.localeCompare(b.id));
 
