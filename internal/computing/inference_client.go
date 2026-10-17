@@ -1739,6 +1739,7 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 			LatencyMs:   latencyFloat,
 			Success:     false,
 			ErrorReason: err.Error(),
+			StatusCode:  statusCode,
 		}
 		route.apply(&rec)
 		c.metrics.RecordRequestEnd(rec)
@@ -1758,9 +1759,10 @@ func (c *InferenceClient) handleInference(requestID string, payload InferencePay
 			StartTime: startTime,
 			EndTime:   time.Now(),
 			LatencyMs: latencyFloat,
-			TokensIn:  tokensIn,
-			TokensOut: tokensOut,
-			Success:   true,
+			TokensIn:   tokensIn,
+			TokensOut:  tokensOut,
+			Success:    true,
+			StatusCode: 200,
 		}
 		route.apply(&rec)
 		c.metrics.RecordRequestEnd(rec)
@@ -1835,8 +1837,9 @@ func (c *InferenceClient) handleStreamingInference(ctx context.Context, requestI
 		LatencyMs: latencyFloat,
 		TokensIn:  int(tokensIn),
 		TokensOut: int(tokensOut),
-		Streaming: true,
-		Success:   err == nil,
+		Streaming:  true,
+		Success:    err == nil,
+		StatusCode: statusCode,
 	}
 	streamReq.Source = SourceHub
 	route.apply(&streamReq)
@@ -2955,5 +2958,10 @@ func cancelledError(reason string) string {
 	if reason == "" {
 		reason = "unspecified"
 	}
-	return "cancelled by Swan Inference: " + reason
+	return cancelledByHubPrefix + reason
 }
+
+// cancelledByHubPrefix opens the error reason of a request the hub stopped
+// waiting for. It is how later readers of the history, the breaker among
+// them, tell a hub-side cancel from a backend failure.
+const cancelledByHubPrefix = "cancelled by Swan Inference: "

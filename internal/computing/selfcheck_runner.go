@@ -71,10 +71,28 @@ type selfCheckRunner struct {
 	// undone. Re-enabling a model somebody switched off deliberately would be
 	// worse than leaving a broken one off.
 	autoDisabled map[string]bool
+	// heldReason says why each auto-disabled model was pulled, for the status
+	// endpoint: an operator looking at a model that is off needs to know
+	// whether the audit or live traffic took it out, and on what error.
+	heldReason map[string]string
+
+	// The request breaker's state; see selfcheck_breaker.go.
+	streaks map[string]*requestStreak
+	// recoveredAt is when the breaker last returned each model to service, so
+	// a model that trips again soon after is left to the slower audit rather
+	// than flapping in and out every minute.
+	recoveredAt map[string]time.Time
+	// slowRecovery holds models that tripped again too soon after a recovery;
+	// the fast recovery probe skips them.
+	slowRecovery map[string]bool
+	// now is the clock, replaceable in tests.
+	now func() time.Time
+	// probeOne re-probes a single model; replaceable in tests.
+	probeOne func(id string) (selfcheck.ProbeResult, error)
 }
 
 func newSelfCheckRunner(n *alerts.Notifier, opts func() selfcheck.Options, cfg func() conf.SelfCheck, models modelController) *selfCheckRunner {
-	return &selfCheckRunner{
+	r := &selfCheckRunner{
 		notifier:     n,
 		opts:         opts,
 		cfg:          cfg,
@@ -82,7 +100,16 @@ func newSelfCheckRunner(n *alerts.Notifier, opts func() selfcheck.Options, cfg f
 		stopCh:       make(chan struct{}),
 		failures:     make(map[string]int),
 		autoDisabled: make(map[string]bool),
+		heldReason:   make(map[string]string),
+		streaks:      make(map[string]*requestStreak),
+		recoveredAt:  make(map[string]time.Time),
+		slowRecovery: make(map[string]bool),
+		now:          time.Now,
 	}
+	r.probeOne = func(id string) (selfcheck.ProbeResult, error) {
+		return selfcheck.ProbeModel(r.opts(), id)
+	}
+	return r
 }
 
 // SetRequestRecorder sets the sink for audit probes.
@@ -121,6 +148,7 @@ func (r *selfCheckRunner) Start() {
 			}
 		}
 	}()
+	r.startRecoveryProbes()
 }
 
 func (r *selfCheckRunner) Stop() {
@@ -231,6 +259,8 @@ func (r *selfCheckRunner) act(report selfcheck.Report) {
 			// deliberate disable be undone on the next successful probe.
 			r.mu.Lock()
 			delete(r.autoDisabled, id)
+			delete(r.heldReason, id)
+			delete(r.slowRecovery, id)
 			r.mu.Unlock()
 		}
 
@@ -266,6 +296,10 @@ func (r *selfCheckRunner) onProbeSuccess(id string, enabled bool, cfg conf.SelfC
 	}
 	r.mu.Lock()
 	delete(r.autoDisabled, id)
+	delete(r.heldReason, id)
+	delete(r.streaks, id)
+	delete(r.slowRecovery, id)
+	r.recoveredAt[id] = r.now()
 	r.mu.Unlock()
 
 	logs.GetLogger().Infof("[selfcheck] %s can serve again — re-registered with Swan Inference", id)
@@ -288,14 +322,14 @@ func (r *selfCheckRunner) onBackendFailure(id string, enabled bool, probe selfch
 		logs.GetLogger().Warnf("[selfcheck] failed to disable %s: %v", id, err)
 		return
 	}
-	r.mu.Lock()
-	r.autoDisabled[id] = true
-	r.mu.Unlock()
-
 	reason := probe.Error
 	if probe.StatusCode > 0 {
 		reason = fmt.Sprintf("HTTP %d: %s", probe.StatusCode, probe.Error)
 	}
+	r.mu.Lock()
+	r.autoDisabled[id] = true
+	r.heldReason[id] = fmt.Sprintf("self-check: %d failed probes (%s)", count, reason)
+	r.mu.Unlock()
 	logs.GetLogger().Warnf("[selfcheck] %s failed %d consecutive probes (%s) — deregistered from Swan Inference", id, count, reason)
 	r.notifier.Fire("model_auto_disabled", id,
 		fmt.Sprintf("%s failed %d consecutive inference probes (%s) and has been deregistered from Swan Inference. "+
@@ -327,6 +361,10 @@ func (r *selfCheckRunner) forget(id string) {
 	defer r.mu.Unlock()
 	delete(r.failures, id)
 	delete(r.autoDisabled, id)
+	delete(r.heldReason, id)
+	delete(r.streaks, id)
+	delete(r.recoveredAt, id)
+	delete(r.slowRecovery, id)
 }
 
 func (r *selfCheckRunner) resetFailures(id string) {

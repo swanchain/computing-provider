@@ -506,6 +506,10 @@ func (s *InferenceService) Start() error {
 	if s.client != nil {
 		if m := s.client.Metrics(); m != nil {
 			s.selfCheck.SetRequestRecorder(m.RecordRequest)
+			// The breaker watches routed outcomes as they happen, so a backend
+			// that dies under load is pulled within seconds rather than at the
+			// next audit.
+			m.OnRequestEnd(s.selfCheck.ObserveRequest)
 		}
 	}
 
@@ -908,6 +912,15 @@ func (s *InferenceService) IsConnected() bool {
 		return false
 	}
 	return s.client.IsConnected()
+}
+
+// AutoDisabledModels lists the models the self-check holds out of routing,
+// with the reason each was pulled. Empty when every model is serving.
+func (s *InferenceService) AutoDisabledModels() map[string]string {
+	if s.selfCheck == nil {
+		return nil
+	}
+	return s.selfCheck.AutoDisabledModels()
 }
 
 // GetActiveModels returns the list of active model deployments

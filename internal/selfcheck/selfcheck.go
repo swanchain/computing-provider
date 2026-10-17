@@ -681,3 +681,36 @@ func (c *checker) getJSON(path string, out interface{}) error {
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
+
+// ProbeModel sends one minimal completion to a single model's backend, as
+// listed in models.json. It is the audit's inference probe on its own, for
+// re-checking a model that was taken out of routing without waiting for the
+// next full audit — the audit costs one completion per model and runs every
+// ten minutes, which is a long time to leave a recovered backend idle.
+//
+// A model that is not a chat model is reported Skipped, since it cannot be
+// probed this way; a model missing from models.json is an error, not a
+// failed probe, because there is no backend to blame.
+func ProbeModel(opt Options, id string) (ProbeResult, error) {
+	path := filepath.Join(opt.RepoPath, "models.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ProbeResult{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var models map[string]modelEntry
+	if err := json.Unmarshal(data, &models); err != nil {
+		return ProbeResult{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	m, ok := models[id]
+	if !ok {
+		return ProbeResult{}, fmt.Errorf("%s is not in %s", id, path)
+	}
+	if !m.chatCompatible() {
+		return ProbeResult{Skipped: true}, nil
+	}
+	if opt.ProbeTimeout <= 0 {
+		opt.ProbeTimeout = 60 * time.Second
+	}
+	c := &checker{opt: opt, probeClient: &http.Client{Timeout: opt.ProbeTimeout}}
+	return c.probeModel(id, m), nil
+}

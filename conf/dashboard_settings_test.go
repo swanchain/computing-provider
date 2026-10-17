@@ -39,6 +39,10 @@ To = ["alerts@example.com"]
 [SelfCheck]
 IntervalMinutes = 10
 FailuresBeforeDisable = 2
+AlertAfterFailures = 3
+TripAfterRequestFailures = 5
+TripWindowSeconds = 120
+RecoveryProbeSeconds = -1
 
 [Log]
 Dir = "logs"
@@ -193,5 +197,41 @@ func TestDashboardExplicitValuesSurvive(t *testing.T) {
 	applyDashboardDefaults(&d)
 	if d.Host != "0.0.0.0" || d.Port != 8123 {
 		t.Errorf("got %s:%d, want the configured values to be kept", d.Host, d.Port)
+	}
+}
+
+// The dashboard form carries only the audit's basic fields. Saving it must not
+// silently reset the breaker and alerting settings an operator set by hand.
+func TestUpdateSelfCheckSettingsKeepsFieldsTheFormDoesNotCarry(t *testing.T) {
+	dir := dashboardSettingsRepo(t)
+	settings, err := LoadDashboardSettings(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.SelfCheck.IntervalMinutes = 15
+	if err := UpdateSelfCheckSettings(dir, settings.SelfCheck); err != nil {
+		t.Fatal(err)
+	}
+	node, err := readComputeNode(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := node.SelfCheck
+	if sc.IntervalMinutes != 15 {
+		t.Fatalf("interval = %d, want 15", sc.IntervalMinutes)
+	}
+	if sc.AlertAfterFailures != 3 || sc.TripAfterRequestFailures != 5 || sc.TripWindowSeconds != 120 || sc.RecoveryProbeSeconds != -1 {
+		t.Fatalf("hand-set fields lost on save: %+v", sc)
+	}
+}
+
+func TestSelfCheckBreakerDefaults(t *testing.T) {
+	var sc SelfCheck
+	if sc.TripThreshold() != 3 || sc.TripWindow().Seconds() != 60 || sc.RecoveryProbeInterval().Seconds() != 60 {
+		t.Fatalf("defaults = %d / %v / %v", sc.TripThreshold(), sc.TripWindow(), sc.RecoveryProbeInterval())
+	}
+	sc = SelfCheck{TripAfterRequestFailures: -1, RecoveryProbeSeconds: -1}
+	if sc.TripThreshold() != 0 || sc.RecoveryProbeInterval() != 0 {
+		t.Fatalf("-1 must disable: %d / %v", sc.TripThreshold(), sc.RecoveryProbeInterval())
 	}
 }

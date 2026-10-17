@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeBackend serves the OpenAI-ish endpoints a model backend exposes.
@@ -540,5 +541,92 @@ func TestDisabledModelsAreNotAudited(t *testing.T) {
 		if _, probed := r.Probes["org/off"]; probed {
 			t.Errorf("config %v: the disabled model was probed", cfg)
 		}
+	}
+}
+
+func writeModelsJSON(t *testing.T, dir string, models map[string]map[string]interface{}) {
+	t.Helper()
+	data, err := json.Marshal(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "models.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A single-model probe must reach the backend models.json names for that
+// model, under the name the backend knows it by.
+func TestProbeModelSendsOneCompletion(t *testing.T) {
+	var got struct {
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	writeModelsJSON(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": srv.URL, "local_model": "a-local", "category": "text-generation"},
+	})
+
+	res, err := ProbeModel(Options{RepoPath: dir}, "org/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Fatalf("probe failed: %+v", res)
+	}
+	if got.Model != "a-local" || got.MaxTokens != 1 {
+		t.Errorf("sent model=%q max_tokens=%d, want a-local/1", got.Model, got.MaxTokens)
+	}
+}
+
+// A backend that is down is a failed probe with no status, the same shape
+// the full audit reports, so the caller can classify it the same way.
+func TestProbeModelReportsAnUnreachableBackend(t *testing.T) {
+	dir := t.TempDir()
+	writeModelsJSON(t, dir, map[string]map[string]interface{}{
+		"org/a": {"endpoint": "http://127.0.0.1:1", "category": "text-generation"},
+	})
+	res, err := ProbeModel(Options{RepoPath: dir, ProbeTimeout: 2 * time.Second}, "org/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || res.StatusCode != 0 || !res.BackendAtFault() {
+		t.Fatalf("got %+v, want a backend-at-fault failure with no status", res)
+	}
+}
+
+// A model that is not in models.json has no backend to probe; that is an
+// error for the caller, not a failing backend.
+func TestProbeModelRefusesAnUnknownModel(t *testing.T) {
+	dir := t.TempDir()
+	writeModelsJSON(t, dir, map[string]map[string]interface{}{})
+	if _, err := ProbeModel(Options{RepoPath: dir}, "org/missing"); err == nil {
+		t.Fatal("expected an error for a model not in models.json")
+	}
+}
+
+// An embedding or image model cannot answer a chat completion; the probe says
+// so instead of reporting the 404 as a dead backend.
+func TestProbeModelSkipsNonChatModels(t *testing.T) {
+	dir := t.TempDir()
+	writeModelsJSON(t, dir, map[string]map[string]interface{}{
+		"org/embed": {"endpoint": "http://127.0.0.1:1", "category": "embedding"},
+	})
+	res, err := ProbeModel(Options{RepoPath: dir}, "org/embed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Skipped {
+		t.Fatalf("got %+v, want Skipped", res)
 	}
 }

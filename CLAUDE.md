@@ -826,6 +826,31 @@ never arrived.
 
 Keep `AlertAfterFailures` at or below `FailuresBeforeDisable`: alerting later
 than the node acts means a model is deregistered before anyone is told why.
+
+### Request breaker
+
+The audit is paced in minutes; a backend that dies under load fails every
+routed request until the next one. `selfcheck_breaker.go` watches routed
+outcomes through `InferenceMetrics.OnRequestEnd` and deregisters a model after
+`TripAfterRequestFailures` (default 3) consecutive backend-at-fault failures
+within `TripWindowSeconds`. It reuses the audit's machinery on purpose: the same
+`BackendAtFault` classification, the same `autoDisabled` claim, so the audit's
+recovery returns it and an operator's own disable is never undone.
+
+- **Only `source=hub` counts.** `OnRequestEnd` fires from `RecordRequestEnd`,
+  which only routed work reaches; probes and the local gateway use
+  `RecordRequest`. The operator's own benchmark against a rate-limited proxy
+  must not take a model off the marketplace.
+- **Cancels count neither way.** A hub cancel (`cancelledByHubPrefix`) or a
+  `context canceled` from shutdown says nothing about the backend, and must not
+  break up a real streak either.
+- **Claim under the lock, disable off it.** Concurrent failures would otherwise
+  each disable the model; and `DisableModel` re-registers over the WebSocket,
+  which must not delay the response the request still owes the hub.
+- **Recovery probes** (`RecoveryProbeSeconds`, default 60) re-probe held models
+  with `selfcheck.ProbeModel`. A model that trips again within ten minutes of a
+  breaker recovery is left to the full audit, or a backend that passes a
+  one-token probe but fails real work would flap every minute.
 ### Hub notices
 
 Swan Inference can see things a node cannot observe about itself — that its
