@@ -214,6 +214,8 @@ export interface ConnectionStatus {
   build?: string;
   /** Per model: how often it left the hub registration since the daemon started, and why it last did. */
   registration_drops?: Record<string, RegistrationDrops>;
+  /** Models this node pulled off the hub itself (request failures or the audit), with the reason. */
+  auto_disabled_models?: Record<string, string>;
 }
 
 export interface RegistrationDrops {

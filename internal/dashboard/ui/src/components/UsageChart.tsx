@@ -21,8 +21,9 @@ import type { ModelEarnings, UsageSeries, UsageSource, UsageTotals } from '../ty
  * Direct input is a floor, not an estimate: a model server's prompt counter
  * skips cache hits, so the gap to what the node recorded can only be larger.
  *
- * By source is the default, separating hub and local work. The model view
- * shares colours with earnings so models read consistently across both charts.
+ * By model is the default, sharing colours with the earnings chart beside it
+ * so models read consistently across both. By source separates hub, local and
+ * probe work for when the question is where the load came from.
  */
 
 interface Series {
@@ -158,7 +159,7 @@ export function UsageChart({ models, colours: shared, nodeName, peers, report, w
   const hasPeers = (peers?.length ?? 0) > 0;
   // The overview supplies no peers, so its usage is always this node's.
   const effectiveScope = hasPeers ? scope : 'node';
-  const [view, setView] = useState<'model' | 'source' | 'machine'>('source');
+  const [view, setView] = useState<'model' | 'source' | 'machine'>('model');
   const [hovered, setHovered] = useState<number | null>(null);
   const { data, loading, error, lastUpdated } = report;
 

@@ -82,7 +82,7 @@ function LimitsLine({ model, capacity, active }: { model: ModelStatus; capacity?
 // Inline editor for the two limits. Empty restores the default; the save goes
 // to models.json, so it survives a restart, and a concurrency change is
 // declared to the hub at once.
-function LimitsEditor({ model, onSaved, onCancel }: { model: ModelStatus; onSaved: () => void; onCancel: () => void }) {
+export function LimitsEditor({ model, onSaved, onCancel }: { model: ModelStatus; onSaved: () => void; onCancel: () => void }) {
   const [maxConcurrent, setMaxConcurrent] = useState(model.max_concurrent ? String(model.max_concurrent) : '');
   const [rpm, setRpm] = useState(model.rpm ? String(model.rpm) : '');
   const [saving, setSaving] = useState(false);
