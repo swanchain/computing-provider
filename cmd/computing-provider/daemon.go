@@ -24,6 +24,7 @@ import (
 	"github.com/swanchain/computing-provider-v2/internal/computing"
 	"github.com/swanchain/computing-provider-v2/internal/dashboard"
 	"github.com/swanchain/computing-provider-v2/internal/logging"
+	"github.com/swanchain/computing-provider-v2/internal/logview"
 	"github.com/swanchain/computing-provider-v2/util"
 	"github.com/urfave/cli/v2"
 )
@@ -165,6 +166,25 @@ func runDaemon(cctx *cli.Context) error {
 	router.Use(dashboard.ProtectWrites(controlToken))
 	settingsRouter := router.Group("/inference/settings")
 	settingsRouter.Use(dashboard.RequireAccess(controlToken))
+	// The node's own log, for the dashboard's Logs tab. Behind the control
+	// token even though it only reads: log lines carry request IDs, backend
+	// endpoints and upstream error bodies, and the API may listen on more
+	// than loopback.
+	// Read-only like the other monitoring routes: an operator looking at why
+	// a model failed should not need the control token first.
+	router.GET("/inference/logs", func(c *gin.Context) {
+		q, err := logQuery(c)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		res, err := logview.Read(conf.GetConfig().Log.Dir, q)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, res)
+	})
 	settingsRouter.GET("", func(c *gin.Context) {
 		settings, err := conf.LoadDashboardSettings(cpRepoPath)
 		if err != nil {
@@ -785,4 +805,33 @@ func peerNames(peers []conf.Peer) []string {
 		out = append(out, p.Name)
 	}
 	return out
+}
+
+// logQuery reads the /inference/logs parameters: levels (comma-separated),
+// since and until (RFC 3339), q (text) and limit.
+func logQuery(c *gin.Context) (logview.Query, error) {
+	var q logview.Query
+	levels, err := logview.ParseLevels(c.Query("levels"))
+	if err != nil {
+		return q, err
+	}
+	q.Levels = levels
+	for name, dst := range map[string]*time.Time{"since": &q.Since, "until": &q.Until} {
+		if v := c.Query(name); v != "" {
+			t, err := time.Parse(time.RFC3339, v)
+			if err != nil {
+				return q, fmt.Errorf("%s must be an RFC 3339 time: %w", name, err)
+			}
+			*dst = t
+		}
+	}
+	q.Contains = c.Query("q")
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return q, fmt.Errorf("limit must be a positive number")
+		}
+		q.Limit = n
+	}
+	return q, nil
 }

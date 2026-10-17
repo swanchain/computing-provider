@@ -16,7 +16,7 @@ import type {
   LogSettings,
   RequestLimitSettings,
   DashboardModel,
-  SettingsSaveResult, ProxyAccountsReport, RouteMap } from '../types';
+  SettingsSaveResult, ProxyAccountsReport, RouteMap, LogLevel, LogsResponse } from '../types';
 
 const API_BASE = '/api/v1/computing/inference';
 const TOKEN_KEY = 'computing-provider-control-token';
@@ -134,6 +134,17 @@ export const api = {
 
   // Traffic as source -> model -> backend links over a window
   getRoutes: (window: string) => fetchJson<RouteMap>(`/routes?window=${window}`),
+
+  // The node's own log. Needs the control token.
+  getLogs: (opts: { levels: LogLevel[]; since?: Date; until?: Date; q?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts.levels.length) params.set('levels', opts.levels.join(','));
+    if (opts.since) params.set('since', opts.since.toISOString());
+    if (opts.until) params.set('until', opts.until.toISOString());
+    if (opts.q) params.set('q', opts.q);
+    if (opts.limit) params.set('limit', opts.limit.toString());
+    return fetchJson<LogsResponse>(`/logs?${params.toString()}`);
+  },
 
   // Historical Metrics
   getMetricsHistory: (duration?: string, resolution?: string) => {

@@ -191,6 +191,21 @@ To reach the UI from another machine without exposing it, forward the port over 
 ssh -L 3060:localhost:3060 <provider-host>   # then open http://localhost:3060
 ```
 
+
+**Logs tab.** The dashboard's Logs tab reads this node's own log files (`[Log] Dir`, default `$CP_PATH/logs`) back with filters for level (error, warning, info, debug), time range (the last 15 minutes up to 7 days, or a custom start and end) and message text. It reads rotated and gzipped files too when the range reaches back past the current one. A preset range refreshes every 10 seconds; a custom range is fixed. Logs are read-only monitoring, like status and metrics, and need no token.
+
+The same data is at `GET /api/v1/computing/inference/logs`:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `levels` | comma-separated: `error`, `warning`, `info`, `debug`; empty means all |
+| `since`, `until` | RFC 3339 times; `until` defaults to now |
+| `q` | case-insensitive text to match in the message or source location |
+| `limit` | lines to return, newest first (default 200, max 2000) |
+
+The response says `truncated: true` when more lines matched than were returned, or when one request's scan budget ran out before reaching `since`.
+
+The log files themselves are split by level: `info.log` holds info and debug, `warn.log` warnings, `error.log` errors. A script watching for backend failures should read `error.log` and `warn.log`, not the daemon's stdout, which carries the web access log.
 ### Alerts
 
 Optional. Set a `WebhookURL` and the provider POSTs a JSON event when something goes wrong; leave it empty and alerting is off.

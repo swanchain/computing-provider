@@ -566,3 +566,22 @@ export interface RouteBackend {
   health: string;
   error?: string;
 }
+
+export type LogLevel = 'error' | 'warning' | 'info' | 'debug';
+
+export interface LogEntry {
+  time: string;
+  /** As logrus writes it: error, fatal, panic, warning, info, debug, trace. */
+  level: string;
+  message: string;
+  func?: string;
+  file?: string;
+}
+
+export interface LogsResponse {
+  entries: LogEntry[];
+  /** More matched than were returned, or the scan stopped before the range start. */
+  truncated: boolean;
+  partial?: string;
+  files: string[];
+}

@@ -7,6 +7,7 @@ import {
   ReceiptText,
   RefreshCw,
   Route,
+  ScrollText,
   Server,
   Settings2,
 } from 'lucide-react';
@@ -31,15 +32,17 @@ import { AuthDialog } from './components/AuthDialog';
 import { SettingsPanel } from './components/SettingsPanel';
 import { OperationalSummary } from './components/OperationalSummary';
 import { RoutingPanel } from './components/RoutingPanel';
+import { LogsPanel } from './components/LogsPanel';
 
 const POLL_INTERVAL = 5000;
-type DashboardView = 'overview' | 'transactions' | 'routing' | 'proxies' | 'settings';
+type DashboardView = 'overview' | 'transactions' | 'routing' | 'proxies' | 'logs' | 'settings';
 
 const views: Array<{ id: DashboardView; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'transactions', label: 'Requests', icon: ReceiptText },
   { id: 'routing', label: 'Routing', icon: Route },
   { id: 'proxies', label: 'Proxies', icon: KeyRound },
+  { id: 'logs', label: 'Logs', icon: ScrollText },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -348,6 +351,8 @@ function App() {
             {models ? <ProxyRoutingPanel models={models.models} /> : <p className="text-sm text-slate-400">{modelsLoading ? 'Loading model routes…' : 'Model routes unavailable.'}</p>}
           </section>
         )}
+
+        {activeView === 'logs' && <LogsPanel />}
 
         {activeView === 'settings' && (
           <SettingsPanel
