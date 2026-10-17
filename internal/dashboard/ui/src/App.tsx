@@ -287,6 +287,8 @@ function App() {
                     prices={models?.prices ?? {}}
                     summary={models?.summary}
                     drops={status?.registration_drops}
+                    capacity={models?.capacity}
+                    concurrency={requestMgmt?.concurrency_limiter}
                     loading={modelsLoading}
                     error={modelsError}
                     onRefresh={refetchModels}

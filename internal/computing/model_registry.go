@@ -40,19 +40,21 @@ func (s ModelState) String() string {
 
 // RegisteredModel represents a fully configured model in the registry
 type RegisteredModel struct {
-	ID            string `json:"id"`
-	Container     string `json:"container"`
-	Endpoint      string `json:"endpoint"`
-	GPUMemory     int    `json:"gpu_memory"`
-	Category      string `json:"category"`
-	LocalModel    string `json:"local_model,omitempty"`    // Actual model name for local inference server
-	Format        string `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
-	Quantization  string `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
-	APIKey        string `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
-	ContextLength int    `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
-	LocalEndpoint string `json:"local_endpoint,omitempty"` // Local gateway backend, when it differs from Endpoint
-	LocalAPIKey   string `json:"-"`                        // Never exposed, like APIKey
-	LocalOnly     bool   `json:"local_only,omitempty"`     // Served to the local gateway only, never to the hub
+	ID            string  `json:"id"`
+	Container     string  `json:"container"`
+	Endpoint      string  `json:"endpoint"`
+	GPUMemory     int     `json:"gpu_memory"`
+	Category      string  `json:"category"`
+	LocalModel    string  `json:"local_model,omitempty"`    // Actual model name for local inference server
+	Format        string  `json:"format,omitempty"`         // Weight format: fp16, awq, gptq, gguf, etc.
+	Quantization  string  `json:"quantization,omitempty"`   // Quantization detail: q4_k_m, q8_0, w4a16, etc.
+	APIKey        string  `json:"-"`                        // API key for authenticated model endpoints; never expose through status APIs
+	ContextLength int     `json:"context_length,omitempty"` // Manual override for the backend's real context window (tokens)
+	LocalEndpoint string  `json:"local_endpoint,omitempty"` // Local gateway backend, when it differs from Endpoint
+	LocalAPIKey   string  `json:"-"`                        // Never exposed, like APIKey
+	LocalOnly     bool    `json:"local_only,omitempty"`     // Served to the local gateway only, never to the hub
+	MaxConcurrent int     `json:"max_concurrent,omitempty"` // Own in-flight limit, declared to the hub; 0 = global default
+	RPM           float64 `json:"rpm,omitempty"`            // Own request rate per minute; 0 = global default
 	// LocalHealth and LocalError report LocalEndpoint's last reachability
 	// check. They are filled in when the model list is served, not kept here.
 	LocalHealth  string      `json:"local_health,omitempty"`
@@ -227,6 +229,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.LocalEndpoint != mapping.LocalEndpoint ||
 				existingModel.LocalAPIKey != mapping.LocalAPIKey ||
 				existingModel.LocalOnly != mapping.LocalOnly ||
+				existingModel.MaxConcurrent != mapping.MaxConcurrent ||
+				existingModel.RPM != mapping.RPM ||
 				existingModel.fileDisabled != mapping.Disabled {
 
 				existingModel.Endpoint = mapping.Endpoint
@@ -240,6 +244,8 @@ func (r *ModelRegistry) loadConfig() error {
 				existingModel.ContextLength = mapping.ContextLength
 				existingModel.LocalEndpoint = mapping.LocalEndpoint
 				existingModel.LocalAPIKey = mapping.LocalAPIKey
+				existingModel.MaxConcurrent = mapping.MaxConcurrent
+				existingModel.RPM = mapping.RPM
 				localOnlyChanged := existingModel.LocalOnly != mapping.LocalOnly
 				existingModel.LocalOnly = mapping.LocalOnly
 				if localOnlyChanged && existingModel.State != ModelStateDisabled {
@@ -291,6 +297,8 @@ func (r *ModelRegistry) loadConfig() error {
 				LocalEndpoint: mapping.LocalEndpoint,
 				LocalAPIKey:   mapping.LocalAPIKey,
 				LocalOnly:     mapping.LocalOnly,
+				MaxConcurrent: mapping.MaxConcurrent,
+				RPM:           mapping.RPM,
 				Health:        ModelHealthUnknown,
 				HealthString:  ModelHealthUnknown.String(),
 				LoadedAt:      now,
@@ -595,6 +603,22 @@ func (r *ModelRegistry) GetLocalBackend(modelID string) (endpoint, apiKey string
 }
 
 // EnableModel enables a model for serving
+// SetModelLimits records limits set through the API, so the model's status
+// shows them at once and the reload that follows the write to models.json
+// finds nothing changed.
+func (r *ModelRegistry) SetModelLimits(modelID string, limits ModelLimits) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	model, ok := r.models[modelID]
+	if !ok {
+		return false
+	}
+	model.MaxConcurrent = limits.MaxConcurrent
+	model.RPM = limits.RPM
+	model.UpdatedAt = time.Now()
+	return true
+}
+
 func (r *ModelRegistry) EnableModel(modelID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

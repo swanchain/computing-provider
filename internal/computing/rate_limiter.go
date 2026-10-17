@@ -195,6 +195,26 @@ func (rl *RateLimiter) SetModelLimit(modelID string, tokensPerSecond float64, bu
 	logs.GetLogger().Infof("Set rate limit for model %s: %.2f req/s, burst %d", modelID, tokensPerSecond, burstSize)
 }
 
+// ClearModelLimit removes a model's own rate limit; the global one still applies.
+func (rl *RateLimiter) ClearModelLimit(modelID string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	delete(rl.modelBuckets, modelID)
+}
+
+// ModelLimit reports a model's own limit, when it has one.
+func (rl *RateLimiter) ModelLimit(modelID string) (tokensPerSecond float64, burst int, ok bool) {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	b, ok := rl.modelBuckets[modelID]
+	if !ok {
+		return 0, 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.refillRate, int(b.maxTokens), true
+}
+
 // adaptiveLoop adjusts rate based on GPU utilization
 func (rl *RateLimiter) adaptiveLoop() {
 	defer func() {

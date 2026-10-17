@@ -541,7 +541,10 @@ All paths are under `/api/v1/computing`.
 | `POST /inference/models/reload` | Hot-reload `models.json` |
 
 Rate and concurrency limits can be read and changed at runtime under
-`/inference/ratelimit` and `/inference/concurrency`.
+`/inference/ratelimit` and `/inference/concurrency`. A model's own limits are
+`max_concurrent` and `rpm` in its `models.json` entry — editable from the
+model's row in the dashboard — and `max_concurrent` is what the hub is told
+the model can take.
 
 ---
 

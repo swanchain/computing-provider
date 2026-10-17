@@ -351,7 +351,37 @@ func runDaemon(cctx *cli.Context) error {
 			// from, so an operator can see an unreported window without reading
 			// the log (#75).
 			"contexts": inferenceService.ModelContexts(),
+			// The concurrency each model is declared to the hub with: its own
+			// max_concurrent, else the default, capped by the global limit.
+			"capacity": inferenceService.ModelCapacities(),
 		})
+	})
+	// A model's own limits, kept in its models.json entry. Zero returns a
+	// field to the global default. Hub requests over either answer 429 at once,
+	// never queue: the hub reassigns a refused request, while a queued one runs
+	// into its first-chunk timeout and counts as a failure.
+	router.POST("/inference/models/:model_id/limits", func(c *gin.Context) {
+		modelID := c.Param("model_id")
+		var req struct {
+			MaxConcurrent *int     `json:"max_concurrent"`
+			RPM           *float64 `json:"rpm"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "invalid request body"})
+			return
+		}
+		limits := inferenceService.ModelLimitsFor(modelID)
+		if req.MaxConcurrent != nil {
+			limits.MaxConcurrent = *req.MaxConcurrent
+		}
+		if req.RPM != nil {
+			limits.RPM = *req.RPM
+		}
+		if err := inferenceService.SetModelLimits(modelID, limits); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "model limits updated", "model_id": modelID, "limits": limits})
 	})
 	router.GET("/inference/models/:model_id", func(c *gin.Context) {
 		modelID := c.Param("model_id")
@@ -451,15 +481,28 @@ func runDaemon(cctx *cli.Context) error {
 	router.POST("/inference/ratelimit/model/:model_id", func(c *gin.Context) {
 		modelID := c.Param("model_id")
 		var req struct {
-			Rate  float64 `json:"rate"`
-			Burst int     `json:"burst"`
+			Rate  float64  `json:"rate"`
+			Burst int      `json:"burst"`
+			RPM   *float64 `json:"rpm"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "invalid request body"})
 			return
 		}
+		if req.RPM != nil {
+			// Per-minute form: saved to models.json and kept across restarts.
+			limits := inferenceService.ModelLimitsFor(modelID)
+			limits.RPM = *req.RPM
+			if err := inferenceService.SetModelLimits(modelID, limits); err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"status": "model rate limit updated", "model_id": modelID, "rpm": *req.RPM})
+			return
+		}
+		// Per-second form with an explicit burst: this process only.
 		if req.Rate <= 0 || req.Burst <= 0 {
-			c.JSON(400, gin.H{"error": "rate and burst must be positive"})
+			c.JSON(400, gin.H{"error": "rate and burst must be positive, or send rpm"})
 			return
 		}
 		inferenceService.SetModelRateLimit(modelID, req.Rate, req.Burst)
@@ -489,11 +532,13 @@ func runDaemon(cctx *cli.Context) error {
 			c.JSON(400, gin.H{"error": "invalid request body"})
 			return
 		}
-		if req.Max <= 0 {
-			c.JSON(400, gin.H{"error": "max must be positive"})
+		// Saved to models.json and declared to the hub; 0 restores the default.
+		limits := inferenceService.ModelLimitsFor(modelID)
+		limits.MaxConcurrent = req.Max
+		if err := inferenceService.SetModelLimits(modelID, limits); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
-		inferenceService.SetModelConcurrencyLimit(modelID, req.Max)
 		c.JSON(200, gin.H{"status": "model concurrency limit updated", "model_id": modelID, "max": req.Max})
 	})
 

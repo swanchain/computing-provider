@@ -102,7 +102,10 @@ export const api = {
   // Request Management
   getRequestManagement: () => fetchJson<RequestManagement>('/request-management'),
   setGlobalRateLimit: (rate: number) => postJson<{ success: boolean }>('/ratelimit/global', { rate }),
-  setModelRateLimit: (id: string, rate: number) => postJson<{ success: boolean }>(`/ratelimit/model/${modelPath(id)}`, { rate }),
+  setModelRateLimit: (id: string, rpm: number) => postJson<{ success: boolean }>(`/ratelimit/model/${modelPath(id)}`, { rpm }),
+  /** Both limits at once, saved to the model's models.json entry; 0 restores the default. */
+  setModelLimits: (id: string, limits: { max_concurrent?: number; rpm?: number }) =>
+    postJson<{ status: string }>(`/models/${modelPath(id)}/limits`, limits),
   setGlobalConcurrency: (max: number) => postJson<{ success: boolean }>('/concurrency/global', { max }),
   setModelConcurrency: (id: string, max: number) => postJson<{ success: boolean }>(`/concurrency/model/${modelPath(id)}`, { max }),
 

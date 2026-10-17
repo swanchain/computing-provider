@@ -204,3 +204,42 @@ func TestWriteModelsLeavesNoPartialFile(t *testing.T) {
 		}
 	}
 }
+
+func TestSetModelLimitsMergesIntoTheEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := ModelsPath(dir)
+	if err := os.WriteFile(path, []byte(`{"a": {"endpoint": "http://127.0.0.1:1", "api_key": "k", "rpm": 10}, "b": {"endpoint": "http://127.0.0.1:2"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetModelLimits(dir, "a", 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	models, err := readModels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a map[string]json.RawMessage
+	if err := json.Unmarshal(models["a"], &a); err != nil {
+		t.Fatal(err)
+	}
+	if string(a["max_concurrent"]) != "2" || string(a["api_key"]) != `"k"` || string(a["endpoint"]) != `"http://127.0.0.1:1"` {
+		t.Fatalf("entry a = %s", models["a"])
+	}
+	if _, has := a["rpm"]; has {
+		t.Fatalf("rpm 0 should remove the key: %s", models["a"])
+	}
+	var b map[string]json.RawMessage
+	if err := json.Unmarshal(models["b"], &b); err != nil || len(b) != 1 || string(b["endpoint"]) != `"http://127.0.0.1:2"` {
+		t.Fatalf("entry b changed: %s", models["b"])
+	}
+	if err := SetModelLimits(dir, "missing", 1, 0); err == nil {
+		t.Fatal("a model with no entry was accepted")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != modelsFileMode {
+		t.Fatalf("mode = %04o after rewrite", info.Mode().Perm())
+	}
+}

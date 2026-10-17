@@ -153,6 +153,8 @@ type ConcurrencyLimiter struct {
 	gpuCollector    *GPUMetricsCollector
 	stopCh          chan struct{}
 	running         bool
+	// pinned marks models whose limit an operator set; the GPU loop skips them.
+	pinned map[string]bool
 }
 
 // NewConcurrencyLimiter creates a new concurrency limiter
@@ -161,6 +163,7 @@ func NewConcurrencyLimiter(config ConcurrencyConfig, gpuCollector *GPUMetricsCol
 		config:         config,
 		globalSem:      NewSemaphore(config.GlobalMaxConcurrent),
 		modelSems:      make(map[string]*Semaphore),
+		pinned:         make(map[string]bool),
 		modelGPUMemory: make(map[string]int),
 		gpuCollector:   gpuCollector,
 		stopCh:         make(chan struct{}),
@@ -322,12 +325,18 @@ func (cl *ConcurrencyLimiter) adjustLimitsBasedOnGPU() {
 		}
 	}
 
+	cl.resizeForGPU(totalAvailable)
+}
+
+// resizeForGPU fits each model's limit to the GPU memory available, except
+// models whose limit an operator set.
+func (cl *ConcurrencyLimiter) resizeForGPU(totalAvailable float64) {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
 	// Adjust per-model limits based on GPU memory requirements
 	for modelID, gpuMem := range cl.modelGPUMemory {
-		if gpuMem <= 0 {
+		if gpuMem <= 0 || cl.pinned[modelID] {
 			continue
 		}
 
@@ -407,7 +416,9 @@ func (cl *ConcurrencyLimiter) SetGlobalMax(max int) {
 	logs.GetLogger().Infof("Updated global concurrency limit to %d", max)
 }
 
-// SetModelMax updates the maximum concurrent requests for a model
+// SetModelMax updates the maximum concurrent requests for a model. A limit set
+// here is the operator's and is pinned: the GPU-aware loop no longer resizes
+// it, since it would otherwise undo a deliberate setting within ten seconds.
 func (cl *ConcurrencyLimiter) SetModelMax(modelID string, max int) {
 	cl.mu.Lock()
 	sem, exists := cl.modelSems[modelID]
@@ -415,8 +426,29 @@ func (cl *ConcurrencyLimiter) SetModelMax(modelID string, max int) {
 		sem = NewSemaphore(max)
 		cl.modelSems[modelID] = sem
 	}
+	cl.pinned[modelID] = true
 	cl.mu.Unlock()
 
 	sem.SetMax(max)
 	logs.GetLogger().Infof("Updated model %s concurrency limit to %d", modelID, max)
+}
+
+// ClearModelMax returns a model to the default limit and unpins it. The
+// semaphore is kept rather than deleted so slots held right now are still
+// released against it.
+func (cl *ConcurrencyLimiter) ClearModelMax(modelID string) {
+	cl.mu.Lock()
+	sem := cl.modelSems[modelID]
+	delete(cl.pinned, modelID)
+	cl.mu.Unlock()
+	if sem != nil {
+		sem.SetMax(cl.config.DefaultModelMax)
+	}
+}
+
+// ModelMaxPinned reports whether an operator limit holds for the model.
+func (cl *ConcurrencyLimiter) ModelMaxPinned(modelID string) bool {
+	cl.mu.RLock()
+	defer cl.mu.RUnlock()
+	return cl.pinned[modelID]
 }

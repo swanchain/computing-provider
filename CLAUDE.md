@@ -936,10 +936,12 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `GET /ratelimit`, `GET /concurrency`, `GET /retries` — metrics
 - `GET /request-management` — combined status
 - `GET /requests` — request queue/inflight status
-- `POST /ratelimit/global`, `POST /ratelimit/model/:model_id` — set rate limits
-- `POST /concurrency/global`, `POST /concurrency/model/:model_id` — set concurrency limits
+- `POST /ratelimit/global`, `POST /ratelimit/model/:model_id` — set rate limits (per model: `{"rpm": 30}` is saved to models.json; `{"rate","burst"}` per second is this process only)
+- `POST /concurrency/global`, `POST /concurrency/model/:model_id` — set concurrency limits (per model: saved to models.json and re-declared to the hub; `0` restores the default)
+- `POST /models/:model_id/limits` — both per-model limits at once (`max_concurrent`, `rpm`), the dashboard's call
 
 > Rate-limit/concurrency settings are enforced on the inference request path; over-limit requests are rejected with HTTP 429.
+> Per-model limits are `max_concurrent` and `rpm` in the model's models.json entry (see docs/configuration.md): applied at startup and on reload, `max_concurrent` declared to the hub, and pinned against the GPU-aware resize. They used to be runtime-only and were lost on every restart.
 
 ## Common Issues
 
