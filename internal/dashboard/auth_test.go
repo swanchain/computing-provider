@@ -97,3 +97,31 @@ func TestDisabledAuthLetsEveryCallerThrough(t *testing.T) {
 		t.Fatalf("re-enabled auth answered %d, want 401", rec.Code)
 	}
 }
+
+func TestAPIAnswersWithoutToken(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		code int
+		want bool
+	}{
+		{"open api", http.StatusOK, true},
+		{"token required", http.StatusUnauthorized, false},
+		{"error", http.StatusInternalServerError, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/computing/inference/settings" || r.Header.Get("Authorization") != "" {
+					t.Errorf("probe %s %s with auth %q", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+				}
+				w.WriteHeader(test.code)
+			}))
+			defer srv.Close()
+			if got := APIAnswersWithoutToken(srv.URL); got != test.want {
+				t.Fatalf("got %v, want %v", got, test.want)
+			}
+		})
+	}
+	if APIAnswersWithoutToken("http://127.0.0.1:1") {
+		t.Fatal("an unreachable API read as open")
+	}
+}

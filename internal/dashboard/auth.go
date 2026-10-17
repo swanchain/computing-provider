@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/swanchain/computing-provider-v2/conf"
@@ -128,4 +129,20 @@ func RequireAccess(token string) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// APIAnswersWithoutToken reports whether the API behind apiTarget serves a
+// settings read with no Authorization header, which is what `run --no-auth`
+// does. The dashboard is a reverse proxy to that API, so binding it to a
+// non-loopback address would hand the open API to the network and defeat the
+// loopback-only rule the daemon enforces on itself. The check is best effort:
+// an API that cannot be reached yet reads as not open.
+func APIAnswersWithoutToken(apiTarget string) bool {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(strings.TrimRight(apiTarget, "/") + "/api/v1/computing/inference/settings")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }

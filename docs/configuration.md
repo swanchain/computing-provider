@@ -180,9 +180,9 @@ ssh -L 3060:localhost:3060 <provider-host>   # then open http://localhost:3060
 ```
 
 
-**Logs tab.** The dashboard's Logs tab reads this node's own log files (`[Log] Dir`, default `$CP_PATH/logs`) back with filters for level (error, warning, info, debug), time range (the last 15 minutes up to 7 days, or a custom start and end) and message text. It reads rotated and gzipped files too when the range reaches back past the current one. A preset range refreshes every 10 seconds; a custom range is fixed. Reading logs needs the control token, like settings, because log lines carry request IDs, backend addresses and upstream error text.
+**Logs tab.** The dashboard's Logs tab reads this node's own log files (`[Log] Dir`, default `$CP_PATH/logs`) back with filters for level (error, warning, info, debug), time range (the last 15 minutes up to 7 days, or a custom start and end) and message text. It reads rotated and gzipped files too when the range reaches back past the current one. A preset range refreshes every 10 seconds; a custom range is fixed. Logs are read-only monitoring, like status and metrics, and need no token.
 
-The same data is at `GET /api/v1/computing/inference/logs` with `Authorization: Bearer $(cat $CP_PATH/dashboard.token)`:
+The same data is at `GET /api/v1/computing/inference/logs`:
 
 | Parameter | Meaning |
 |-----------|---------|
