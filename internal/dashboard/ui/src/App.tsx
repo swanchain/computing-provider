@@ -153,7 +153,7 @@ function App() {
     setActiveView(view);
     window.history.replaceState(null, '', `#${view}`);
     window.scrollTo({ top: 0 });
-    if ((view === 'settings' || view === 'logs') && !authenticated) setShowAuthDialog(true);
+    if (view === 'settings' && !authenticated) setShowAuthDialog(true);
   };
 
   const refreshing = metricsRefreshing || statusRefreshing || earningsRefreshing || modelsRefreshing || requestMgmtRefreshing || proxyReport.refreshing || hubReport.refreshing || usageReport.refreshing;
@@ -363,7 +363,7 @@ function App() {
           </section>
         )}
 
-        {activeView === 'logs' && <LogsPanel authenticated={authenticated} onUnlock={() => setShowAuthDialog(true)} />}
+        {activeView === 'logs' && <LogsPanel />}
 
         {activeView === 'settings' && (
           <SettingsPanel

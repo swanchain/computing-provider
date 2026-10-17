@@ -905,7 +905,7 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `POST /models/:model_id/disable` — disable a model
 - `POST /models/:model_id/healthcheck` — force health check
 - `POST /models/reload` — hot-reload models.json
-- `GET /logs` — this node's own log lines, newest first, filtered by `levels`, `since`/`until` (RFC 3339), `q` and `limit` (`internal/logview`). Needs the control token: log lines carry request IDs, backend addresses and upstream error bodies. The current file of each level group is read backwards and stops at `since`, so recent ranges are cheap; rotated `.gz` backups are only opened when the range reaches them
+- `GET /logs` — this node's own log lines, newest first, filtered by `levels`, `since`/`until` (RFC 3339), `q` and `limit` (`internal/logview`). Read-only, no token, like the other monitoring routes. The current file of each level group is read backwards and stops at `since`, so recent ranges are cheap; rotated `.gz` backups are only opened when the range reaches them
 
 **Request management** (`/inference/`):
 - `GET /ratelimit`, `GET /concurrency`, `GET /retries` — metrics

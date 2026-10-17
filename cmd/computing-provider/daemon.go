@@ -182,7 +182,9 @@ func runDaemon(cctx *cli.Context) error {
 	// token even though it only reads: log lines carry request IDs, backend
 	// endpoints and upstream error bodies, and the API may listen on more
 	// than loopback.
-	router.GET("/inference/logs", dashboard.RequireAccess(controlToken), func(c *gin.Context) {
+	// Read-only like the other monitoring routes: an operator looking at why
+	// a model failed should not need the control token first.
+	router.GET("/inference/logs", func(c *gin.Context) {
 		q, err := logQuery(c)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

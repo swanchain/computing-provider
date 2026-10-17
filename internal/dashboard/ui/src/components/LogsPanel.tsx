@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Bug, Info, KeyRound, LockKeyhole, RefreshCw, ScrollText, Search, XCircle } from 'lucide-react';
+import { AlertTriangle, Bug, Info, RefreshCw, ScrollText, Search, XCircle } from 'lucide-react';
 import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
 import type { LogEntry, LogLevel } from '../types';
-
-interface LogsPanelProps {
-  authenticated: boolean;
-  onUnlock: () => void;
-}
 
 // Each level carries a glyph as well as a colour, so it reads the same to a
 // colour-blind operator and in a screenshot pasted into a chat.
@@ -88,7 +83,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
   );
 }
 
-export function LogsPanel({ authenticated, onUnlock }: LogsPanelProps) {
+export function LogsPanel() {
   const [levels, setLevels] = useState<LogLevel[]>(['error', 'warning']);
   const [range, setRange] = useState('1h');
   const [customFrom, setCustomFrom] = useState(() => toLocalInput(new Date(Date.now() - 60 * 60_000)));
@@ -112,7 +107,6 @@ export function LogsPanel({ authenticated, onUnlock }: LogsPanelProps) {
     : '';
 
   const fetchLogs = useCallback(() => {
-    if (!authenticated) return Promise.reject(new Error('locked'));
     if (levels.length === 0) return Promise.resolve({ entries: [], truncated: false, files: [] });
     let since: Date;
     let until: Date | undefined;
@@ -124,31 +118,12 @@ export function LogsPanel({ authenticated, onUnlock }: LogsPanelProps) {
       since = new Date(Date.now() - (RANGES.find((r) => r.id === range)?.ms ?? 60 * 60_000));
     }
     return api.getLogs({ levels, since, until, q: query || undefined, limit });
-  }, [authenticated, levels, custom, customFrom, customTo, range, query, limit]);
+  }, [levels, custom, customFrom, customTo, range, query, limit]);
 
   // A preset follows the log as it grows; a fixed custom range does not change,
   // so polling it would only re-send the same answer.
-  const live = !custom && authenticated && !customError;
+  const live = !custom && !customError;
   const { data, error, loading, refetch } = usePolling(fetchLogs, live ? 10_000 : 0);
-
-  if (!authenticated) {
-    return (
-      <div className="mx-auto max-w-2xl py-8 sm:py-16">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-center sm:p-10">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400">
-            <LockKeyhole aria-hidden="true" size={24} />
-          </div>
-          <h2 className="text-xl font-semibold text-white">Logs are locked</h2>
-          <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-400">
-            Log lines include request IDs, backend addresses and upstream error text, so reading them needs the local control token.
-          </p>
-          <button type="button" onClick={onUnlock} className="mt-5 inline-flex min-h-11 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-500">
-            <KeyRound aria-hidden="true" size={17} /> Unlock logs
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   const entries = customError ? [] : data?.entries ?? [];
   const counts = entries.reduce<Record<string, number>>((acc, e) => {
