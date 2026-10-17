@@ -76,6 +76,8 @@ a token into every `curl` and every fresh browser tab; the dashboard shows
 **Auth off** in place of **Unlock controls**. It is refused unless `--host` is
 a loopback address, and it trusts every user on the machine — anyone with a
 shell there can take models out of service — so keep it off a shared host.
+The dashboard proxies to that API, so while it is open the `dashboard` command
+refuses a non-loopback `--host` as well.
 
 ### `selfcheck`
 
