@@ -92,9 +92,9 @@ func (s *InferenceService) SetModelLimits(modelID string, l ModelLimits) error {
 		return fmt.Errorf("model %s not found", modelID)
 	}
 	s.registry.SetModelLimits(modelID, l)
-	if m, ok := s.modelMappings[modelID]; ok {
+	if m, ok := s.mapping(modelID); ok {
 		m.MaxConcurrent, m.RPM = l.MaxConcurrent, l.RPM
-		s.modelMappings[modelID] = m
+		s.setMapping(modelID, m)
 	}
 	s.applyModelLimits(modelID, l)
 	if err := runtime.SetModelLimits(s.registry.configPath, modelID, l.MaxConcurrent, l.RPM); err != nil {

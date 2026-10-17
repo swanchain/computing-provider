@@ -347,7 +347,7 @@ func (s *InferenceService) UsageHistory(duration string, window, bucket time.Dur
 	if err != nil {
 		return UsageSeries{}, err
 	}
-	series := buildUsageSeries(in.records, in.samples, in.endpointModels, usageClassOf(s.modelMappings), from, to, bucket, duration)
+	series := buildUsageSeries(in.records, in.samples, in.endpointModels, usageClassOf(s.mappings()), from, to, bucket, duration)
 	series.Endpoints = s.usageSampler.Status()
 	if series.Endpoints == nil {
 		series.Endpoints = []BackendEndpointStatus{}
@@ -469,7 +469,7 @@ func (s *InferenceService) modelEndpoints() map[string]endpointInfo {
 		}
 		out[ep] = info
 	}
-	for id, m := range s.modelMappings {
+	for id, m := range s.mappings() {
 		add(m.Endpoint, m.APIKey, id, m.LocalModel)
 		if split := splitLocalEndpoint(m); split != "" {
 			add(split, m.LocalAPIKey, id, m.LocalModel)

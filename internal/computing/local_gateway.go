@@ -235,7 +235,7 @@ func (s *InferenceService) resolveModelEndpoint(modelID string) (endpoint, local
 			return "", "", "", &ModelServerError{StatusCode: 503, Message: fmt.Sprintf("model %s is disabled on this provider", modelID)}
 		}
 	}
-	mapping, ok := s.modelMappings[modelID]
+	mapping, ok := s.mapping(modelID)
 	if !ok {
 		return "", "", "", &ModelServerError{StatusCode: 404, Message: fmt.Sprintf("model %s not deployed on this provider", modelID)}
 	}
@@ -255,7 +255,7 @@ func (s *InferenceService) resolveGatewayEndpoint(modelID string) (endpoint, loc
 			}
 			return ep, s.registry.GetLocalModelName(modelID), key, nil
 		}
-	} else if mapping, ok := s.modelMappings[modelID]; ok && mapping.LocalEndpoint != "" {
+	} else if mapping, ok := s.mapping(modelID); ok && mapping.LocalEndpoint != "" {
 		return mapping.LocalEndpoint, mapping.LocalModel, mapping.LocalAPIKey, nil
 	}
 	return s.resolveModelEndpoint(modelID)
@@ -315,7 +315,8 @@ func (s *InferenceService) isLocalOnly(modelID string) bool {
 			return m.LocalOnly
 		}
 	}
-	return s.modelMappings[modelID].LocalOnly
+	mapping, _ := s.mapping(modelID)
+	return mapping.LocalOnly
 }
 
 // refuseLocalOnly answers a hub request for a local-only model. The hub has
