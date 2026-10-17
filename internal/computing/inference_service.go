@@ -520,13 +520,39 @@ func (s *InferenceService) Start() error {
 		s.alertMonitor.onHealthChange(modelHealth)
 	})
 
-	if err := s.client.Start(); err != nil {
-		return fmt.Errorf("failed to start Inference client: %w", err)
+	// The local stores come up before the hub connection is attempted. They
+	// used to follow it, behind an early return: a node whose first connection
+	// failed — hub down at boot, a closed port in a test config — ran with no
+	// request_history or metrics_history table at all, so every dashboard
+	// read answered "no such table" until the next restart.
+	s.startLocalStores()
+
+	clientErr := s.client.Start()
+	if clientErr != nil {
+		logs.GetLogger().Errorf("Swan Inference connection failed at startup: %v", clientErr)
+		if startupRetryable(clientErr) {
+			// Nothing else would try again: the pumps that request a reconnect
+			// were never started. The reconnect loop backs off up to 30s and
+			// registers once it gets through.
+			logs.GetLogger().Info("Retrying the Swan Inference connection in the background")
+			s.client.requestReconnect(0)
+		}
 	}
 
 	s.alertMonitor.Start()
 	s.selfCheck.Start()
 
+	logs.GetLogger().Infof("Inference service started with node ID: %s, owner: %s", s.nodeID, ownerAddr)
+	if clientErr != nil {
+		return fmt.Errorf("failed to start Inference client: %w", clientErr)
+	}
+	return nil
+}
+
+// startLocalStores starts what records this node's own activity: the request
+// history, the backend usage sampler and the metrics history. None of them
+// needs the hub, and the dashboard reads them whether or not it is connected.
+func (s *InferenceService) startLocalStores() {
 	// Start persistent request history, and feed it from the metrics recorder.
 	if s.requestStore != nil {
 		if err := s.requestStore.Start(); err != nil {
@@ -555,9 +581,14 @@ func (s *InferenceService) Start() error {
 			logs.GetLogger().Warnf("Failed to start metrics history: %v", err)
 		}
 	}
+}
 
-	logs.GetLogger().Infof("Inference service started with node ID: %s, owner: %s", s.nodeID, ownerAddr)
-	return nil
+// startupRetryable says whether a failed first connection is worth retrying
+// on its own. A hub that refused the provider — bad key, not approved — needs
+// the operator, and retrying would only repeat the refusal; anything else is
+// the network, and the node should keep trying the way it does after a drop.
+func startupRetryable(err error) bool {
+	return err != nil && !errors.Is(err, ErrProviderRefused)
 }
 
 // getDefaultWalletAddress returns an empty string — wallet is no longer managed locally.
