@@ -69,3 +69,31 @@ func TestProtectWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestDisabledAuthLetsEveryCallerThrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	SetAuthDisabled(true)
+	t.Cleanup(func() { SetAuthDisabled(false) })
+
+	r := gin.New()
+	r.POST("/write", ProtectWrites("secret"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	r.GET("/settings", RequireAccess("secret"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	for _, test := range []struct{ method, path string }{
+		{http.MethodPost, "/write"},
+		{http.MethodGet, "/settings"},
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(test.method, test.path, nil))
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s %s with auth disabled = %d, want 204", test.method, test.path, rec.Code)
+		}
+	}
+
+	SetAuthDisabled(false)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/write", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("re-enabled auth answered %d, want 401", rec.Code)
+	}
+}

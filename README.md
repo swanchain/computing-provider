@@ -482,7 +482,9 @@ computing-provider dashboard    # http://localhost:3060
 The dashboard is read-only until you choose **Unlock controls** and paste the
 token from `$CP_PATH/dashboard.token`, an owner-only file created on first run.
 Stored secrets are never sent to the browser. Host and port are set under
-`[Dashboard]`; use `0.0.0.0` only on a network you trust.
+`[Dashboard]`; use `0.0.0.0` only on a network you trust. For development on
+your own machine, `computing-provider run --no-auth` drops the token: loopback
+bind only, and every local user can then control the node.
 
 ---
 
