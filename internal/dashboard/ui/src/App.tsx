@@ -20,7 +20,7 @@ import { UsageChart } from './components/UsageChart';
 import type { ModelColourMap } from './lib/modelPalette';
 import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
-import { GPUPanel } from './components/GPUPanel';
+import { GPUPanel, GPUStrip } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
 import { HubModelsTable } from './components/HubModelsTable';
 import { HubModelsPanel } from './components/HubModelsPanel';
@@ -314,6 +314,7 @@ function App() {
                 earningsError={earningsError}
                 earningsLoading={earningsLoading}
               />
+            <GPUStrip gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
           </div>
         )}
 
