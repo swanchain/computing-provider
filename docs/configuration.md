@@ -192,6 +192,8 @@ ssh -L 3060:localhost:3060 <provider-host>   # then open http://localhost:3060
 ```
 
 
+**Overview and Diagnostics.** The overview is one screen: the attention line, the usage and earnings charts (by model by default, switchable to by source), a table with one row per model offered to the hub, and the headline figures. Each row shows the platform's listing state for the model (`offered`, `not listed`, `pulled by this node` with the reason, `dropped N×`), in-flight requests against its declared limit (marked `default` when no `max_concurrent` is set), its `rpm` or `global`, the platform's recent success and failure counts, and what it earned in the chart's window; the sliders icon opens the limits editor. Healthy models with no recent traffic fold into one line. Local-only models are a count linking to Diagnostics, which holds everything else: the full model list, GPU, platform listings beside this node's, request controls, session mix and performance history.
+
 **Logs tab.** The dashboard's Logs tab reads this node's own log files (`[Log] Dir`, default `$CP_PATH/logs`) back with filters for level (error, warning, info, debug), time range (the last 15 minutes up to 7 days, or a custom start and end) and message text. It reads rotated and gzipped files too when the range reaches back past the current one. A preset range refreshes every 10 seconds; a custom range is fixed. Logs are read-only monitoring, like status and metrics, and need no token.
 
 The same data is at `GET /api/v1/computing/inference/logs`:

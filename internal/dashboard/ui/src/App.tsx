@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
+  Activity,
   KeyRound,
   LayoutDashboard,
   LockKeyhole,
@@ -19,8 +20,9 @@ import { UsageChart } from './components/UsageChart';
 import type { ModelColourMap } from './lib/modelPalette';
 import { ModelDistribution } from './components/ModelDistribution';
 import { MetricsPanel } from './components/MetricsPanel';
-import { GPUPanel } from './components/GPUPanel';
+import { GPUPanel, GPUStrip } from './components/GPUPanel';
 import { ModelsPanel } from './components/ModelsPanel';
+import { HubModelsTable } from './components/HubModelsTable';
 import { HubModelsPanel } from './components/HubModelsPanel';
 import { ProxyAccountsPanel, ProxyRoutingPanel } from './components/ProxyAccountsPanel';
 import { OverviewAttention } from './components/OverviewAttention';
@@ -36,10 +38,11 @@ import { RoutingPanel } from './components/RoutingPanel';
 import { LogsPanel } from './components/LogsPanel';
 
 const POLL_INTERVAL = 5000;
-type DashboardView = 'overview' | 'transactions' | 'routing' | 'proxies' | 'logs' | 'settings';
+type DashboardView = 'overview' | 'diagnostics' | 'transactions' | 'routing' | 'proxies' | 'logs' | 'settings';
 
 const views: Array<{ id: DashboardView; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'diagnostics', label: 'Diagnostics', icon: Activity },
   { id: 'transactions', label: 'Requests', icon: ReceiptText },
   { id: 'routing', label: 'Routing', icon: Route },
   { id: 'proxies', label: 'Proxies', icon: KeyRound },
@@ -107,6 +110,17 @@ function App() {
   const proxyReport = usePolling(useCallback(() => api.getProxyAccounts(), []), 60_000);
   const routeReport = usePolling(useCallback(() => api.getRoutes(routeWindow), [routeWindow]), 15_000);
   const usageReport = usePolling(useCallback(() => api.getUsageHistory(chartWindow, 'node'), [chartWindow]), 60_000);
+  // Per-model earnings in the chart's window, for the table's earned column:
+  // the same series the earnings chart draws, summed per model.
+  const earningsWindow = usePolling(useCallback(() => api.getEarningsHistory(chartWindow, 'node'), [chartWindow]), 60_000);
+  const earnedByModel = useMemo(() => {
+    if (!earningsWindow.data) return undefined;
+    const out: Record<string, number> = {};
+    for (const point of earningsWindow.data.points) {
+      for (const [model, split] of Object.entries(point.models ?? {})) out[model] = (out[model] ?? 0) + split.usd;
+    }
+    return out;
+  }, [earningsWindow.data]);
 
   // Probed with or without a stored token: a daemon started with --no-auth
   // answers the settings read to anyone, and the controls should open without
@@ -255,6 +269,8 @@ function App() {
       <main className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-6">
         {activeView === 'overview' && (
           <div className="space-y-5">
+              <OverviewAttention hub={hubReport} usage={usageReport} proxies={proxyReport} onProxies={() => handleViewChange('proxies')} onUsage={() => document.getElementById('earnings-heading')?.scrollIntoView({ behavior: 'smooth' })} />
+
             <section aria-labelledby="earnings-heading">
               <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
                 <div>
@@ -269,11 +285,49 @@ function App() {
                 <UsageChart report={usageReport} window_={chartWindow} models={earnings?.models} colours={modelColours} nodeName={status?.node_name} />
                 <EarningsChart window_={chartWindow} models={earnings?.models} onColours={setModelColours} />
               </div>
+            </section>
+
+            <HubModelsTable
+              models={models?.models ?? []}
+              hub={hubReport.data}
+              hubError={hubReport.error}
+              capacity={models?.capacity}
+              concurrency={requestMgmt?.concurrency_limiter}
+              drops={status?.registration_drops}
+              autoDisabled={status?.auto_disabled_models}
+              earned={earnedByModel}
+              earnedWindow={chartWindow}
+              loading={modelsLoading}
+              error={modelsError}
+              authenticated={authenticated}
+              onUnlock={() => setShowAuthDialog(true)}
+              onRefresh={refetchModels}
+              onModelClick={setSelectedModelId}
+              onShowLocal={() => handleViewChange('diagnostics')}
+            />
+
+              <MetricsPanel
+                metrics={metrics}
+                loading={metricsLoading}
+                error={metricsError}
+                earnings={earnings}
+                earningsError={earningsError}
+                earningsLoading={earningsLoading}
+              />
+            <GPUStrip gpus={metrics?.gpu_metrics ?? []} loading={metricsLoading} error={metricsError} />
+          </div>
+        )}
+
+        {activeView === 'diagnostics' && (
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-xl font-semibold text-white">Diagnostics</h2>
+              <p className="mt-0.5 text-sm text-slate-400">Every model including local-only ones, GPU, the platform's view of this node, request controls and history.</p>
+            </div>
               <details className="mt-3 rounded-lg border border-slate-800 bg-slate-900/40" onToggle={(event) => setShowMix(event.currentTarget.open)}>
                 <summary className="min-h-10 cursor-pointer px-3 py-2 text-sm text-slate-300 focus-visible:outline focus-visible:outline-sky-400">Session mix by model <span className="ml-1 text-slate-500">· since restart</span></summary>
                 {showMix && <div className="border-t border-slate-800 p-3"><ModelDistribution earnings={earnings} loading={earningsLoading && !earnings} error={earningsError} /></div>}
               </details>
-            </section>
 
             <section aria-labelledby="operations-heading">
               <div className="mb-2">
@@ -322,15 +376,6 @@ function App() {
                 <span>{status?.registered_models?.length ?? '—'} registered to hub</span>
                 <span>{models ? models.models.filter((m) => m.local_only).length : '—'} local-only models</span>
               </div>
-              <OverviewAttention hub={hubReport} usage={usageReport} proxies={proxyReport} onProxies={() => handleViewChange('proxies')} onUsage={() => document.getElementById('earnings-heading')?.scrollIntoView({ behavior: 'smooth' })} />
-              <MetricsPanel
-                metrics={metrics}
-                loading={metricsLoading}
-                error={metricsError}
-                earnings={earnings}
-                earningsError={earningsError}
-                earningsLoading={earningsLoading}
-              />
             </section>
 
             <section aria-label="Platform listings and request controls" className="grid items-start gap-5 lg:grid-cols-2">
@@ -342,7 +387,6 @@ function App() {
               <summary className="min-h-12 cursor-pointer px-5 py-4 font-semibold text-white focus-visible:outline focus-visible:outline-sky-400">Performance history <span className="ml-2 text-sm font-normal text-slate-400">Latency, success rate, and throughput</span></summary>
               {showPerformance && <div className="border-t border-slate-800 p-3"><HistoricalChart /></div>}
             </details>
-
           </div>
         )}
 

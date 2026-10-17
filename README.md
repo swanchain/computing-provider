@@ -463,7 +463,8 @@ computing-provider dashboard    # http://localhost:3060
 
 | Tab | What it shows |
 |-----|---------------|
-| **Overview** | Usage and estimated earnings for this node, model and GPU readiness, and anything that needs attention |
+| **Overview** | One screen for the day: anything that needs attention, usage and estimated earnings, one row per model offered to the hub (listing state, in-flight against its limit, rate, recent requests, earnings, limits editor and enable/disable), and the headline figures |
+| **Diagnostics** | Every model including local-only ones, GPU, the platform's listings beside this node's, request controls, session mix and performance history |
 | **Requests** | Every request: where it came from, outcome, latency and tokens |
 | **Proxies** | A 24-hour token chart per proxy (marketplace and local), each proxy's accounts with status and subscription limits, and model routing |
 | **Settings** | Configuration, request limits, alerts, self-check and logging |
