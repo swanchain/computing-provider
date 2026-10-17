@@ -642,6 +642,10 @@ func (c *InferenceClient) checkProviderStatus() (*ProviderStatusResponse, error)
 }
 
 // Start connects to Swan Inference and starts the client
+// ErrProviderRefused marks a startup failure the hub decided — an invalid key
+// or a provider that may not connect — as opposed to one the network did.
+var ErrProviderRefused = errors.New("provider refused by Swan Inference")
+
 func (c *InferenceClient) Start() error {
 	logs.GetLogger().Infof("Connecting to Swan Inference at %s", c.wsURL)
 
@@ -662,7 +666,7 @@ func (c *InferenceClient) Start() error {
 				}
 			}
 			logs.GetLogger().Error("===========================================")
-			return fmt.Errorf("invalid API key: %s", status.Message)
+			return fmt.Errorf("invalid API key: %s: %w", status.Message, ErrProviderRefused)
 		}
 
 		if !status.CanConnect {
@@ -679,7 +683,7 @@ func (c *InferenceClient) Start() error {
 			}
 			logs.GetLogger().Warn("===========================================")
 			logs.GetLogger().Warn("Run 'computing-provider inference status' to check approval status")
-			return fmt.Errorf("provider cannot connect: %s (status: %s)", status.Message, status.Status)
+			return fmt.Errorf("provider cannot connect: %s (status: %s): %w", status.Message, status.Status, ErrProviderRefused)
 		}
 
 		// Display informational warning for non-active providers that can connect
