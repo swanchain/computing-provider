@@ -630,3 +630,33 @@ func TestProbeModelSkipsNonChatModels(t *testing.T) {
 		t.Fatalf("got %+v, want Skipped", res)
 	}
 }
+
+// [SelfCheck] SkipCompletion: a metered backend is not sent a completion for
+// every serving model on every audit, but a model already out of service is
+// still probed — that probe is how its recovery is noticed.
+func TestSkipServingCompletionsProbesOnlyHeldModels(t *testing.T) {
+	dir := t.TempDir()
+	ok := fakeBackend{maxModelLen: 4096, completionOK: true}.server(t)
+	writeModels(t, dir, map[string]map[string]interface{}{
+		"org/serving": {"endpoint": ok.URL},
+		"org/held":    {"endpoint": ok.URL},
+	})
+	d := fakeDaemon(t, true, []string{"org/serving"},
+		map[string]string{"org/serving": "healthy", "org/held": "healthy"},
+		map[string]int64{"org/serving": 1, "org/held": 1})
+
+	r := Run(Options{RepoPath: dir, APIBase: d.URL, LogDir: dir,
+		ConfigModels:           []string{"org/serving", "org/held"},
+		ExpectedProbeFailures:  map[string]bool{"org/held": true},
+		SkipServingCompletions: true})
+
+	if p := r.Probes["org/serving"]; !p.Skipped {
+		t.Errorf("serving model was probed: %+v", p)
+	}
+	if p := r.Probes["org/held"]; p.Skipped || !p.OK {
+		t.Errorf("held model = %+v, want it probed (and recovered)", p)
+	}
+	if res := find(t, r, "inference probe"); res.Status != StatusPass {
+		t.Fatalf("inference probe = %s (%q), want pass", res.Status, res.Message)
+	}
+}

@@ -196,6 +196,12 @@ type SelfCheck struct {
 	// RecoveryProbeSeconds is how often a model the breaker took out is probed
 	// so it can come back, instead of waiting up to IntervalMinutes.
 	RecoveryProbeSeconds int `toml:"RecoveryProbeSeconds"` // Default: 60; -1 waits for the audit
+	// SkipCompletion leaves the inference probe out of the periodic audit for
+	// models that are serving. Each probe is a real completion, which on a
+	// metered or rate-limited backend spends quota on every audit. Failures are
+	// then caught by the request breaker from routed traffic, and models taken
+	// out are still probed so they can come back.
+	SkipCompletion bool `toml:"SkipCompletion"` // Default: false
 }
 
 // TripThreshold returns how many consecutive backend-at-fault request failures

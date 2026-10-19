@@ -851,6 +851,14 @@ recovery returns it and an operator's own disable is never undone.
   with `selfcheck.ProbeModel`. A model that trips again within ten minutes of a
   breaker recovery is left to the full audit, or a backend that passes a
   one-token probe but fails real work would flap every minute.
+- **Recovery backs off per model** (`recordProbeFailure`): each failed probe
+  doubles the wait from `RecoveryProbeSeconds` up to the audit interval, and
+  recovery, re-enable or `forget` clears it. A fixed 60s cadence against an
+  overloaded or rate-limited upstream spent quota and could hold its limit
+  window open while learning nothing.
+- **`SkipCompletion`** sets `SkipServingCompletions` on the audit: serving
+  models get no completion probe, held ones (`ExpectedProbeFailures`) still do,
+  so recovery still works even with `RecoveryProbeSeconds = -1`.
 ### Hub notices
 
 Swan Inference can see things a node cannot observe about itself — that its
