@@ -226,12 +226,15 @@ func TestRecoveryProbeReturnsATrippedModel(t *testing.T) {
 		return selfcheck.ProbeResult{Error: "connection refused"}, nil
 	}
 
+	clock := time.Now()
+	r.now = func() time.Time { return clock }
 	r.probeHeld()
 	if got := models.history(); len(got) != 1 {
 		t.Fatalf("re-enabled while the backend still fails: %v", got)
 	}
 
 	healthy = true
+	clock = clock.Add(2 * time.Minute) // past the first backoff
 	r.probeHeld()
 	if got := models.history(); len(got) != 2 || got[1] != "enable:org/a" {
 		t.Fatalf("history = %v, want disable then enable", got)
@@ -365,5 +368,74 @@ func TestTripRestatesAClaimAnAuditDropped(t *testing.T) {
 	r.probeHeld()
 	if got := models.history(); len(got) != 2 || got[1] != "enable:org/a" {
 		t.Fatalf("history = %v, want the model recovered", got)
+	}
+}
+
+// An upstream that keeps failing is probed less and less often: one probe per
+// minute for an hour-long outage spends quota and tells us nothing new.
+func TestRecoveryProbeBacksOffWhileFailing(t *testing.T) {
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := newTestRunner(models, testSelfCheckCfg()) // 60s base, 10m audit
+	clock := time.Now()
+	r.now = func() time.Time { return clock }
+	for i := 0; i < 3; i++ {
+		r.ObserveRequest(hubFailure("org/a", 503, "server_is_overloaded"))
+	}
+	waitForCalls(t, models, 1)
+
+	probes := 0
+	r.probeOne = func(string) (selfcheck.ProbeResult, error) {
+		probes++
+		return selfcheck.ProbeResult{StatusCode: 503, Error: "server_is_overloaded"}, nil
+	}
+
+	// Tick every minute for an hour, as the recovery timer does.
+	for i := 0; i < 60; i++ {
+		r.probeHeld()
+		clock = clock.Add(time.Minute)
+	}
+	// Waits of 1, 2, 4, 8 minutes, then capped at the 10-minute audit:
+	// probes at t=0,1,3,7,15,25,35,45,55.
+	if probes != 9 {
+		t.Fatalf("probes in an hour = %d, want 9", probes)
+	}
+	if got := r.probeBackoff["org/a"]; got != 10*time.Minute {
+		t.Fatalf("backoff = %v, want it capped at the audit interval", got)
+	}
+}
+
+// Recovery resets the backoff, so the next outage starts at the fast cadence.
+func TestRecoveryResetsProbeBackoff(t *testing.T) {
+	models := newFakeModels(map[string]bool{"org/a": true})
+	r := newTestRunner(models, testSelfCheckCfg())
+	clock := time.Now()
+	r.now = func() time.Time { return clock }
+	for i := 0; i < 3; i++ {
+		r.ObserveRequest(hubFailure("org/a", 502, "x"))
+	}
+	waitForCalls(t, models, 1)
+
+	healthy := false
+	r.probeOne = func(string) (selfcheck.ProbeResult, error) {
+		if healthy {
+			return selfcheck.ProbeResult{OK: true, StatusCode: 200}, nil
+		}
+		return selfcheck.ProbeResult{StatusCode: 502, Error: "x"}, nil
+	}
+	for i := 0; i < 20; i++ {
+		r.probeHeld()
+		clock = clock.Add(time.Minute)
+	}
+	healthy = true
+	clock = clock.Add(10 * time.Minute)
+	r.probeHeld()
+	if got := models.history(); len(got) != 2 || got[1] != "enable:org/a" {
+		t.Fatalf("history = %v, want the model back", got)
+	}
+	if _, ok := r.probeBackoff["org/a"]; ok {
+		t.Fatal("backoff kept after recovery")
+	}
+	if _, ok := r.nextProbe["org/a"]; ok {
+		t.Fatal("next-probe deadline kept after recovery")
 	}
 }

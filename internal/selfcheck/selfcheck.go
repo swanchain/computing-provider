@@ -172,7 +172,11 @@ type Options struct {
 	// SkipCompletion omits the real-inference probe, which costs one token per
 	// model. Useful in tests and on metered backends.
 	SkipCompletion bool
-	HTTPTimeout    time.Duration
+	// SkipServingCompletions probes only the models in ExpectedProbeFailures:
+	// the periodic audit's [SelfCheck] SkipCompletion. A model out of service
+	// still needs its probe, or nothing would notice it recover.
+	SkipServingCompletions bool
+	HTTPTimeout            time.Duration
 	// ProbeTimeout bounds the real completion. It is deliberately far longer
 	// than HTTPTimeout: a max_tokens:1 request still queues behind in-flight
 	// work, and timing out a merely busy backend would look identical to a
@@ -545,10 +549,15 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 		return
 	}
 	var failed []string
-	var probed, skipped, expected int
+	var probed, skipped, expected, serving int
 	for id, m := range models {
 		if !m.chatCompatible() {
 			skipped++
+			c.probes[id] = ProbeResult{Skipped: true}
+			continue
+		}
+		if c.opt.SkipServingCompletions && !c.opt.ExpectedProbeFailures[id] {
+			serving++
 			c.probes[id] = ProbeResult{Skipped: true}
 			continue
 		}
@@ -582,6 +591,9 @@ func (c *checker) checkCompletions(models map[string]modelEntry) {
 	}
 	if expected > 0 {
 		msg += fmt.Sprintf(" (%d already disabled and still failing)", expected)
+	}
+	if serving > 0 {
+		msg += fmt.Sprintf(" (%d serving models not probed: SkipCompletion)", serving)
 	}
 	c.add("inference probe", StatusPass, msg, "")
 }

@@ -85,6 +85,9 @@ type selfCheckRunner struct {
 	// slowRecovery holds models that tripped again too soon after a recovery;
 	// the fast recovery probe skips them.
 	slowRecovery map[string]bool
+	// The recovery probe's per-model backoff; see selfcheck_breaker.go.
+	probeBackoff map[string]time.Duration
+	nextProbe    map[string]time.Time
 	// now is the clock, replaceable in tests.
 	now func() time.Time
 	// probeOne re-probes a single model; replaceable in tests.
@@ -104,6 +107,8 @@ func newSelfCheckRunner(n *alerts.Notifier, opts func() selfcheck.Options, cfg f
 		streaks:      make(map[string]*requestStreak),
 		recoveredAt:  make(map[string]time.Time),
 		slowRecovery: make(map[string]bool),
+		probeBackoff: make(map[string]time.Duration),
+		nextProbe:    make(map[string]time.Time),
 		now:          time.Now,
 	}
 	r.probeOne = func(id string) (selfcheck.ProbeResult, error) {
@@ -172,6 +177,7 @@ func (r *selfCheckRunner) runOnce() {
 
 	opts := r.opts()
 	opts.ExpectedProbeFailures = r.disabledByUs()
+	opts.SkipServingCompletions = r.cfg().SkipCompletion
 	report := selfcheck.Run(opts)
 	r.recordProbes(report)
 	r.act(report)
@@ -261,6 +267,7 @@ func (r *selfCheckRunner) act(report selfcheck.Report) {
 			delete(r.autoDisabled, id)
 			delete(r.heldReason, id)
 			delete(r.slowRecovery, id)
+			r.clearBackoffLocked(id)
 			r.mu.Unlock()
 		}
 
@@ -299,6 +306,7 @@ func (r *selfCheckRunner) onProbeSuccess(id string, enabled bool, cfg conf.SelfC
 	delete(r.heldReason, id)
 	delete(r.streaks, id)
 	delete(r.slowRecovery, id)
+	r.clearBackoffLocked(id)
 	r.recoveredAt[id] = r.now()
 	r.mu.Unlock()
 
@@ -365,6 +373,7 @@ func (r *selfCheckRunner) forget(id string) {
 	delete(r.streaks, id)
 	delete(r.recoveredAt, id)
 	delete(r.slowRecovery, id)
+	r.clearBackoffLocked(id)
 }
 
 func (r *selfCheckRunner) resetFailures(id string) {

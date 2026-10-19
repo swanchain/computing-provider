@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/alerts"
 	"github.com/swanchain/computing-provider-v2/internal/selfcheck"
 )
@@ -180,7 +181,8 @@ func describeRequestFailure(req RequestMetric) string {
 // startRecoveryProbes re-probes held models on a short timer, so a backend
 // that recovers is back in routing within a minute rather than at the next
 // audit. Each probe is one max_tokens:1 completion, sent only while a model is
-// held out.
+// held out, and backs off per model while it keeps failing (see
+// recordProbeFailure).
 func (r *selfCheckRunner) startRecoveryProbes() {
 	r.wg.Add(1)
 	go func() {
@@ -228,6 +230,7 @@ func (r *selfCheckRunner) probeHeld() {
 	r.mu.Unlock()
 	sort.Strings(ids)
 
+	now := r.now()
 	for _, id := range ids {
 		enabled, known := r.models.IsModelEnabled(id)
 		if !known {
@@ -236,6 +239,12 @@ func (r *selfCheckRunner) probeHeld() {
 		}
 		if enabled {
 			continue // An operator turned it back on; act() will drop the claim.
+		}
+		r.mu.Lock()
+		due := !now.Before(r.nextProbe[id])
+		r.mu.Unlock()
+		if !due {
+			continue
 		}
 		res, err := r.probeOne(id)
 		if err != nil {
@@ -248,8 +257,42 @@ func (r *selfCheckRunner) probeHeld() {
 		r.recordProbes(selfcheck.Report{Probes: map[string]selfcheck.ProbeResult{id: res}})
 		if res.OK {
 			r.onProbeSuccess(id, false, cfg)
+			continue
 		}
+		r.recordProbeFailure(id, now, cfg)
 	}
+}
+
+// recordProbeFailure doubles a held model's wait before its next recovery
+// probe, from RecoveryProbeSeconds up to the audit interval. An upstream that
+// is overloaded or rate-limiting answers every probe the same way; probing it
+// each minute spends quota and can keep its limit window from clearing, while
+// telling us nothing new. A backend that recovers quickly is still found on
+// the first probes, and a long outage costs a handful of probes, not sixty an
+// hour.
+func (r *selfCheckRunner) recordProbeFailure(id string, now time.Time, cfg conf.SelfCheck) {
+	base := cfg.RecoveryProbeInterval()
+	limit := cfg.Interval()
+	if limit <= 0 {
+		limit = defaultSelfCheckInterval
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	wait := r.probeBackoff[id] * 2
+	if wait < base {
+		wait = base
+	}
+	if wait > limit {
+		wait = limit
+	}
+	r.probeBackoff[id] = wait
+	r.nextProbe[id] = now.Add(wait)
+}
+
+// clearBackoffLocked drops a model's recovery backoff; r.mu must be held.
+func (r *selfCheckRunner) clearBackoffLocked(id string) {
+	delete(r.probeBackoff, id)
+	delete(r.nextProbe, id)
 }
 
 // AutoDisabledModels lists the models this runner holds out of routing and

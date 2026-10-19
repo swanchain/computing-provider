@@ -135,6 +135,7 @@ FailuresBeforeDisable = 2
 TripAfterRequestFailures = 3
 TripWindowSeconds = 60
 RecoveryProbeSeconds = 60
+SkipCompletion = false
 ```
 
 | Field | Default | Description |
@@ -146,7 +147,8 @@ RecoveryProbeSeconds = 60
 | `FailuresBeforeDisable` | `2` | Consecutive failed probes required, so one blip does not pull a model |
 | `TripAfterRequestFailures` | `3` | Consecutive failed *routed requests* that deregister a model without waiting for the next audit; `-1` turns this off |
 | `TripWindowSeconds` | `60` | How close together those failures must be; an older run is forgotten |
-| `RecoveryProbeSeconds` | `60` | How often a model taken out of routing is re-probed so it can come back; `-1` leaves recovery to the audit |
+| `RecoveryProbeSeconds` | `60` | First wait before re-probing a model taken out of routing; doubles while the probe keeps failing, up to `IntervalMinutes`. `-1` leaves recovery to the audit |
+| `SkipCompletion` | `false` | Leave the inference probe out of the audit for models that are serving (models taken out are still probed). For metered or rate-limited backends |
 
 **Why deregister.** Health checks probe `GET /v1/models`, which most backends answer without touching the inference engine. A model can therefore look healthy while failing every request — a dead engine, expired upstream credentials — and the marketplace keeps routing to it. Every failure is attributed to your node. No traffic is better than traffic that fails.
 
@@ -158,7 +160,9 @@ Both transitions raise `model_auto_disabled` and `model_auto_recovered` alerts.
 
 **Pulling a model on live failures.** The audit runs every `IntervalMinutes`, which is too slow for a backend that dies under load: until the next audit every routed request fails, and each one counts against your node. So the node also watches the requests the hub routes to it. `TripAfterRequestFailures` consecutive backend failures, each within `TripWindowSeconds` of the last, deregister the model at once. The rules for which failures count are the same as the audit's, plus two outcomes only real traffic has: a request the hub cancelled, and one cut off by the node shutting down, count neither way. A success, a `400` or a `429` ends the run. Only hub requests count. A benchmark you run through the local gateway against a rate-limited proxy does not take the model off the marketplace.
 
-A model pulled this way, or by the audit, is re-probed every `RecoveryProbeSeconds` with a one-token completion and re-registered on the first success, instead of waiting up to `IntervalMinutes`. A backend that answers that probe but fails real work would otherwise cycle in and out every minute. So a model that trips again within ten minutes of coming back waits for the next full audit instead.
+A model pulled this way, or by the audit, is re-probed with a one-token completion and re-registered on the first success, instead of waiting up to `IntervalMinutes`. The first probe comes after `RecoveryProbeSeconds`; each failed probe doubles the wait, up to `IntervalMinutes`, so a backend that recovers quickly is back within a minute or two and a long upstream outage costs a few probes an hour, not sixty. A backend that answers that probe but fails real work would otherwise cycle in and out every minute. So a model that trips again within ten minutes of coming back waits for the next full audit instead.
+
+**Metered backends.** Each audit sends a real completion to every chat model. On a backend that bills or rate-limits per request — a proxy in front of a hosted API, for example — set `SkipCompletion = true`. The audit still checks config, registration, health and context; failures on serving models are then caught from routed traffic by `TripAfterRequestFailures`, so keep that on. Models already taken out are still probed, by the audit and by the recovery probe.
 
 `GET /api/v1/computing/inference/status` lists every model held out this way under `auto_disabled_models`, with the reason it was pulled. The breaker is part of the self-check: it is off when `Enable` or `AutoDisable` is off, since nothing would bring the model back.
 
