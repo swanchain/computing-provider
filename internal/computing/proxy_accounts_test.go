@@ -2,11 +2,13 @@ package computing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -195,5 +197,68 @@ func TestProxyAccountsSkipsUnreachableEndpointsNeverSeenAsProxies(t *testing.T) 
 	}
 	if len(seen) != 1 || seen[0] != "http://127.0.0.1:4" {
 		t.Fatalf("instances %v, want only the endpoint known to be a proxy", seen)
+	}
+}
+
+// A proxy balancing a subscription login with an API key from its config
+// lists both: auth-files has only the login, so the key is read from the
+// config listing and reported masked, never verbatim. Each credential's
+// requests are counted from the usage queue by auth_index, failed attempts
+// included, so the split between them and a key the upstream rejects show.
+func TestProxyAccountsListsConfigAPIKeys(t *testing.T) {
+	const secret = "sk-ant-api03-supersecretvalue-WXYZ"
+	queue := `[{"model":"claude-haiku","auth_index":"login1","timestamp":"2026-10-22T09:00:00Z","tokens":{"input_tokens":3,"output_tokens":1}},
+		{"model":"claude-haiku","auth_index":"key1","timestamp":"2026-10-22T09:00:01Z","failed":true,"fail":{"status_code":401}},
+		{"model":"claude-haiku","auth_index":"login1","timestamp":"2026-10-22T09:00:02Z","tokens":{"input_tokens":3,"output_tokens":1}}]`
+	served := false
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			fmt.Fprint(w, `{"files":[{"account":"a@example.com","provider":"claude","status":"active","auth_index":"login1"}]}`)
+		case "/v0/management/claude-api-key":
+			fmt.Fprintf(w, `{"claude-api-key":[{"api-key":%q,"priority":0,"base-url":"","auth-index":"key1"}]}`, secret)
+		case "/v0/management/usage-statistics-enabled":
+			fmt.Fprint(w, `{"usage-statistics-enabled":true}`)
+		case "/v0/management/usage-queue":
+			if served {
+				fmt.Fprint(w, `[]`)
+				return
+			}
+			served = true
+			fmt.Fprint(w, queue)
+		default:
+			http.NotFound(w, r) // an older proxy: no codex-api-key listing
+		}
+	}))
+	defer proxy.Close()
+
+	s := NewInferenceService("test-node", t.TempDir())
+	s.modelMappings["anthropic/haiku"] = ModelMapping{Endpoint: proxy.URL}
+	s.usageSampler = NewBackendUsageSampler(nil)
+	s.usageSampler.managementKey = "mk"
+	if _, err := s.usageSampler.readUsageQueue(context.Background(), proxy.URL, endpointInfo{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	r := s.ProxyAccounts(context.Background())
+	if len(r.Instances) != 1 || len(r.Instances[0].Accounts) != 2 {
+		t.Fatalf("want one instance with the login and the key: %+v", r)
+	}
+	inst := r.Instances[0]
+	if inst.RequestsSince == nil {
+		t.Errorf("requests_since missing")
+	}
+	login, key := inst.Accounts[0], inst.Accounts[1]
+	if login.Kind != "login" || login.Requests == nil || login.Requests.Success != 2 || login.Requests.Failed != 0 {
+		t.Errorf("login = %+v requests %+v", login, login.Requests)
+	}
+	if key.Kind != "api_key" || key.Provider != "claude" || key.Account != "API key …WXYZ" || key.Plan != "Anthropic API credits" {
+		t.Errorf("key = %+v", key)
+	}
+	if key.Requests == nil || key.Requests.Failed != 1 || !key.Requests.LastFailed || key.Requests.LastStatus != 401 {
+		t.Errorf("key requests = %+v", key.Requests)
+	}
+	if b, _ := json.Marshal(r); strings.Contains(string(b), "supersecret") {
+		t.Errorf("the API key leaked into the report: %s", b)
 	}
 }

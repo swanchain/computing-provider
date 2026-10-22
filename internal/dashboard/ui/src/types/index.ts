@@ -504,9 +504,19 @@ export interface ProxyCooldown {
   retry_at: string;
 }
 
+export interface ProxyCredentialRequests {
+  success: number;
+  failed: number;
+  last_at?: string;
+  last_failed: boolean;
+  last_status?: number;
+}
+
 export interface ProxyAccount {
   account: string;
   provider?: string;
+  /** "login" for a subscription sign-in, "api_key" for a per-token key in the proxy's config. Absent on older nodes. */
+  kind?: 'login' | 'api_key';
   plan?: string;
   status: string;
   status_message?: string;
@@ -519,6 +529,10 @@ export interface ProxyAccount {
   windows: ProxyQuotaWindow[];
   quota_observed_at?: string;
   cooldowns: ProxyCooldown[];
+  /** Routing tier: requests rotate within the highest tier with a usable credential. */
+  priority?: number;
+  /** Upstream attempts seen in the proxy's usage queue since requests_since. */
+  requests?: ProxyCredentialRequests;
 }
 
 export interface ProxyInstance {
@@ -533,6 +547,8 @@ export interface ProxyInstance {
   measured_24h: boolean;
   /** Per-model proxy traffic from all clients; absent on older node versions. */
   model_usage_24h?: ProxyModelUsage[];
+  /** When this node began counting each account's requests. */
+  requests_since?: string;
 }
 
 export interface ProxyModelUsage {
