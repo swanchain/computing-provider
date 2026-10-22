@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import type { UsePollingResult } from '../hooks/usePolling';
 import { MAX_COLOURED_MODELS, OTHER_COLOUR, OTHER_LABEL, SERIES_COLOURS } from '../lib/modelPalette';
-import { accountWideCooldown, isPast, providerName } from '../lib/proxyStatus';
+import { accountWideCooldown, isPast, pauseCause, providerName } from '../lib/proxyStatus';
 import type { ModelStatus, ProxyAccount, ProxyAccountsReport, ProxyInstance, ProxyQuotaWindow } from '../types';
 
 function dateLabel(value?: string) {
@@ -71,6 +71,7 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
   const apiKey = a.kind === 'api_key';
   const expired = isPast(a.expires);
   const unavailable = accountWideCooldown(a);
+  const cause = pauseCause(a);
   const claude = a.provider === 'claude' || a.provider === 'anthropic';
   const stale = quotaStale(a.quota_observed_at);
   const [keyStatus, keyFailing] = apiKeyStatus(a);
@@ -97,7 +98,7 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
         : <p className="mt-2 text-xs text-slate-400">Usage last reported {ageLabel(a.quota_observed_at)} ({dateLabel(a.quota_observed_at)})</p>)}
     </div>}
     {!!a.cooldowns.length && <div className="mt-4 rounded-lg border border-amber-800/50 bg-amber-950/20 p-3">
-      <p className="text-sm font-medium text-amber-200">{unavailable ? 'Account restriction' : 'Model restrictions'}</p>
+      <p className="text-sm font-medium text-amber-200">{unavailable ? 'Paused by the proxy' : 'Model restrictions'}{cause && ' · ' + cause}</p>
       <ul className="mt-2 space-y-2 text-sm text-amber-100">
         {a.cooldowns.map((c, i) => {
           const listed = !c.model || modelIds.some((id) => id === c.model || id.split('/').slice(1).join('/') === c.model);
