@@ -8,6 +8,18 @@ export function accountWideCooldown(a: ProxyAccount) {
   return a.unavailable || a.cooldowns.some((c) => !c.model);
 }
 
+// What the provider said when the proxy paused this credential. The proxy
+// pauses for a rate limit and for a revoked sign-in alike, and those call for
+// very different responses: one clears by itself at the retry time.
+export function pauseCause(a: ProxyAccount): string | undefined {
+  const m = (a.status_message ?? '').toLowerCase();
+  if (!m) return undefined;
+  if (m.includes('rate_limit') || m.includes('rate limit') || m.includes('too many requests')) return 'rate limited by the provider';
+  if (m.includes('overloaded')) return 'provider overloaded';
+  if (m.includes('authentication') || m.includes('permission') || m.includes('invalid x-api-key') || m.includes('unauthorized')) return 'rejected by the provider';
+  return undefined;
+}
+
 export function proxyIssues(report: ProxyAccountsReport | null | undefined): string[] {
   const issues: string[] = [];
   for (const inst of report?.instances ?? []) {
