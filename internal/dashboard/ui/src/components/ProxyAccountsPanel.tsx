@@ -54,23 +54,42 @@ function WindowBar({ w, stale }: { w: ProxyQuotaWindow; stale: boolean }) {
   </div>;
 }
 
+function accountRequests(a: ProxyAccount) {
+  return (a.requests?.success ?? 0) + (a.requests?.failed ?? 0);
+}
+
+// An API key is not an auth file, so the proxy reports no status for it; its
+// last request through the usage queue is the only evidence it works.
+function apiKeyStatus(a: ProxyAccount): [string, boolean] {
+  const r = a.requests;
+  if (!r) return ['No requests yet', false];
+  if (r.last_failed) return ['Last request failed' + (r.last_status ? ' (HTTP ' + r.last_status + ')' : ''), true];
+  return ['Serving', false];
+}
+
 function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
+  const apiKey = a.kind === 'api_key';
   const expired = isPast(a.expires);
   const unavailable = accountWideCooldown(a);
   const claude = a.provider === 'claude' || a.provider === 'anthropic';
   const stale = quotaStale(a.quota_observed_at);
-  const status = a.disabled ? 'Disabled' : expired ? 'Check sign-in' : unavailable ? 'Temporarily unavailable' : a.status === 'active' ? 'Signed in' : a.status || 'Status unknown';
-  const style = a.disabled ? 'bg-slate-800 text-slate-400' : expired || unavailable ? 'bg-amber-500/10 text-amber-200' : 'bg-emerald-500/10 text-emerald-200';
+  const [keyStatus, keyFailing] = apiKeyStatus(a);
+  const status = a.disabled ? 'Disabled' : apiKey ? keyStatus : expired ? 'Check sign-in' : unavailable ? 'Temporarily unavailable' : a.status === 'active' ? 'Signed in' : a.status || 'Status unknown';
+  const style = a.disabled ? 'bg-slate-800 text-slate-400' : (apiKey ? keyFailing : expired || unavailable) ? 'bg-amber-500/10 text-amber-200' : apiKey && !a.requests ? 'bg-slate-800 text-slate-300' : 'bg-emerald-500/10 text-emerald-200';
   return <li className="min-w-0 p-4 sm:p-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h4 className="text-base font-semibold text-white">{providerName(a.provider)}</h4>
+        <h4 className="text-base font-semibold text-white">{providerName(a.provider)}{apiKey && <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 align-middle text-xs font-normal text-slate-300">API key</span>}</h4>
         <p className="mt-1 break-all text-sm text-slate-300">{a.account}</p>
         {a.plan && <p className="mt-1 break-words text-xs text-slate-400">Plan: {a.plan.replace(/_/g, ' ')}</p>}
       </div>
       <span className={'rounded-full px-3 py-1 text-xs font-medium ' + style}>{status}</span>
     </div>
-    {!a.disabled && <div className="mt-4">
+    {!a.disabled && apiKey && <div className="mt-4 text-sm leading-6 text-slate-400">
+      <p>Billed per token, not against a subscription limit.{claude && <> <a className="text-sky-300 underline underline-offset-4" href="https://console.anthropic.com/usage" target="_blank" rel="noreferrer">View usage in Claude Console ↗</a></>}</p>
+      {a.requests?.last_failed && (a.requests.last_status === 401 || a.requests.last_status === 403) && <p className="mt-2 text-amber-200">The provider rejected this key. Requests given to it are retried on another credential, so nothing is billed to it until the key is replaced.</p>}
+    </div>}
+    {!a.disabled && !apiKey && <div className="mt-4">
       {a.windows.length ? <div className="grid gap-4 xl:grid-cols-2">{a.windows.map((w) => <WindowBar key={w.label} w={w} stale={stale} />)}</div> :
         <p className="text-sm leading-6 text-slate-400">{claude ? <>Subscription usage isn’t available here. <a className="text-sky-300 underline underline-offset-4" href="https://claude.ai/settings/usage" target="_blank" rel="noreferrer">View usage in Claude ↗</a></> : a.provider === 'codex' ? 'Usage has not been reported yet. It appears after this account serves a request.' : 'This provider does not report subscription usage to the proxy.'}</p>}
       {a.windows.length > 0 && (stale
@@ -92,12 +111,53 @@ function Account({ a, modelIds }: { a: ProxyAccount; modelIds: string[] }) {
     <details className="mt-3 text-sm text-slate-400">
       <summary className="min-h-10 cursor-pointer py-2 focus-visible:outline focus-visible:outline-sky-400">Account details</summary>
       <div className="space-y-2 border-t border-slate-800 pt-3">
-        <p>{a.success.toLocaleString()} successful / {a.failed.toLocaleString()} failed requests · since proxy restart</p>
+        {apiKey ? <p>{(a.requests?.success ?? 0).toLocaleString()} successful / {(a.requests?.failed ?? 0).toLocaleString()} failed requests · since this node started counting</p>
+          : <p>{a.success.toLocaleString()} successful / {a.failed.toLocaleString()} failed requests · since proxy restart</p>}
+        {a.priority !== undefined && <p>Routing priority {a.priority}</p>}
         {a.expires && !a.disabled && <p>Access token {expired ? 'expired' : 'expires'} {dateLabel(a.expires)}. Automatic renewal is handled by the proxy.</p>}
         {a.status_message && <p className="break-words">{a.status_message}</p>}
       </div>
     </details>
   </li>;
+}
+
+// How the proxy shares requests among one provider's credentials: it uses the
+// highest priority tier with a usable credential and rotates within it, so
+// credentials in a lower tier take requests only while every higher one is
+// unavailable.
+function RequestSplit({ inst }: { inst: ProxyInstance }) {
+  const byProvider = new Map<string, ProxyAccount[]>();
+  for (const a of inst.accounts) {
+    if (a.disabled || !a.provider) continue;
+    byProvider.set(a.provider, [...(byProvider.get(a.provider) ?? []), a]);
+  }
+  const pools = [...byProvider.entries()].filter(([, list]) => list.length > 1);
+  if (!pools.length) return null;
+  return <div className="space-y-4 border-b border-slate-800 p-4 sm:p-5">
+    {pools.map(([provider, list]) => {
+      const priorities = [...new Set(list.map((a) => a.priority ?? 0))].sort((x, y) => y - x);
+      const balanced = priorities.length === 1;
+      const total = list.reduce((s, a) => s + accountRequests(a), 0);
+      return <div key={provider} className="min-w-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h4 className="text-sm font-semibold text-white">{providerName(provider)} · request split</h4>
+          <span className={'text-xs ' + (balanced ? 'text-emerald-200' : 'text-amber-200')}>{balanced ? 'Balanced · rotates across ' + list.length + ' credentials' : 'Overflow · lower priority used only when higher is unavailable'}</span>
+        </div>
+        {total > 0 && <div className="mt-2 flex h-2 overflow-hidden rounded bg-slate-700" aria-hidden="true">
+          {list.map((a, i) => <div key={a.account} className="h-full" style={{ width: (accountRequests(a) / total) * 100 + '%', background: SERIES_COLOURS[i % SERIES_COLOURS.length] }} />)}
+        </div>}
+        <ul className="mt-2 space-y-1 text-xs">
+          {list.map((a, i) => <li key={a.account} className="flex items-start gap-2">
+            <span className="mt-0.5 block h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: SERIES_COLOURS[i % SERIES_COLOURS.length] }} />
+            <span className="min-w-0 flex-1 break-all text-slate-300">{a.account}{!balanced && <span className="ml-2 text-slate-400">priority {a.priority ?? 0}</span>}</span>
+            <span className="shrink-0 tabular-nums text-slate-300">{total ? ((accountRequests(a) / total) * 100).toFixed(0) + '%' : '—'}</span>
+            <span className="w-24 shrink-0 text-right tabular-nums text-slate-400">{accountRequests(a).toLocaleString()} req{a.requests?.failed ? ' · ' + a.requests.failed + ' failed' : ''}</span>
+          </li>)}
+        </ul>
+        <p className="mt-2 text-xs text-slate-400">{total ? 'Upstream attempts since ' + dateLabel(inst.requests_since) + ', failed attempts included.' : 'No requests counted yet' + (inst.requests_since ? ' since ' + dateLabel(inst.requests_since) : '') + '.'}</p>
+      </div>;
+    })}
+  </div>;
 }
 
 function Instance({ inst }: { inst: ProxyInstance }) {
@@ -121,6 +181,7 @@ function Instance({ inst }: { inst: ProxyInstance }) {
     {inst.error ? <p role="alert" className="break-words p-5 text-sm text-amber-200">Account status unavailable: {inst.error}</p> : <>
       {!inst.accounts.length && <p className="p-5 text-sm text-amber-200">No accounts configured. Requests through this proxy will fail.</p>}
       {!!inst.accounts.length && !enabled.length && <p className="p-5 text-sm text-amber-200">All accounts are disabled. This proxy cannot serve requests.</p>}
+      <RequestSplit inst={inst} />
       <ul className="divide-y divide-slate-800">{enabled.map((a) => <Account key={a.provider + ':' + a.account} a={a} modelIds={inst.models} />)}</ul>
       {!!disabled.length && <details className="border-t border-slate-800">
         <summary className="min-h-11 cursor-pointer px-5 py-3 text-sm text-slate-400">{disabled.length} disabled account{disabled.length === 1 ? '' : 's'}</summary>

@@ -3,6 +3,7 @@ package computing
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -40,8 +41,11 @@ type ProxyCooldown struct {
 
 // ProxyAccount is one credential in an instance.
 type ProxyAccount struct {
-	Account       string `json:"account"`
-	Provider      string `json:"provider,omitempty"`
+	Account  string `json:"account"`
+	Provider string `json:"provider,omitempty"`
+	// Kind is "login" for a subscription sign-in (an auth file) or "api_key"
+	// for a key in the proxy's config, which is billed per token.
+	Kind          string `json:"kind"`
 	Plan          string `json:"plan,omitempty"`
 	Status        string `json:"status"`
 	StatusMessage string `json:"status_message,omitempty"`
@@ -55,6 +59,23 @@ type ProxyAccount struct {
 	Windows         []ProxyQuotaWindow `json:"windows"`
 	QuotaObservedAt *time.Time         `json:"quota_observed_at,omitempty"`
 	Cooldowns       []ProxyCooldown    `json:"cooldowns"`
+	// Priority is the proxy's routing tier: requests go to the highest tier
+	// with a usable credential and rotate among the credentials in it, so a
+	// lower tier is overflow only.
+	Priority int `json:"priority"`
+	// Requests counts the upstream attempts this node drained from the
+	// proxy's usage queue for this credential since RequestsSince; nil when
+	// none were seen, which is also all that can be said with no queue.
+	Requests *ProxyCredentialRequests `json:"requests,omitempty"`
+}
+
+// ProxyCredentialRequests is what one credential served, from the usage queue.
+type ProxyCredentialRequests struct {
+	Success    int64      `json:"success"`
+	Failed     int64      `json:"failed"`
+	LastAt     *time.Time `json:"last_at,omitempty"`
+	LastFailed bool       `json:"last_failed"`
+	LastStatus int        `json:"last_status,omitempty"`
 }
 
 // ProxyInstance is one CLIProxyAPI endpoint and what this node uses it for.
@@ -74,6 +95,9 @@ type ProxyInstance struct {
 	// Per-model token counts from this proxy's usage queue, including traffic
 	// from clients other than this node. A model needs two samples to measure.
 	ModelUsage24h []ProxyModelUsage `json:"model_usage_24h"`
+	// RequestsSince is when this node began counting each account's
+	// requests: its first read of the usage queue after it started.
+	RequestsSince *time.Time `json:"requests_since,omitempty"`
 }
 
 // ProxyModelUsage is one model's measured token consumption through a proxy.
@@ -100,6 +124,8 @@ type authFilesResponse struct {
 		StatusMessage string `json:"status_message"`
 		Path          string `json:"path"`
 		Name          string `json:"name"`
+		AuthIndex     string `json:"auth_index"`
+		Priority      int    `json:"priority"`
 		Disabled      bool   `json:"disabled"`
 		Unavailable   bool   `json:"unavailable"`
 		Success       int64  `json:"success"`
@@ -114,6 +140,46 @@ type authFilesResponse struct {
 			RetryAt  time.Time `json:"retry_at"`
 		} `json:"cooldowns"`
 	} `json:"files"`
+}
+
+// configKeysResponse is a /v0/management/<provider>-api-key listing. It
+// carries the keys themselves, which are never copied into the report.
+type configKeysResponse map[string][]struct {
+	APIKey    string `json:"api-key"`
+	Priority  int    `json:"priority"`
+	BaseURL   string `json:"base-url"`
+	AuthIndex string `json:"auth-index"`
+}
+
+// configKeyProviders are the providers whose API keys a proxy can hold in its
+// config. They are not auth files, so auth-files does not list them, and a
+// proxy balancing a login with a key would show only the login.
+var configKeyProviders = []string{"claude", "codex"}
+
+// maskKey keeps only the end of a key, enough to tell two apart.
+func maskKey(key string) string {
+	key = strings.TrimSpace(key)
+	if len(key) <= 8 {
+		return "API key"
+	}
+	return "API key …" + key[len(key)-4:]
+}
+
+func configKeyPlan(provider, baseURL string) string {
+	if baseURL != "" {
+		host := baseURL
+		if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+			host = u.Host
+		}
+		return "API key via " + host
+	}
+	switch provider {
+	case "claude":
+		return "Anthropic API credits"
+	case "codex":
+		return "OpenAI API credits"
+	}
+	return "API key"
 }
 
 // ProxyAccounts reports every proxy endpoint among the node's models.
@@ -191,11 +257,16 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 		if err != nil {
 			inst.Error = err.Error()
 		}
+		tallies, since := b.credentialTallies(ep)
+		if !since.IsZero() {
+			inst.RequestsSince = &since
+		}
 		for _, f := range files.Files {
 			a := ProxyAccount{
 				Account: f.Account, Provider: f.Provider, Status: f.Status, StatusMessage: f.StatusMessage,
 				Disabled: f.Disabled, Unavailable: f.Unavailable, Success: f.Success, Failed: f.Failed,
 				Windows: quotaWindows(f.Quota.Signals), QuotaObservedAt: f.Quota.ObservedAt, Cooldowns: []ProxyCooldown{},
+				Kind: "login", Priority: f.Priority, Requests: credentialRequests(tallies, f.AuthIndex),
 			}
 			if a.Account == "" {
 				a.Account = f.Email
@@ -228,10 +299,53 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 			}
 			inst.Accounts = append(inst.Accounts, a)
 		}
+		if err == nil {
+			inst.Accounts = append(inst.Accounts, b.configKeyAccounts(ctx, ep, tallies)...)
+		}
 		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h, inst.ModelUsage24h = proxyTokens24h(ep, names[ep].Names)
 		report.Instances = append(report.Instances, inst)
 	}
 	return report
+}
+
+// configKeyAccounts lists the API keys in a proxy's config. A proxy too old
+// to list a provider's keys answers 404, which leaves that provider out.
+func (b *BackendUsageSampler) configKeyAccounts(ctx context.Context, ep string, tallies map[string]credentialTally) []ProxyAccount {
+	var out []ProxyAccount
+	for _, provider := range configKeyProviders {
+		var keys configKeysResponse
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := b.management(cctx, ep+"/v0/management/"+provider+"-api-key", &keys)
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, k := range keys[provider+"-api-key"] {
+			if strings.TrimSpace(k.APIKey) == "" {
+				continue
+			}
+			out = append(out, ProxyAccount{
+				Account: maskKey(k.APIKey), Provider: provider, Kind: "api_key",
+				Plan: configKeyPlan(provider, k.BaseURL), Status: "configured",
+				Windows: []ProxyQuotaWindow{}, Cooldowns: []ProxyCooldown{},
+				Priority: k.Priority, Requests: credentialRequests(tallies, k.AuthIndex),
+			})
+		}
+	}
+	return out
+}
+
+func credentialRequests(tallies map[string]credentialTally, authIndex string) *ProxyCredentialRequests {
+	t, ok := tallies[authIndex]
+	if authIndex == "" || !ok {
+		return nil
+	}
+	r := &ProxyCredentialRequests{Success: t.Success, Failed: t.Failed, LastFailed: t.LastFailed, LastStatus: t.LastStatus}
+	if !t.LastAt.IsZero() {
+		at := t.LastAt
+		r.LastAt = &at
+	}
+	return r
 }
 
 // knownProxy reports whether ep has been read as a CLIProxyAPI usage queue,

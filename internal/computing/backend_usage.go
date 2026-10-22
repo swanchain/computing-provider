@@ -129,8 +129,12 @@ type BackendUsageSampler struct {
 	// endpoint and model ID; queueStart is each endpoint's first read.
 	queueTotals map[string]map[string]queueTotal
 	queueStart  map[string]time.Time
-	stop        chan struct{}
-	done        chan struct{}
+	// queueAuth counts the drained records per endpoint and credential
+	// (CLIProxyAPI's auth_index). Each upstream attempt is a record, so a
+	// credential that fails and is retried on another is counted as failed.
+	queueAuth map[string]map[string]*credentialTally
+	stop      chan struct{}
+	done      chan struct{}
 }
 
 // endpointInfo is what the sampler needs to know about one endpoint.
@@ -165,6 +169,7 @@ func NewBackendUsageSampler(endpoints func() map[string]endpointInfo) *BackendUs
 
 		queueTotals: make(map[string]map[string]queueTotal),
 		queueStart:  make(map[string]time.Time),
+		queueAuth:   make(map[string]map[string]*credentialTally),
 	}
 }
 
@@ -331,12 +336,51 @@ const (
 )
 
 type usageQueueRecord struct {
-	Alias  string `json:"alias"`
-	Model  string `json:"model"`
+	Alias     string    `json:"alias"`
+	Model     string    `json:"model"`
+	AuthIndex string    `json:"auth_index"`
+	Timestamp time.Time `json:"timestamp"`
+	Failed    bool      `json:"failed"`
+	Fail      struct {
+		StatusCode int `json:"status_code"`
+	} `json:"fail"`
 	Tokens struct {
 		Input  float64 `json:"input_tokens"`
 		Output float64 `json:"output_tokens"`
 	} `json:"tokens"`
+}
+
+// credentialTally is what one proxy credential did since the first read.
+type credentialTally struct {
+	Success, Failed int64
+	LastAt          time.Time
+	LastFailed      bool
+	LastStatus      int
+}
+
+func (t *credentialTally) add(r usageQueueRecord) {
+	if r.Failed {
+		t.Failed++
+	} else {
+		t.Success++
+	}
+	// Pages are popped oldest first, but a record without a timestamp is
+	// still the newest seen.
+	if r.Timestamp.IsZero() || !r.Timestamp.Before(t.LastAt) {
+		t.LastAt, t.LastFailed, t.LastStatus = r.Timestamp, r.Failed, r.Fail.StatusCode
+	}
+}
+
+// credentialTallies copies the per-credential counts for an endpoint, keyed
+// by auth_index, and when counting began.
+func (b *BackendUsageSampler) credentialTallies(endpoint string) (map[string]credentialTally, time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]credentialTally{}
+	for k, t := range b.queueAuth[endpoint] {
+		out[k] = *t
+	}
+	return out, b.queueStart[endpoint]
 }
 
 func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint string, info endpointInfo, now time.Time) ([]counterReading, error) {
@@ -354,6 +398,9 @@ func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint strin
 	if b.queueTotals[endpoint] == nil {
 		b.queueTotals[endpoint] = map[string]queueTotal{}
 		b.queueStart[endpoint] = now
+	}
+	if b.queueAuth[endpoint] == nil {
+		b.queueAuth[endpoint] = map[string]*credentialTally{}
 	}
 	b.mu.Unlock()
 	var seen []string
@@ -375,6 +422,14 @@ func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint strin
 			t.prompt += r.Tokens.Input
 			t.generated += r.Tokens.Output
 			totals[model] = t
+			if r.AuthIndex != "" {
+				c := b.queueAuth[endpoint][r.AuthIndex]
+				if c == nil {
+					c = &credentialTally{}
+					b.queueAuth[endpoint][r.AuthIndex] = c
+				}
+				c.add(r)
+			}
 		}
 		b.mu.Unlock()
 		if len(records) < usageQueuePage {
