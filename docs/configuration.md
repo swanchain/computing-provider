@@ -38,7 +38,7 @@ WebSocketURL = "wss://inference-ws.swanchain.io"     # Swan Inference WebSocket 
 ApiKey = "sk-prov-xxxxxxxxxxxxxxxxxxxx"               # Required: Provider API key from https://inference.swanchain.io
 Models = ["meta-llama/Llama-3.2-3B-Instruct"]         # Models this provider serves (must match models.json keys)
 ServiceURL = ""                                      # Optional: HTTP API URL (auto-derived from WebSocketURL if empty)
-LocalGatewayPort = 9088                              # Optional: OpenAI-compatible gateway for your own clients (-1 disables)
+LocalGatewayPort = 9088                              # Optional: OpenAI-compatible gateway for your own clients, plus /v1/messages (-1 disables)
 CLIProxyManagementKey = ""                           # Optional: CLIProxyAPI management secret-key, for proxy accounts and usage
 ```
 
