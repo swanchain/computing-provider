@@ -744,6 +744,13 @@ concurrency limiters, which exist to protect routed work, and it feeds the
 request history only — never the aggregate counters earnings are priced from.
 Loopback only, since neither it nor the servers behind it authenticate.
 
+It also serves the Anthropic Messages API at `/v1/messages` and
+`/v1/messages/count_tokens`, for clients such as Claude Code. These pass through
+to the backend's own routes, changing only the model name and the key, so they
+need a backend that serves them (CLIProxyAPI does). A bare `claude-sonnet-5-5`
+resolves to `anthropic/claude-sonnet-5-5`. Point a client at it with
+`ANTHROPIC_BASE_URL=http://127.0.0.1:9088`.
+
 A model can give the gateway its own backend with `local_endpoint` (and
 `local_api_key`) in models.json — for example a second CLIProxyAPI on a
 separate account, so the operator's own tools do not spend the quota that

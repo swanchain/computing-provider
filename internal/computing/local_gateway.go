@@ -44,6 +44,8 @@ const localGatewayMaxBody = 64 << 20
 func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", s.serveLocalChat)
+	mux.HandleFunc("/v1/messages", s.serveLocalMessages)
+	mux.HandleFunc("/v1/messages/count_tokens", s.serveLocalCountTokens)
 	mux.HandleFunc("/v1/models", s.serveLocalModels)
 	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
 	mux.HandleFunc("/v1/embeddings", s.serveLocalEmbeddings)
