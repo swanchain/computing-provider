@@ -9,52 +9,86 @@ import (
 	"strings"
 )
 
-// The Anthropic Messages API on the local gateway, for clients that speak only
-// that (Claude Code among them). The request and the response pass through
-// unchanged apart from the model name and the backend's key, so this works
-// only for a backend that serves /v1/messages itself; any other backend's
-// answer reaches the client as it is.
+// The Anthropic Messages API and the OpenAI Responses API on the local
+// gateway, for clients that speak only one of them (Claude Code and Codex
+// among them). The request and the response pass through unchanged apart from
+// the model name and the backend's key, so this works only for a backend that
+// serves the route itself; any other backend's answer reaches the client as it
+// is.
 
-// localMessagesUsageCap bounds how much of one line is kept to read usage from.
-// A longer line is still forwarded; only its token counts are lost.
-const localMessagesUsageCap = 8 << 20
+// localPassthroughUsageCap bounds how much of one line is kept to read usage
+// from. A longer line is still forwarded; only its token counts are lost.
+const localPassthroughUsageCap = 8 << 20
+
+// passthroughWire is what differs between the APIs passed through: how the
+// backend's key is sent, which headers travel with the request and the
+// answer, how a bare model name is completed, how usage is read, and the
+// shape of the gateway's own errors.
+type passthroughWire struct {
+	// vendor completes a bare model name: claude-x for anthropic/claude-x.
+	vendor string
+	// headerPrefix names the client headers forwarded (anthropic-, openai-)
+	// and the backend headers returned.
+	headerPrefix string
+	// extraRequestHeaders are forwarded as they are, besides Accept.
+	extraRequestHeaders []string
+	setKey              func(req *http.Request, key string)
+	newUsage            func() usageReader
+	writeError          func(w http.ResponseWriter, status int, msg string)
+}
+
+// usageReader reads token counts out of a response as it passes.
+type usageReader interface {
+	feed(p []byte)
+	finish()
+	counts() (in, out int)
+}
+
+var messagesWire = passthroughWire{
+	vendor:              "anthropic",
+	headerPrefix:        "anthropic-",
+	setKey:              func(req *http.Request, key string) { req.Header.Set("x-api-key", key) },
+	newUsage:            func() usageReader { return &messagesUsage{} },
+	writeError:          writeMessagesError,
+	extraRequestHeaders: nil,
+}
 
 func (s *InferenceService) serveLocalMessages(w http.ResponseWriter, r *http.Request) {
-	s.forwardLocalMessages(w, r, "/v1/messages", true)
+	s.forwardLocalPassthrough(w, r, messagesWire, "/v1/messages", true)
 }
 
 func (s *InferenceService) serveLocalCountTokens(w http.ResponseWriter, r *http.Request) {
-	s.forwardLocalMessages(w, r, "/v1/messages/count_tokens", false)
+	s.forwardLocalPassthrough(w, r, messagesWire, "/v1/messages/count_tokens", false)
 }
 
-func (s *InferenceService) forwardLocalMessages(w http.ResponseWriter, r *http.Request, path string, record bool) {
+func (s *InferenceService) forwardLocalPassthrough(w http.ResponseWriter, r *http.Request, wire passthroughWire, path string, record bool) {
 	if r.Method != http.MethodPost {
-		writeMessagesError(w, http.StatusMethodNotAllowed, "method not allowed")
+		wire.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, localGatewayMaxBody+1))
 	if err != nil {
-		writeMessagesError(w, http.StatusBadRequest, "could not read request body")
+		wire.writeError(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
 	if len(body) > localGatewayMaxBody {
-		writeMessagesError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		wire.writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
 	var head struct {
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(body, &head); err != nil || head.Model == "" {
-		writeMessagesError(w, http.StatusBadRequest, "request must be JSON with a model field")
+		wire.writeError(w, http.StatusBadRequest, "request must be JSON with a model field")
 		return
 	}
-	modelID, endpoint, localModel, apiKey, mse := s.resolveMessagesModel(head.Model)
+	modelID, endpoint, localModel, apiKey, mse := s.resolveVendorModel(wire.vendor, head.Model)
 	if mse != nil {
-		writeMessagesError(w, mse.StatusCode, mse.Message)
+		wire.writeError(w, mse.StatusCode, mse.Message)
 		return
 	}
 	forward := func(rec *RequestMetric) {
-		s.proxyMessages(w, r, endpoint+path, s.substituteModelName(body, modelID, localModel), apiKey, rec)
+		s.proxyPassthrough(w, r, wire, endpoint+path, s.substituteModelName(body, modelID, localModel), apiKey, rec)
 	}
 	if !record {
 		forward(&RequestMetric{})
@@ -71,15 +105,15 @@ func (s *InferenceService) forwardLocalMessages(w http.ResponseWriter, r *http.R
 	})
 }
 
-// resolveMessagesModel accepts the node's model id or the bare name Anthropic
+// resolveVendorModel accepts the node's model id or the bare name a vendor's
 // clients send: claude-sonnet-5-5 for anthropic/claude-sonnet-5-5.
-func (s *InferenceService) resolveMessagesModel(name string) (modelID, endpoint, localModel, apiKey string, mse *ModelServerError) {
+func (s *InferenceService) resolveVendorModel(vendor, name string) (modelID, endpoint, localModel, apiKey string, mse *ModelServerError) {
 	endpoint, localModel, apiKey, mse = s.resolveGatewayEndpoint(name)
 	if mse == nil {
 		return name, endpoint, localModel, apiKey, nil
 	}
 	if !strings.Contains(name, "/") {
-		full := "anthropic/" + name
+		full := vendor + "/" + name
 		if ep, lm, key, fullErr := s.resolveGatewayEndpoint(full); fullErr == nil {
 			return full, ep, lm, key, nil
 		}
@@ -87,38 +121,38 @@ func (s *InferenceService) resolveMessagesModel(name string) (modelID, endpoint,
 	return name, "", "", "", mse
 }
 
-func (s *InferenceService) proxyMessages(w http.ResponseWriter, r *http.Request, url string, body []byte, apiKey string, rec *RequestMetric) {
+func (s *InferenceService) proxyPassthrough(w http.ResponseWriter, r *http.Request, wire passthroughWire, url string, body []byte, apiKey string, rec *RequestMetric) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		rec.ErrorReason = err.Error()
-		writeMessagesError(w, http.StatusBadGateway, err.Error())
+		wire.writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// The caller's own credentials stay here: the backend gets the node's key.
 	for name, values := range r.Header {
-		if strings.HasPrefix(strings.ToLower(name), "anthropic-") || strings.EqualFold(name, "Accept") {
+		if strings.HasPrefix(strings.ToLower(name), wire.headerPrefix) || strings.EqualFold(name, "Accept") || containsFold(wire.extraRequestHeaders, name) {
 			req.Header[name] = values
 		}
 	}
 	if apiKey != "" {
-		req.Header.Set("x-api-key", apiKey)
+		wire.setKey(req, apiKey)
 	}
 	resp, err := streamingHttpClient.Do(req)
 	if err != nil {
 		rec.ErrorReason = err.Error()
-		writeMessagesError(w, http.StatusBadGateway, "backend unreachable")
+		wire.writeError(w, http.StatusBadGateway, "backend unreachable")
 		return
 	}
 	defer resp.Body.Close()
 
-	for _, name := range []string{"Content-Type", "Cache-Control", "Retry-After", "Request-Id"} {
+	for _, name := range []string{"Content-Type", "Cache-Control", "Retry-After", "Request-Id", "X-Request-Id"} {
 		if v := resp.Header.Get(name); v != "" {
 			w.Header().Set(name, v)
 		}
 	}
 	for name, values := range resp.Header {
-		if strings.HasPrefix(strings.ToLower(name), "anthropic-") {
+		if strings.HasPrefix(strings.ToLower(name), wire.headerPrefix) {
 			w.Header()[name] = values
 		}
 	}
@@ -128,7 +162,7 @@ func (s *InferenceService) proxyMessages(w http.ResponseWriter, r *http.Request,
 		flusher.Flush()
 	}
 
-	var usage messagesUsage
+	usage := wire.newUsage()
 	buf := make([]byte, 32<<10)
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -151,23 +185,32 @@ func (s *InferenceService) proxyMessages(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	usage.finish()
-	rec.TokensIn, rec.TokensOut = usage.in, usage.out
+	rec.TokensIn, rec.TokensOut = usage.counts()
 	if resp.StatusCode >= 400 {
 		rec.ErrorReason = fmt.Sprintf("backend returned %d", resp.StatusCode)
 	}
 	rec.Success = rec.ErrorReason == ""
 }
 
-// messagesUsage reads token counts out of a Messages response as it passes,
-// from one JSON body or from the event stream's message_start and
-// message_delta.
-type messagesUsage struct {
+func containsFold(names []string, name string) bool {
+	for _, n := range names {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// lineUsage collects a response line by line for a usage parser, from one
+// JSON body or from an event stream's data: lines.
+type lineUsage struct {
 	line     []byte
 	overflow bool
 	in, out  int
+	parse    func(line []byte) (in, out int, ok bool)
 }
 
-func (u *messagesUsage) feed(p []byte) {
+func (u *lineUsage) feed(p []byte) {
 	for len(p) > 0 {
 		end := bytes.IndexByte(p, '\n')
 		if end < 0 {
@@ -180,8 +223,8 @@ func (u *messagesUsage) feed(p []byte) {
 	}
 }
 
-func (u *messagesUsage) keep(p []byte) {
-	if len(u.line)+len(p) > localMessagesUsageCap {
+func (u *lineUsage) keep(p []byte) {
+	if len(u.line)+len(p) > localPassthroughUsageCap {
 		u.line, u.overflow = nil, true
 	}
 	if !u.overflow {
@@ -189,12 +232,45 @@ func (u *messagesUsage) keep(p []byte) {
 	}
 }
 
-func (u *messagesUsage) finish() {
+func (u *lineUsage) finish() {
 	line := bytes.TrimPrefix(bytes.TrimSpace(u.line), []byte("data:"))
 	u.line, u.overflow = u.line[:0], false
 	if !bytes.Contains(line, []byte(`"usage"`)) {
 		return
 	}
+	in, out, ok := u.parse(line)
+	if !ok {
+		return
+	}
+	if in > 0 {
+		u.in = in
+	}
+	if out > u.out {
+		u.out = out
+	}
+}
+
+func (u *lineUsage) counts() (in, out int) { return u.in, u.out }
+
+// messagesUsage reads token counts out of a Messages response, from one JSON
+// body or from the event stream's message_start and message_delta.
+type messagesUsage struct{ lineUsage }
+
+func (u *messagesUsage) feed(p []byte) {
+	if u.parse == nil {
+		u.parse = parseMessagesUsage
+	}
+	u.lineUsage.feed(p)
+}
+
+func (u *messagesUsage) finish() {
+	if u.parse == nil {
+		u.parse = parseMessagesUsage
+	}
+	u.lineUsage.finish()
+}
+
+func parseMessagesUsage(line []byte) (in, out int, ok bool) {
 	type counts struct {
 		Input         int `json:"input_tokens"`
 		Output        int `json:"output_tokens"`
@@ -208,21 +284,16 @@ func (u *messagesUsage) finish() {
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &event) != nil {
-		return
+		return 0, 0, false
 	}
 	c := event.Usage
 	if c == nil {
 		c = event.Message.Usage
 	}
 	if c == nil {
-		return
+		return 0, 0, false
 	}
-	if in := c.Input + c.CacheRead + c.CacheCreation; in > 0 {
-		u.in = in
-	}
-	if c.Output > u.out {
-		u.out = c.Output
-	}
+	return c.Input + c.CacheRead + c.CacheCreation, c.Output, true
 }
 
 func writeMessagesError(w http.ResponseWriter, status int, msg string) {
