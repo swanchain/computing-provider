@@ -46,6 +46,7 @@ func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.serveLocalChat)
 	mux.HandleFunc("/v1/messages", s.serveLocalMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.serveLocalCountTokens)
+	mux.HandleFunc("/v1/responses", s.serveLocalResponses)
 	mux.HandleFunc("/v1/models", s.serveLocalModels)
 	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
 	mux.HandleFunc("/v1/embeddings", s.serveLocalEmbeddings)

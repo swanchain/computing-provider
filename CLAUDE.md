@@ -745,11 +745,14 @@ request history only — never the aggregate counters earnings are priced from.
 Loopback only, since neither it nor the servers behind it authenticate.
 
 It also serves the Anthropic Messages API at `/v1/messages` and
-`/v1/messages/count_tokens`, for clients such as Claude Code. These pass through
-to the backend's own routes, changing only the model name and the key, so they
-need a backend that serves them (CLIProxyAPI does). A bare `claude-sonnet-5-5`
-resolves to `anthropic/claude-sonnet-5-5`. Point a client at it with
-`ANTHROPIC_BASE_URL=http://127.0.0.1:9088`.
+`/v1/messages/count_tokens`, for clients such as Claude Code, and the OpenAI
+Responses API at `/v1/responses`, for Codex. These pass through to the
+backend's own routes, changing only the model name and the key, so they need a
+backend that serves them (CLIProxyAPI does). A bare `claude-sonnet-5-5`
+resolves to `anthropic/claude-sonnet-5-5`, a bare `gpt-5.6` to
+`openai/gpt-5.6`. Point Claude Code at it with
+`ANTHROPIC_BASE_URL=http://127.0.0.1:9088`, and Codex with a model provider
+whose `base_url` is `http://127.0.0.1:9088/v1` and `wire_api = "responses"`.
 
 A model can give the gateway its own backend with `local_endpoint` (and
 `local_api_key`) in models.json — for example a second CLIProxyAPI on a
