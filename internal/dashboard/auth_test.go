@@ -125,3 +125,96 @@ func TestAPIAnswersWithoutToken(t *testing.T) {
 		t.Fatal("an unreachable API read as open")
 	}
 }
+
+// The roles route by route: plain monitoring is open, sensitive reads need a
+// viewer, settings and every write need the operator. A viewer token must
+// never be able to change the node.
+func TestRolesPerRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tokens := Tokens{Operator: "op-token", Viewer: "view-token"}
+	r := gin.New()
+	r.Use(AllowedHosts())
+	api := r.Group("/api", tokens.ProtectWrites())
+	ok := func(c *gin.Context) { c.Status(http.StatusOK) }
+	api.GET("/status", ok)
+	api.POST("/models/x/disable", ok)
+	api.Group("/sensitive", tokens.RequireRole(RoleViewer)).GET("/proxy-accounts", ok)
+	api.Group("/settings", tokens.RequireRole(RoleOperator)).GET("", ok)
+
+	for _, c := range []struct {
+		method, path, token string
+		want                int
+	}{
+		{"GET", "/api/status", "", 200},
+		{"GET", "/api/sensitive/proxy-accounts", "", 401},
+		{"GET", "/api/sensitive/proxy-accounts", "wrong", 401},
+		{"GET", "/api/sensitive/proxy-accounts", "view-token", 200},
+		{"GET", "/api/sensitive/proxy-accounts", "op-token", 200},
+		{"GET", "/api/settings", "view-token", 401},
+		{"GET", "/api/settings", "op-token", 200},
+		{"POST", "/api/models/x/disable", "", 401},
+		{"POST", "/api/models/x/disable", "view-token", 401},
+		{"POST", "/api/models/x/disable", "op-token", 200},
+	} {
+		req := httptest.NewRequest(c.method, c.path, nil)
+		req.Host = "127.0.0.1:9087" // httptest's default example.com is refused by the Host check
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s %s token=%q: %d, want %d", c.method, c.path, c.token, rec.Code, c.want)
+		}
+	}
+}
+
+// An empty viewer token must not match an empty bearer value.
+func TestEmptyViewerTokenGrantsNothing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/x", Tokens{Operator: "op"}.RequireRole(RoleViewer), func(c *gin.Context) { c.Status(200) })
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("empty bearer with no viewer token: %d, want 401", rec.Code)
+	}
+}
+
+func TestLoadViewerToken(t *testing.T) {
+	dir := t.TempDir()
+	if tok, err := LoadViewerToken(dir); err != nil || tok != "" {
+		t.Fatalf("no file: %q, %v; want empty and no error", tok, err)
+	}
+	path := filepath.Join(dir, ViewerTokenFile)
+	if err := os.WriteFile(path, []byte("view-token\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tok, err := LoadViewerToken(dir)
+	if err != nil || tok != "view-token" {
+		t.Fatalf("got %q, %v", tok, err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+// A DNS-rebinding page reaches the dashboard under its own domain; the
+// dashboard forwards the operator's token, so it must refuse that Host.
+func TestDashboardRefusesForeignHost(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(AllowedHosts())
+	r.GET("/", func(c *gin.Context) { c.Status(200) })
+	for host, want := range map[string]int{"127.0.0.1:3060": 200, "40.49.6.2:3060": 200, "rebind.attacker.example:3060": 421} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("Host %s: %d, want %d", host, rec.Code, want)
+		}
+	}
+}

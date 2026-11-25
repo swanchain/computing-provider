@@ -17,7 +17,6 @@ import (
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
-	cors "github.com/itsjamie/gin-cors"
 	"github.com/swanchain/computing-provider-v2/build"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/alerts"
@@ -37,6 +36,10 @@ var runCmd = &cli.Command{
 			Name:  "host",
 			Usage: "API listen address (use 0.0.0.0 only on a trusted network)",
 			Value: "127.0.0.1",
+		},
+		&cli.BoolFlag{
+			Name:  "pprof",
+			Usage: "serve Go profiling at /debug/pprof (viewer or control token required)",
 		},
 		&cli.BoolFlag{
 			Name:  "no-auth",
@@ -109,6 +112,14 @@ func runDaemon(cctx *cli.Context) error {
 	} else {
 		logs.GetLogger().Infof("Dashboard control token: %s", tokenPath)
 	}
+	viewerToken, err := dashboard.LoadViewerToken(cpRepoPath)
+	if err != nil {
+		return fmt.Errorf("load viewer token: %w", err)
+	}
+	if viewerToken != "" {
+		logs.GetLogger().Infof("Read-only viewer token: %s", filepath.Join(cpRepoPath, dashboard.ViewerTokenFile))
+	}
+	tokens := dashboard.Tokens{Operator: controlToken, Viewer: viewerToken}
 	logs.GetLogger().Info("Your config file is:", filepath.Join(cpRepoPath, "config.toml"))
 	logs.GetLogger().Infof("Logging to %s (rotate at %dMB, keep %d)",
 		conf.GetConfig().Log.Dir, conf.GetConfig().Log.MaxSizeMB, conf.GetConfig().Log.MaxBackups)
@@ -164,27 +175,30 @@ func runDaemon(cctx *cli.Context) error {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	configureEncodedPathParameters(r)
-	r.Use(cors.Middleware(cors.Config{
-		Origins:         "*",
-		Methods:         "GET, PUT, POST, DELETE",
-		RequestHeaders:  "Origin, Authorization, Content-Type",
-		ExposedHeaders:  "",
-		MaxAge:          50 * time.Second,
-		ValidateHeaders: false,
-	}))
-	pprof.Register(r)
+	// No CORS headers: the dashboard reaches the API through its own
+	// same-origin proxy, and "Access-Control-Allow-Origin: *" let any web page
+	// the operator visited read every monitoring route. The Host check stops a
+	// DNS-rebinding page from posing as same-origin instead.
+	r.Use(dashboard.AllowedHosts(cctx.String("host")))
+	if cctx.Bool("pprof") {
+		// Off by default, and never open: goroutine dumps and the command
+		// line describe the node to whoever can reach the port.
+		pprof.RouteRegister(r.Group("", tokens.RequireRole(dashboard.RoleViewer)), "/debug/pprof")
+	}
 
 	router := r.Group("/api/v1/computing")
-	router.Use(dashboard.ProtectWrites(controlToken))
+	router.Use(tokens.ProtectWrites())
+	// Reads that carry account identifiers, log lines or upstream error
+	// bodies. The API may listen on more than loopback, so these need at
+	// least the viewer role; the plain monitoring routes stay open.
+	sensitiveRouter := router.Group("/inference", tokens.RequireRole(dashboard.RoleViewer))
 	settingsRouter := router.Group("/inference/settings")
-	settingsRouter.Use(dashboard.RequireAccess(controlToken))
-	// The node's own log, for the dashboard's Logs tab. Behind the control
-	// token even though it only reads: log lines carry request IDs, backend
+	settingsRouter.Use(tokens.RequireRole(dashboard.RoleOperator))
+	// The node's own log, for the dashboard's Logs tab. Behind the viewer
+	// role even though it only reads: log lines carry request IDs, backend
 	// endpoints and upstream error bodies, and the API may listen on more
 	// than loopback.
-	// Read-only like the other monitoring routes: an operator looking at why
-	// a model failed should not need the control token first.
-	router.GET("/inference/logs", func(c *gin.Context) {
+	sensitiveRouter.GET("/logs", func(c *gin.Context) {
 		q, err := logQuery(c)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -705,7 +719,7 @@ func runDaemon(cctx *cli.Context) error {
 	// platform's offerings and may not be credited; nothing else shows it.
 	// The accounts behind each CLIProxyAPI instance: plan, usage windows,
 	// cooldowns and credential expiry, read from the proxies themselves.
-	router.GET("/inference/proxy-accounts", func(c *gin.Context) {
+	sensitiveRouter.GET("/proxy-accounts", func(c *gin.Context) {
 		c.JSON(200, inferenceService.ProxyAccounts(c.Request.Context()))
 	})
 

@@ -932,6 +932,24 @@ Global flags: `--repo` sets `CP_PATH` (default `~/.swan/computing`), `--help`/`-
 
 Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.go` `runDaemon`)
 
+**Access roles** (`internal/dashboard/auth.go`). Bearer tokens map to two roles:
+the control token (`$CP_PATH/dashboard.token`) is **operator**, and an optional
+`$CP_PATH/dashboard.viewer.token`, never created automatically, is **viewer**.
+Plain monitoring reads (status, models, health, metrics, routes) need no
+token. `GET /logs`, `GET /proxy-accounts` and `/debug/pprof` (only with
+`run --pprof`) need viewer or above, because they carry account identifiers,
+upstream error bodies and process details and the API may listen beyond
+loopback. Settings and every write need operator. A viewer can never change the
+node.
+
+The API, the dashboard and the local gateway refuse a `Host` that is not an IP
+literal, `localhost` or this machine's hostname (`internal/hostcheck`), which is
+what a DNS-rebinding page sends. The API sends no CORS headers; the dashboard
+reaches it through its own same-origin proxy. The gateway also refuses any
+request carrying `Origin`: browsers add it to every cross-origin POST,
+including the preflight-free `text/plain` ones a page could use to spend
+subscription accounts, and SDKs, curl and agents never send it.
+
 **Inference endpoints** (`/inference/`):
 - `GET /metrics` — JSON metrics summary
 - `GET /metrics/prometheus` — Prometheus format
@@ -942,13 +960,13 @@ Base: `/api/v1/computing/` (routes registered in `cmd/computing-provider/daemon.
 - `GET /models/:model_id/health` — model health details
 - `GET /models/:model_id/metrics` — per-model detailed metrics
 - `GET /health` — all models health
-- `GET /proxy-accounts` — each CLIProxyAPI instance among the models' endpoints and local_endpoints (needs `CLIProxyManagementKey`): its role (`hub` / `local`), accounts with plan, status, usage windows (percent used and reset, as the upstream last reported them), cooldowns and stored-token expiry, and 24h tokens from its usage counters. API keys in the proxy's config (`claude-api-key`, `codex-api-key`) are listed beside the sign-ins, masked to their last four characters, with each credential's routing priority and the requests counted for it from the usage queue by `auth_index` — the dashboard uses these to show whether one provider's credentials are balanced (same priority, round-robin) or overflow
+- `GET /proxy-accounts` (viewer or control token) — each CLIProxyAPI instance among the models' endpoints and local_endpoints (needs `CLIProxyManagementKey`): its role (`hub` / `local`), accounts with plan, status, usage windows (percent used and reset, as the upstream last reported them), cooldowns and stored-token expiry, and 24h tokens from its usage counters. API keys in the proxy's config (`claude-api-key`, `codex-api-key`) are listed beside the sign-ins, masked to their last four characters, with each credential's routing priority and the requests counted for it from the usage queue by `auth_index` — the dashboard uses these to show whether one provider's credentials are balanced (same priority, round-robin) or overflow
 - `GET /routes?window=15m` — traffic over a window (`5m`, `15m`, `1h`, `6h`, `24h`) as source → model → backend links with request, failure, latency and token totals and the newest error, plus every configured backend's state; a backend with no traffic is still listed. Rows without a recorded backend (probes, older rows) are put on the model's configured endpoint, except hub requests for a local-only model and requests recorded as not forwarded. Links with source `direct` are work a backend's own counters show that never passed through the node (the same derivation as direct usage, per counter): output tokens and a lower-bound input figure, with no request count, latency or error, since none was observed. The dashboard's Routing view draws it, with direct links dotted.
 - `POST /models/:model_id/enable` — enable a model
 - `POST /models/:model_id/disable` — disable a model
 - `POST /models/:model_id/healthcheck` — force health check
 - `POST /models/reload` — hot-reload models.json
-- `GET /logs` — this node's own log lines, newest first, filtered by `levels`, `since`/`until` (RFC 3339), `q` and `limit` (`internal/logview`). Read-only, no token, like the other monitoring routes. The current file of each level group is read backwards and stops at `since`, so recent ranges are cheap; rotated `.gz` backups are only opened when the range reaches them
+- `GET /logs` — this node's own log lines, newest first, filtered by `levels`, `since`/`until` (RFC 3339), `q` and `limit` (`internal/logview`). Read-only, but needs the viewer or control token: log lines carry request IDs, backend endpoints and upstream error bodies. The current file of each level group is read backwards and stops at `since`, so recent ranges are cheap; rotated `.gz` backups are only opened when the range reaches them
 
 **Request management** (`/inference/`):
 - `GET /ratelimit`, `GET /concurrency`, `GET /retries` — metrics

@@ -38,6 +38,9 @@ func (s *Server) Start() error {
 	s.router.UseRawPath = true
 	s.router.UnescapePathValues = true
 	s.router.Use(gin.Recovery())
+	// The dashboard forwards the operator's token to the API, so a
+	// DNS-rebinding page reaching it would act with that token.
+	s.router.Use(AllowedHosts(s.host))
 
 	// Serve static files from embedded filesystem
 	staticFS, err := fs.Sub(staticFiles, "ui/dist")
