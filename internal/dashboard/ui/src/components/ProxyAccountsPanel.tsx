@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import type { UsePollingResult } from '../hooks/usePolling';
 import { MAX_COLOURED_MODELS, OTHER_COLOUR, OTHER_LABEL, SERIES_COLOURS } from '../lib/modelPalette';
-import { accountWideCooldown, isPast, pauseCause, providerName } from '../lib/proxyStatus';
+import { accountWideCooldown, isPast, pauseCause, providerName, proxyTitle } from '../lib/proxyStatus';
 import type { ModelStatus, ProxyAccount, ProxyAccountsReport, ProxyInstance, ProxyQuotaWindow } from '../types';
 
 function dateLabel(value?: string) {
@@ -164,7 +164,7 @@ function RequestSplit({ inst }: { inst: ProxyInstance }) {
 function Instance({ inst }: { inst: ProxyInstance }) {
   const hub = inst.roles.includes('hub');
   const local = inst.roles.includes('local');
-  const title = hub && local ? 'Hub and local proxy' : hub ? 'Hub proxy' : 'Local proxy';
+  const title = proxyTitle(inst);
   const enabled = inst.accounts.filter((a) => !a.disabled);
   const disabled = inst.accounts.filter((a) => a.disabled);
   return <section className="min-w-0 overflow-hidden rounded-xl border border-slate-700 bg-slate-900/60">
@@ -207,9 +207,7 @@ function usageRows(inst: ProxyInstance): UsageRow[] {
 
 function UsagePie({ inst }: { inst: ProxyInstance }) {
   const [active, setActive] = useState<string | null>(null);
-  const hub = inst.roles.includes('hub');
-  const local = inst.roles.includes('local');
-  const title = hub && local ? 'Hub and local proxy' : hub ? 'Hub proxy' : 'Local proxy';
+  const title = proxyTitle(inst);
   const rows = usageRows(inst);
   const used = rows.filter((r) => r.total > 0);
   // Ranked within this proxy: the two proxies serve different mixes, and a

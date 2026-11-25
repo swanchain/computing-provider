@@ -1,4 +1,17 @@
-import type { ProxyAccount, ProxyAccountsReport } from '../types';
+import type { ProxyAccount, ProxyAccountsReport, ProxyInstance } from '../types';
+
+// The one name a proxy goes by everywhere on the page. Two proxies can both
+// carry hub traffic (a proxy fronting the operator's own accounts also serves
+// the hub when a registered model points at it), so the role alone does not
+// tell them apart; the port does.
+export function proxyTitle(inst: Pick<ProxyInstance, 'roles' | 'endpoint'>): string {
+  const hub = inst.roles.includes('hub');
+  const local = inst.roles.includes('local');
+  const role = hub && local ? 'Hub and local proxy' : hub ? 'Hub proxy' : 'Local proxy';
+  let port = '';
+  try { port = new URL(inst.endpoint).port; } catch { /* keep the bare role */ }
+  return port ? role + ' :' + port : role;
+}
 
 export function isPast(value?: string) { return !!value && Date.parse(value) < Date.now(); }
 export function providerName(provider?: string) {
@@ -23,7 +36,7 @@ export function pauseCause(a: ProxyAccount): string | undefined {
 export function proxyIssues(report: ProxyAccountsReport | null | undefined): string[] {
   const issues: string[] = [];
   for (const inst of report?.instances ?? []) {
-    const label = inst.roles.includes('hub') ? 'Hub proxy' : 'Local proxy';
+    const label = proxyTitle(inst);
     if (inst.error) { issues.push(label + ': account status unavailable'); continue; }
     if (!inst.accounts.length) issues.push(label + ': no accounts configured');
     else if (inst.accounts.every((a) => a.disabled)) issues.push(label + ': all accounts disabled');
