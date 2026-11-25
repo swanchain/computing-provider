@@ -2,11 +2,13 @@ package computing
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
 	"github.com/swanchain/computing-provider-v2/conf"
 	"github.com/swanchain/computing-provider-v2/internal/alerts"
@@ -608,5 +610,25 @@ func selfCheckOptions(cpPath string) selfcheck.Options {
 	opt.LogDir = cfg.Log.Dir
 	opt.APIBase = fmt.Sprintf("http://localhost:%d", cfg.API.Port)
 	opt.ConfigModels = cfg.Inference.Models
+	if models, err := configModelsOnDisk(cpPath); err == nil {
+		opt.ConfigModels = models
+	}
 	return opt
+}
+
+// configModelsOnDisk reads [Inference] Models from config.toml as it is now.
+// The daemon parses config.toml once at startup, so comparing models.json with
+// that copy reports a model the operator has since added to config.toml as
+// missing from it, on every audit, until the next restart. A file that cannot
+// be read or parsed returns an error and the caller keeps the startup list.
+func configModelsOnDisk(cpPath string) ([]string, error) {
+	var f struct {
+		Inference struct {
+			Models []string `toml:"Models"`
+		} `toml:"Inference"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(cpPath, "config.toml"), &f); err != nil {
+		return nil, err
+	}
+	return f.Inference.Models, nil
 }

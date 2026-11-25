@@ -2,6 +2,8 @@ package computing
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -670,5 +672,42 @@ func TestNoAllClearWhileModelsRemainDisabled(t *testing.T) {
 		if e.Event == "selfcheck_recovered" {
 			t.Error("sent an all-clear while a model was still auto-disabled")
 		}
+	}
+}
+
+// A model added to config.toml after startup must not be reported as missing
+// from it: the audit reads the file, not the copy parsed at startup.
+func TestConfigModelsReadFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("[API]\nPort = 8085\n\n[Inference]\n  Enable = true\n  Models = [\"org/a\"]\n")
+	got, err := configModelsOnDisk(dir)
+	if err != nil || strings.Join(got, ",") != "org/a" {
+		t.Fatalf("first read = %v, %v", got, err)
+	}
+	write("[API]\nPort = 8085\n\n[Inference]\n  Enable = true\n  Models = [\"org/a\", \"org/b\"]\n")
+	got, err = configModelsOnDisk(dir)
+	if err != nil || strings.Join(got, ",") != "org/a,org/b" {
+		t.Fatalf("after edit = %v, %v", got, err)
+	}
+}
+
+// An unreadable or broken config.toml is an error, so the caller keeps the
+// startup list instead of comparing against nothing and flagging every model.
+func TestConfigModelsOnDiskErrors(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := configModelsOnDisk(dir); err == nil {
+		t.Fatal("missing file: want error")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[Inference\nModels = ["), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := configModelsOnDisk(dir); err == nil {
+		t.Fatal("invalid TOML: want error")
 	}
 }
