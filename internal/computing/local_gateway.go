@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/filswan/go-mcs-sdk/mcs/api/common/logs"
+	"github.com/swanchain/computing-provider-v2/internal/hostcheck"
 )
 
 // The local gateway is an OpenAI-compatible endpoint for the operator's own
@@ -51,7 +52,34 @@ func (s *InferenceService) LocalGatewayHandler() http.Handler {
 	mux.HandleFunc("/v1/images/generations", s.serveLocalImages)
 	mux.HandleFunc("/v1/embeddings", s.serveLocalEmbeddings)
 	mux.HandleFunc("/v1/audio/transcriptions", s.serveLocalTranscription)
-	return withStatusCapture(mux)
+	return withStatusCapture(guardBrowserRequests(mux))
+}
+
+// guardBrowserRequests refuses what only a web browser sends. The gateway has
+// no authentication and fronts subscription accounts, so any page the
+// operator visits could otherwise spend them.
+//
+//   - Any request with an Origin header is refused. A page can POST here
+//     without a CORS preflight (a "simple request" with a text/plain or form
+//     body, which the gateway parses as JSON regardless). The response is
+//     unreadable to the page, but the completion runs and is billed. Browsers
+//     add Origin to every such cross-origin POST; SDKs, curl and agents send
+//     none. Checking Content-Type instead would also refuse `curl -d`, which
+//     sends a form content type.
+//   - The Host check stops a DNS-rebinding page, which the browser treats as
+//     same-origin, so it could read responses as well as send requests.
+func guardBrowserRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostcheck.Allowed(r.Host) {
+			writeLocalError(w, http.StatusMisdirectedRequest, "host not allowed")
+			return
+		}
+		if r.Header.Get("Origin") != "" {
+			writeLocalError(w, http.StatusForbidden, "requests from a web page are not accepted")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // StartLocalGateway serves the gateway on 127.0.0.1:port until the returned
