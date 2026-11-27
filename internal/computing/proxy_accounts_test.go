@@ -207,9 +207,10 @@ func TestProxyAccountsSkipsUnreachableEndpointsNeverSeenAsProxies(t *testing.T) 
 // included, so the split between them and a key the upstream rejects show.
 func TestProxyAccountsListsConfigAPIKeys(t *testing.T) {
 	const secret = "sk-ant-api03-supersecretvalue-WXYZ"
-	queue := `[{"model":"claude-haiku","auth_index":"login1","timestamp":"2026-10-22T09:00:00Z","tokens":{"input_tokens":3,"output_tokens":1}},
-		{"model":"claude-haiku","auth_index":"key1","timestamp":"2026-10-22T09:00:01Z","failed":true,"fail":{"status_code":401}},
-		{"model":"claude-haiku","auth_index":"login1","timestamp":"2026-10-22T09:00:02Z","tokens":{"input_tokens":3,"output_tokens":1}}]`
+	ts := func(d time.Duration) string { return time.Now().Add(-d).UTC().Format(time.RFC3339) }
+	queue := fmt.Sprintf(`[{"model":"claude-haiku","auth_index":"login1","timestamp":%q,"tokens":{"input_tokens":3,"output_tokens":1}},
+		{"model":"claude-haiku","auth_index":"key1","timestamp":%q,"failed":true,"fail":{"status_code":401}},
+		{"model":"claude-haiku","auth_index":"login1","timestamp":%q,"tokens":{"input_tokens":3,"output_tokens":1}}]`, ts(3*time.Second), ts(2*time.Second), ts(time.Second))
 	served := false
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -245,11 +246,11 @@ func TestProxyAccountsListsConfigAPIKeys(t *testing.T) {
 		t.Fatalf("want one instance with the login and the key: %+v", r)
 	}
 	inst := r.Instances[0]
-	if inst.RequestsSince == nil {
-		t.Errorf("requests_since missing")
+	if inst.RequestsSince == nil || inst.RequestsWindowStart == nil {
+		t.Errorf("requests_since / requests_window_start missing")
 	}
 	login, key := inst.Accounts[0], inst.Accounts[1]
-	if login.Kind != "login" || login.Requests == nil || login.Requests.Success != 2 || login.Requests.Failed != 0 {
+	if login.Kind != "login" || login.Requests == nil || login.Requests.Success != 2 || login.Requests.Failed != 0 || login.Requests.TotalSuccess != 2 {
 		t.Errorf("login = %+v requests %+v", login, login.Requests)
 	}
 	if key.Kind != "api_key" || key.Provider != "claude" || key.Account != "API key …WXYZ" || key.Plan != "Anthropic API credits" {
@@ -260,5 +261,34 @@ func TestProxyAccountsListsConfigAPIKeys(t *testing.T) {
 	}
 	if b, _ := json.Marshal(r); strings.Contains(string(b), "supersecret") {
 		t.Errorf("the API key leaked into the report: %s", b)
+	}
+}
+
+// The split reports the last day, not the daemon's lifetime: a credential that
+// carried everything for a week and nothing today must not still read as 99%
+// of the traffic. Totals keep the lifetime figure.
+func TestCredentialTallyLastDay(t *testing.T) {
+	now := time.Date(2026, 11, 27, 18, 30, 0, 0, time.UTC)
+	var c credentialTally
+	c.add(usageQueueRecord{Timestamp: now.Add(-72 * time.Hour)}, now)            // too old for the window
+	c.add(usageQueueRecord{Timestamp: now.Add(-25 * time.Hour)}, now)            // just outside
+	c.add(usageQueueRecord{Timestamp: now.Add(-23 * time.Hour)}, now)            // inside
+	c.add(usageQueueRecord{Timestamp: now.Add(-time.Minute), Failed: true}, now) // inside, failed
+	c.add(usageQueueRecord{}, now)                                               // no timestamp: now
+	if s, f := c.lastDay(now); s != 2 || f != 1 {
+		t.Errorf("last day = %d ok / %d failed, want 2 / 1", s, f)
+	}
+	if c.Success != 4 || c.Failed != 1 {
+		t.Errorf("totals = %d / %d, want 4 / 1", c.Success, c.Failed)
+	}
+	// A day later the same slots are stale and count for nothing, even
+	// before anything new overwrites them.
+	if s, f := c.lastDay(now.Add(24 * time.Hour)); s != 0 || f != 0 {
+		t.Errorf("a day later = %d / %d, want 0 / 0", s, f)
+	}
+	// A slot reused by a later hour drops what it held.
+	c.add(usageQueueRecord{Timestamp: now.Add(24 * time.Hour)}, now.Add(24*time.Hour))
+	if s, _ := c.lastDay(now.Add(24 * time.Hour)); s != 1 {
+		t.Errorf("after reuse = %d, want 1", s)
 	}
 }

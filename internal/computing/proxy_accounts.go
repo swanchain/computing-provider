@@ -64,18 +64,24 @@ type ProxyAccount struct {
 	// lower tier is overflow only.
 	Priority int `json:"priority"`
 	// Requests counts the upstream attempts this node drained from the
-	// proxy's usage queue for this credential since RequestsSince; nil when
-	// none were seen, which is also all that can be said with no queue.
+	// proxy's usage queue for this credential: the last 24 hours (or since
+	// RequestsSince, if that is later) and, as totals, since RequestsSince;
+	// nil when none were seen, which is also all that can be said with no
+	// queue.
 	Requests *ProxyCredentialRequests `json:"requests,omitempty"`
 }
 
 // ProxyCredentialRequests is what one credential served, from the usage queue.
 type ProxyCredentialRequests struct {
-	Success    int64      `json:"success"`
-	Failed     int64      `json:"failed"`
-	LastAt     *time.Time `json:"last_at,omitempty"`
-	LastFailed bool       `json:"last_failed"`
-	LastStatus int        `json:"last_status,omitempty"`
+	// Success and Failed cover RequestsWindowStart onwards: at most a day.
+	Success int64 `json:"success"`
+	Failed  int64 `json:"failed"`
+	// TotalSuccess and TotalFailed cover everything since RequestsSince.
+	TotalSuccess int64      `json:"total_success"`
+	TotalFailed  int64      `json:"total_failed"`
+	LastAt       *time.Time `json:"last_at,omitempty"`
+	LastFailed   bool       `json:"last_failed"`
+	LastStatus   int        `json:"last_status,omitempty"`
 }
 
 // ProxyInstance is one CLIProxyAPI endpoint and what this node uses it for.
@@ -98,6 +104,9 @@ type ProxyInstance struct {
 	// RequestsSince is when this node began counting each account's
 	// requests: its first read of the usage queue after it started.
 	RequestsSince *time.Time `json:"requests_since,omitempty"`
+	// RequestsWindowStart is where each account's success/failed counts
+	// begin: 24 hours ago, or RequestsSince when the node is younger.
+	RequestsWindowStart *time.Time `json:"requests_window_start,omitempty"`
 }
 
 // ProxyModelUsage is one model's measured token consumption through a proxy.
@@ -258,15 +267,21 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 			inst.Error = err.Error()
 		}
 		tallies, since := b.credentialTallies(ep)
+		now := time.Now()
 		if !since.IsZero() {
 			inst.RequestsSince = &since
+			start := now.Add(-credentialWindowHours * time.Hour)
+			if since.After(start) {
+				start = since
+			}
+			inst.RequestsWindowStart = &start
 		}
 		for _, f := range files.Files {
 			a := ProxyAccount{
 				Account: f.Account, Provider: f.Provider, Status: f.Status, StatusMessage: f.StatusMessage,
 				Disabled: f.Disabled, Unavailable: f.Unavailable, Success: f.Success, Failed: f.Failed,
 				Windows: quotaWindows(f.Quota.Signals), QuotaObservedAt: f.Quota.ObservedAt, Cooldowns: []ProxyCooldown{},
-				Kind: "login", Priority: f.Priority, Requests: credentialRequests(tallies, f.AuthIndex),
+				Kind: "login", Priority: f.Priority, Requests: credentialRequests(tallies, f.AuthIndex, now),
 			}
 			if a.Account == "" {
 				a.Account = f.Email
@@ -300,7 +315,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 			inst.Accounts = append(inst.Accounts, a)
 		}
 		if err == nil {
-			inst.Accounts = append(inst.Accounts, b.configKeyAccounts(ctx, ep, tallies)...)
+			inst.Accounts = append(inst.Accounts, b.configKeyAccounts(ctx, ep, tallies, now)...)
 		}
 		inst.TokensIn24h, inst.TokensOut24h, inst.Measured24h, inst.ModelUsage24h = proxyTokens24h(ep, names[ep].Names)
 		report.Instances = append(report.Instances, inst)
@@ -310,7 +325,7 @@ func (s *InferenceService) ProxyAccounts(ctx context.Context) ProxyAccountsRepor
 
 // configKeyAccounts lists the API keys in a proxy's config. A proxy too old
 // to list a provider's keys answers 404, which leaves that provider out.
-func (b *BackendUsageSampler) configKeyAccounts(ctx context.Context, ep string, tallies map[string]credentialTally) []ProxyAccount {
+func (b *BackendUsageSampler) configKeyAccounts(ctx context.Context, ep string, tallies map[string]credentialTally, now time.Time) []ProxyAccount {
 	var out []ProxyAccount
 	for _, provider := range configKeyProviders {
 		var keys configKeysResponse
@@ -328,19 +343,20 @@ func (b *BackendUsageSampler) configKeyAccounts(ctx context.Context, ep string, 
 				Account: maskKey(k.APIKey), Provider: provider, Kind: "api_key",
 				Plan: configKeyPlan(provider, k.BaseURL), Status: "configured",
 				Windows: []ProxyQuotaWindow{}, Cooldowns: []ProxyCooldown{},
-				Priority: k.Priority, Requests: credentialRequests(tallies, k.AuthIndex),
+				Priority: k.Priority, Requests: credentialRequests(tallies, k.AuthIndex, now),
 			})
 		}
 	}
 	return out
 }
 
-func credentialRequests(tallies map[string]credentialTally, authIndex string) *ProxyCredentialRequests {
+func credentialRequests(tallies map[string]credentialTally, authIndex string, now time.Time) *ProxyCredentialRequests {
 	t, ok := tallies[authIndex]
 	if authIndex == "" || !ok {
 		return nil
 	}
-	r := &ProxyCredentialRequests{Success: t.Success, Failed: t.Failed, LastFailed: t.LastFailed, LastStatus: t.LastStatus}
+	day, dayFailed := t.lastDay(now)
+	r := &ProxyCredentialRequests{Success: day, Failed: dayFailed, TotalSuccess: t.Success, TotalFailed: t.Failed, LastFailed: t.LastFailed, LastStatus: t.LastStatus}
 	if !t.LastAt.IsZero() {
 		at := t.LastAt
 		r.LastAt = &at
