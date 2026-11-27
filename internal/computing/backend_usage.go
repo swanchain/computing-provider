@@ -350,25 +350,65 @@ type usageQueueRecord struct {
 	} `json:"tokens"`
 }
 
-// credentialTally is what one proxy credential did since the first read.
+// credentialTally is what one proxy credential did since the first read,
+// with the last day also kept by hour so a split can say what is happening
+// now rather than averaging over however long the daemon has been up.
 type credentialTally struct {
 	Success, Failed int64
 	LastAt          time.Time
 	LastFailed      bool
 	LastStatus      int
+	hours           [credentialWindowHours]credentialHour
 }
 
-func (t *credentialTally) add(r usageQueueRecord) {
+const credentialWindowHours = 24
+
+// credentialHour counts one clock hour; hour is its Unix hour number, so a
+// slot left over from a day ago is recognised as stale and not counted.
+type credentialHour struct {
+	hour            int64
+	success, failed int64
+}
+
+func (t *credentialTally) add(r usageQueueRecord, now time.Time) {
 	if r.Failed {
 		t.Failed++
 	} else {
 		t.Success++
+	}
+	at := r.Timestamp
+	if at.IsZero() || at.After(now) {
+		at = now
+	}
+	h := at.Unix() / 3600
+	if h > now.Unix()/3600-credentialWindowHours {
+		slot := &t.hours[h%credentialWindowHours]
+		if slot.hour != h {
+			*slot = credentialHour{hour: h}
+		}
+		if r.Failed {
+			slot.failed++
+		} else {
+			slot.success++
+		}
 	}
 	// Pages are popped oldest first, but a record without a timestamp is
 	// still the newest seen.
 	if r.Timestamp.IsZero() || !r.Timestamp.Before(t.LastAt) {
 		t.LastAt, t.LastFailed, t.LastStatus = r.Timestamp, r.Failed, r.Fail.StatusCode
 	}
+}
+
+// lastDay sums the hourly slots covering the 24 hours up to now.
+func (t credentialTally) lastDay(now time.Time) (success, failed int64) {
+	cur := now.Unix() / 3600
+	for _, s := range t.hours {
+		if s.hour > cur-credentialWindowHours && s.hour <= cur {
+			success += s.success
+			failed += s.failed
+		}
+	}
+	return success, failed
 }
 
 // credentialTallies copies the per-credential counts for an endpoint, keyed
@@ -428,7 +468,7 @@ func (b *BackendUsageSampler) readUsageQueue(ctx context.Context, endpoint strin
 					c = &credentialTally{}
 					b.queueAuth[endpoint][r.AuthIndex] = c
 				}
-				c.add(r)
+				c.add(r, now)
 			}
 		}
 		b.mu.Unlock()

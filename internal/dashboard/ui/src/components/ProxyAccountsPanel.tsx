@@ -54,6 +54,18 @@ function WindowBar({ w, stale }: { w: ProxyQuotaWindow; stale: boolean }) {
   </div>;
 }
 
+// The split covers the last 24 hours, or since the node started counting if
+// that is more recent. An older node reports no window: its counts are since
+// requests_since.
+function windowIsFullDay(inst: ProxyInstance) {
+  return !!inst.requests_window_start && inst.requests_window_start !== inst.requests_since;
+}
+
+function windowLabel(inst: ProxyInstance) {
+  if (windowIsFullDay(inst)) return 'in the last 24 h';
+  return inst.requests_since ? 'since ' + dateLabel(inst.requests_since) : 'so far';
+}
+
 function accountRequests(a: ProxyAccount) {
   return (a.requests?.success ?? 0) + (a.requests?.failed ?? 0);
 }
@@ -139,9 +151,10 @@ function RequestSplit({ inst }: { inst: ProxyInstance }) {
       const priorities = [...new Set(list.map((a) => a.priority ?? 0))].sort((x, y) => y - x);
       const balanced = priorities.length === 1;
       const total = list.reduce((s, a) => s + accountRequests(a), 0);
+      const lifetime = list.reduce((s, a) => s + (a.requests?.total_success ?? 0) + (a.requests?.total_failed ?? 0), 0);
       return <div key={provider} className="min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <h4 className="text-sm font-semibold text-white">{providerName(provider)} · request split</h4>
+          <h4 className="text-sm font-semibold text-white">{providerName(provider)} · request split{inst.requests_window_start ? ' · ' + (windowIsFullDay(inst) ? 'last 24 h' : 'since ' + dateLabel(inst.requests_since)) : ''}</h4>
           <span className={'text-xs ' + (balanced ? 'text-emerald-200' : 'text-amber-200')}>{balanced ? 'Balanced · rotates across ' + list.length + ' credentials' : 'Overflow · lower priority used only when higher is unavailable'}</span>
         </div>
         {total > 0 && <div className="mt-2 flex h-2 overflow-hidden rounded bg-slate-700" aria-hidden="true">
@@ -155,7 +168,7 @@ function RequestSplit({ inst }: { inst: ProxyInstance }) {
             <span className="w-24 shrink-0 text-right tabular-nums text-slate-400">{accountRequests(a).toLocaleString()} req{a.requests?.failed ? ' · ' + a.requests.failed + ' failed' : ''}</span>
           </li>)}
         </ul>
-        <p className="mt-2 text-xs text-slate-400">{total ? 'Upstream attempts since ' + dateLabel(inst.requests_since) + ', failed attempts included.' : 'No requests counted yet' + (inst.requests_since ? ' since ' + dateLabel(inst.requests_since) : '') + '.'}</p>
+        <p className="mt-2 text-xs text-slate-400">{(total ? 'Upstream attempts ' : 'No requests ') + windowLabel(inst) + (total ? ', failed attempts included.' : '.')}{lifetime > total ? ' ' + lifetime.toLocaleString() + ' since ' + dateLabel(inst.requests_since) + '.' : ''}</p>
       </div>;
     })}
   </div>;

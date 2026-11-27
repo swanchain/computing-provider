@@ -505,8 +505,12 @@ export interface ProxyCooldown {
 }
 
 export interface ProxyCredentialRequests {
+  /** From requests_window_start: the last 24 h at most. */
   success: number;
   failed: number;
+  /** Since requests_since; absent on older node versions. */
+  total_success?: number;
+  total_failed?: number;
   last_at?: string;
   last_failed: boolean;
   last_status?: number;
@@ -531,7 +535,7 @@ export interface ProxyAccount {
   cooldowns: ProxyCooldown[];
   /** Routing tier: requests rotate within the highest tier with a usable credential. */
   priority?: number;
-  /** Upstream attempts seen in the proxy's usage queue since requests_since. */
+  /** Upstream attempts seen in the proxy's usage queue: success/failed from requests_window_start (at most 24 h), totals since requests_since. */
   requests?: ProxyCredentialRequests;
 }
 
@@ -549,6 +553,8 @@ export interface ProxyInstance {
   model_usage_24h?: ProxyModelUsage[];
   /** When this node began counting each account's requests. */
   requests_since?: string;
+  /** Where each account's success/failed counts begin: 24 h ago, or requests_since if later. */
+  requests_window_start?: string;
 }
 
 export interface ProxyModelUsage {
